@@ -1,0 +1,23 @@
+{% extends '_base.html' %}
+{% block title %}Notre Histoire{% endblock %}
+{% block content %}
+
+<main class="hello-wrap">
+  <section class="hello-card">
+    <p class="kicker">Notre histoire</p>
+    <h1 class="display">
+      <em>Un dimanche soir,<br>les photos du week-end.</em>
+    </h1>
+    <p class="lead">
+      Une app pour deux. Un compte par couple. On y archive nos voyages,
+      nos restaurants, nos sorties, en photos et mots, pour finir par les
+      imprimer en livre.
+    </p>
+    <div class="hello-status">
+      <span class="dot"></span>
+      <span>Application en cours d'installation — version {{ version }}</span>
+    </div>
+  </section>
+</main>
+
+{% endblock %}

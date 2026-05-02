@@ -1,0 +1,10 @@
+-- schema.sql — DDL initial (informatif uniquement)
+--
+-- La verite vit dans init_db() de app.py (migrations idempotentes).
+-- Ce fichier sert de reference rapide pour comprendre le modele.
+--
+-- Etape 0 : aucune table metier creee. Les patches V1 ajouteront :
+--   - v1.0 → users, couples, invitations
+--   - v1.1 → carnets
+--   - v1.2 → photos, album_pages
+--   - v1.3 → print_orders
