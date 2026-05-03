@@ -75,12 +75,16 @@
   <input type="file" id="file-photos" accept="image/*" multiple hidden>
   <input type="file" id="file-camera" accept="image/*" capture="environment" hidden>
   <input type="file" id="file-margin" accept="image/*" multiple hidden>
+  <input type="file" id="file-video" accept="video/*" hidden>
 
   <button type="button" class="fab-btn" onclick="document.getElementById('file-photos').click()">
     <span class="fab-icon">+</span> Photos
   </button>
   <button type="button" class="fab-btn" onclick="document.getElementById('file-camera').click()">
     <span class="fab-icon">📷</span> Camera
+  </button>
+  <button type="button" class="fab-btn" onclick="document.getElementById('file-video').click()" title="Ajouter une video">
+    <span class="fab-icon">🎬</span> Video
   </button>
   <button type="button" class="fab-btn" onclick="document.getElementById('file-margin').click()" title="Photo de contexte">
     <span class="fab-icon">★</span> Marge
@@ -315,6 +319,135 @@
   document.getElementById('file-margin').addEventListener('change', function(e){
     uploadFiles(e.target.files, { margin: true }); e.target.value = '';
   });
+  document.getElementById('file-video').addEventListener('change', function(e){
+    uploadVideo(e.target.files && e.target.files[0]);
+    e.target.value = '';
+  });
+
+  // ── Upload video : extraction d'une frame poster cote client ──
+  async function extractVideoPoster(file) {
+    return new Promise(function(resolve, reject){
+      var video = document.createElement('video');
+      video.preload = 'metadata';
+      video.muted = true;
+      video.playsInline = true;
+      var url = URL.createObjectURL(file);
+      var done = false;
+      video.onloadedmetadata = function(){
+        // Seek a 10% de la duree (ou 1s si video tres courte)
+        var t = Math.min(1.0, (video.duration || 1) * 0.1);
+        try { video.currentTime = t; } catch(e) { video.currentTime = 0; }
+      };
+      video.onseeked = function(){
+        if (done) return; done = true;
+        try {
+          var canvas = document.createElement('canvas');
+          var w = video.videoWidth || 1280, h = video.videoHeight || 720;
+          // Limite poster a 1600px sur le cote long
+          var max = 1600;
+          if (w > max || h > max) {
+            if (w > h) { h = Math.round(h * max / w); w = max; }
+            else        { w = Math.round(w * max / h); h = max; }
+          }
+          canvas.width = w; canvas.height = h;
+          canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+          canvas.toBlob(function(blob){
+            URL.revokeObjectURL(url);
+            if (!blob) return reject(new Error('canvas blob null'));
+            resolve({
+              poster: new File([blob], 'poster.jpg', { type: 'image/jpeg' }),
+              duration: video.duration || 0,
+              width: video.videoWidth || w,
+              height: video.videoHeight || h,
+            });
+          }, 'image/jpeg', 0.85);
+        } catch (err) { URL.revokeObjectURL(url); reject(err); }
+      };
+      video.onerror = function(e){
+        URL.revokeObjectURL(url);
+        reject(new Error('video metadata KO'));
+      };
+      video.src = url;
+      // Sur certains navigateurs (Safari iOS), il faut load() explicite
+      try { video.load(); } catch(e) {}
+    });
+  }
+
+  async function uploadVideo(file) {
+    if (!file) return;
+    if (!file.type || !file.type.startsWith('video/')) {
+      setError('Pas une video : ' + (file.name || ''));
+      return;
+    }
+    var sizeMb = (file.size / 1024 / 1024).toFixed(1);
+    setSaving('Extraction poster (' + sizeMb + ' Mo)...');
+    var meta;
+    try {
+      meta = await extractVideoPoster(file);
+    } catch (e) {
+      console.error('extract poster fail', e);
+      setError('Extraction poster KO : ' + e.message);
+      // On continue : on uploade sans poster, le serveur mettra un placeholder
+      meta = { poster: null, duration: 0, width: 0, height: 0 };
+    }
+    setSaving('Envoi video ' + sizeMb + ' Mo...');
+    const empty = document.getElementById('empty-main');
+    if (empty) empty.style.display = 'none';
+
+    const fd = new FormData();
+    fd.append('_csrf', CSRF);
+    fd.append('video', file, file.name);
+    if (meta.poster) fd.append('poster', meta.poster, 'poster.jpg');
+    fd.append('duration_s', String(meta.duration));
+    fd.append('width', String(meta.width));
+    fd.append('height', String(meta.height));
+    fd.append('is_margin', '0');
+
+    try {
+      var r = await fetch("{{ url_for('carnet_upload_video', cid_carnet=carnet.id) }}", {
+        method: 'POST', body: fd
+      });
+      var d = await r.json();
+      console.log('upload video:', d);
+      if (!d.ok) { setError('Echec : ' + (d.error || '')); return; }
+      // Insertion DOM
+      const list = document.getElementById('pages-main');
+      const li = document.createElement('li');
+      li.className = 'page-item';
+      li.dataset.pageId = d.page_id;
+      li.dataset.type = 'video';
+      li.dataset.takenAt = '';
+      li.dataset.isMargin = '0';
+      li.innerHTML = `
+        <div class="page-video">
+          <video controls preload="metadata" poster="${d.poster_url}" src="${d.video_url}" playsinline></video>
+          <div class="page-video-meta">
+            <span class="video-badge">🎬 Video</span>
+            ${d.duration_s ? '<span class="video-duration">' + Math.round(d.duration_s) + 's</span>' : ''}
+            <a class="video-public-link" href="${d.public_url}" target="_blank" rel="noopener">🔗 Lien partage</a>
+          </div>
+        </div>
+        <div class="page-meta">
+          <div class="page-date page-date-fallback">ajoutee a l'instant</div>
+        </div>
+        <div class="page-caption-wrap">
+          <textarea class="page-caption" placeholder="Une legende..." rows="1" data-page-id="${d.page_id}"></textarea>
+        </div>
+        <div class="page-actions">
+          <button class="page-action-btn" type="button" onclick="toggleMargin(${d.page_id})">↑ Marge</button>
+          <button class="page-action-btn page-action-danger" type="button" onclick="deletePage(${d.page_id})">✕ Supprimer</button>
+        </div>
+      `;
+      list.appendChild(li);
+      attachAllAutosaves();
+      updateCounts();
+      setSaved('Video ajoutee');
+    } catch (e) {
+      console.error(e);
+      setError('Reseau : ' + e.message);
+    }
+  }
+  window.uploadVideo = uploadVideo;
 
   // ── Auto-save captions / texte ─────────────────────────────────
   function debounce(fn, ms) { let t; return function(){ clearTimeout(t); t = setTimeout(fn, ms); }; }

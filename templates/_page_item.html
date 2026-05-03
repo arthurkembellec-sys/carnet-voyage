@@ -14,6 +14,23 @@
     </a>
   {% endif %}
 
+  {# Video (lecture inline + scan token + lien public) #}
+  {% if p.video_path %}
+    <div class="page-video">
+      <video controls preload="metadata"
+             poster="{{ url_for('serve_upload', filename=p.video_poster) }}"
+             src="{{ url_for('serve_upload', filename=p.video_path) }}"
+             playsinline></video>
+      <div class="page-video-meta">
+        <span class="video-badge">🎬 Video</span>
+        {% if p.video_duration %}<span class="video-duration">{{ '%.0f'|format(p.video_duration) }}s</span>{% endif %}
+        <a class="video-public-link" href="{{ url_for('video_public', token=p.video_token) }}" target="_blank" rel="noopener" title="Lien public via QR">
+          🔗 Lien partage
+        </a>
+      </div>
+    </div>
+  {% endif %}
+
   {# Bloc texte si type=text (inline editable) #}
   {% if p.type == 'text' %}
     <textarea class="page-text" placeholder="Quelques mots..." rows="3"

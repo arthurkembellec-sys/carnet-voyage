@@ -35,7 +35,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "1.4.0-souhaits"
+APP_VERSION = "1.4.1-videos"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 SECRET_KEY = os.environ.get('SECRET_KEY') or secrets.token_urlsafe(32)
@@ -46,7 +46,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = SECRET_KEY
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 Mo upload
+app.config['MAX_CONTENT_LENGTH'] = 250 * 1024 * 1024  # 250 Mo upload (videos)
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 # SECURE = True uniquement en prod (Railway sert HTTPS).
@@ -219,6 +219,22 @@ def init_db():
                   CASE WHEN c.created_by = u.id THEN 'owner' ELSE 'member' END
            FROM users u JOIN couples c ON c.id = u.couple_id
            WHERE u.couple_id IS NOT NULL""",
+        # ── v1.4.1 — videos (avec poster extrait cote client + scan_token public)
+        """CREATE TABLE IF NOT EXISTS videos (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            couple_id   INTEGER NOT NULL REFERENCES couples(id) ON DELETE CASCADE,
+            file_path   TEXT NOT NULL,
+            poster_path TEXT NOT NULL,
+            duration_s  REAL,
+            width       INTEGER, height INTEGER,
+            taken_at    TIMESTAMP,
+            gps_lat     REAL, gps_lng REAL,
+            scan_token  TEXT UNIQUE NOT NULL,
+            added_by    INTEGER NOT NULL REFERENCES users(id),
+            added_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_videos_couple ON videos(couple_id)",
+        "ALTER TABLE album_pages ADD COLUMN video_id INTEGER REFERENCES videos(id) ON DELETE SET NULL",
         # ── v1.4 — items des carnets de souhait (link/photo/note/lieu/budget)
         """CREATE TABLE IF NOT EXISTS carnet_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -732,13 +748,17 @@ def _carnet_pages(carnet_id):
                p.width AS photo_width, p.height AS photo_height,
                p.taken_at AS photo_taken_at,
                p.gps_lat AS photo_gps_lat, p.gps_lng AS photo_gps_lng,
+               v.file_path AS video_path, v.poster_path AS video_poster,
+               v.duration_s AS video_duration, v.scan_token AS video_token,
+               v.taken_at AS video_taken_at,
                u.display_name AS added_by_name
         FROM album_pages ap
         LEFT JOIN photos p ON p.id = ap.photo_id
+        LEFT JOIN videos v ON v.id = ap.video_id
         LEFT JOIN users u ON u.id = ap.added_by
         WHERE ap.carnet_id = ?
         ORDER BY
-            COALESCE(p.taken_at, ap.created_at) ASC,
+            COALESCE(p.taken_at, v.taken_at, ap.created_at) ASC,
             ap.position ASC, ap.id ASC
     """, (carnet_id,))
     pages = [dict(r) for r in rows]
@@ -1081,6 +1101,131 @@ def serve_upload(filename):
     if owner_couple != current_espace_id():
         abort(403)
     return send_from_directory(UPLOAD_DIR, filename, max_age=31536000)
+
+
+# ══════════════════════════════════════════════════════════════════════
+#                         v1.4.1 — VIDEOS
+# ══════════════════════════════════════════════════════════════════════
+
+def _save_uploaded_video(video_file, poster_file, couple_id):
+    """Sauvegarde la video et son poster (extrait cote client). Retourne dict."""
+    couple_dir = os.path.join(UPLOAD_DIR, str(couple_id))
+    os.makedirs(couple_dir, exist_ok=True)
+    token = secrets.token_urlsafe(12)
+
+    # Extension video : on garde celle d'origine (mp4/mov/webm)
+    ext = os.path.splitext(video_file.filename or 'v.mp4')[1].lower() or '.mp4'
+    if ext not in ('.mp4', '.mov', '.webm', '.m4v'):
+        ext = '.mp4'
+    vname = f"{token}{ext}"
+    vpath = os.path.join(couple_dir, vname)
+    video_file.save(vpath)
+
+    # Poster JPEG envoye par le client (deja compressed Canvas)
+    pname = f"{token}_poster.jpg"
+    ppath = os.path.join(couple_dir, pname)
+    if poster_file and poster_file.filename:
+        # Re-compresser via Pillow pour garantir JPEG propre
+        try:
+            img = Image.open(poster_file.stream)
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            img.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+            img.save(ppath, 'JPEG', quality=82, optimize=True)
+        except Exception as e:
+            log.warning("poster save echec, fallback raw save: %s", e)
+            poster_file.stream.seek(0)
+            poster_file.save(ppath)
+    else:
+        # Pas de poster : creer un placeholder gris
+        img = Image.new('RGB', (1280, 720), (200, 195, 185))
+        img.save(ppath, 'JPEG', quality=70)
+
+    return {
+        'file_path':   f"{couple_id}/{vname}",
+        'poster_path': f"{couple_id}/{pname}",
+        'token': token,
+    }
+
+
+@app.route('/carnet/<int:cid_carnet>/videos', methods=['POST'])
+@couple_required
+def carnet_upload_video(cid_carnet):
+    """Upload d'une video + son poster (extrait cote client)."""
+    c = _get_carnet_or_404(cid_carnet)
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    video = request.files.get('video')
+    poster = request.files.get('poster')
+    if not video or not video.filename:
+        return jsonify({'ok': False, 'error': 'Aucune video'}), 400
+    duration_s = _safe_float(request.form.get('duration_s'))
+    width = request.form.get('width')
+    height = request.form.get('height')
+    is_margin = request.form.get('is_margin') == '1'
+    try:
+        width = int(width) if width else None
+        height = int(height) if height else None
+    except ValueError:
+        width = height = None
+
+    try:
+        data = _save_uploaded_video(video, poster, c['couple_id'])
+    except Exception as e:
+        log.error("upload video echec: %s\n%s", e, traceback.format_exc())
+        return jsonify({'ok': False, 'error': 'Save: ' + str(e)}), 500
+
+    vid = execute(
+        "INSERT INTO videos (couple_id, file_path, poster_path, duration_s, "
+        "width, height, scan_token, added_by) VALUES (?,?,?,?,?,?,?,?)",
+        (c['couple_id'], data['file_path'], data['poster_path'],
+         duration_s, width, height, data['token'], session['uid'])
+    )
+    pos = _next_page_position(cid_carnet)
+    page_id = execute(
+        "INSERT INTO album_pages (carnet_id, type, position, video_id, "
+        "is_margin, added_by) VALUES (?,?,?,?,?,?)",
+        (cid_carnet, 'video', pos, vid, 1 if is_margin else 0, session['uid'])
+    )
+    return jsonify({
+        'ok': True,
+        'page_id': page_id, 'video_id': vid,
+        'video_url': url_for('serve_upload', filename=data['file_path']),
+        'poster_url': url_for('serve_upload', filename=data['poster_path']),
+        'scan_token': data['token'],
+        'public_url': url_for('video_public', token=data['token'], _external=True),
+        'duration_s': duration_s,
+        'is_margin': is_margin,
+    })
+
+
+@app.route('/v/<token>')
+def video_public(token):
+    """Page publique de visionnage d'une video (deroulee depuis QR scan).
+    Pas d'auth : le token est secret (urlsafe 12 caracteres)."""
+    v = query("SELECT * FROM videos WHERE scan_token=?", (token,), one=True)
+    if not v:
+        return ("<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+                "<h2>Video introuvable</h2><p>Ce QR code n'est pas valide.</p></body></html>"), 404
+    v = dict(v)
+    return render_template('video_public.html', video=v, token=token)
+
+
+@app.route('/v/<token>/file')
+def video_public_file(token):
+    """Stream de la video accessible via token (sans auth, comme la page)."""
+    v = query("SELECT file_path, couple_id FROM videos WHERE scan_token=?", (token,), one=True)
+    if not v:
+        abort(404)
+    return send_from_directory(UPLOAD_DIR, v['file_path'], max_age=31536000)
+
+
+@app.route('/v/<token>/poster')
+def video_public_poster(token):
+    v = query("SELECT poster_path FROM videos WHERE scan_token=?", (token,), one=True)
+    if not v:
+        abort(404)
+    return send_from_directory(UPLOAD_DIR, v['poster_path'], max_age=31536000)
 
 
 # ── Routes : auth ─────────────────────────────────────────────────────

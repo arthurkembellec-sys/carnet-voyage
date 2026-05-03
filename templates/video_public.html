@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1C1A17">
+<title>Video — Notre Histoire</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    background: #0a0a09;
+    color: #FAF8F4;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100vh; min-height: 100dvh;
+    display: flex; flex-direction: column;
+  }
+  .topbar {
+    padding: 14px 20px;
+    background: rgba(28,26,23,0.8);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .brand {
+    font-family: serif;
+    font-style: italic;
+    font-size: 16px;
+    color: rgba(255,255,255,0.85);
+  }
+  .meta { font-size: 11px; color: rgba(255,255,255,0.5); letter-spacing: 0.16em; text-transform: uppercase; }
+  .video-stage {
+    flex: 1;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+    overflow: hidden;
+  }
+  video {
+    max-width: 100%;
+    max-height: 80vh;
+    background: #000;
+    border-radius: 8px;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+  }
+  .footer {
+    padding: 16px 20px 24px;
+    text-align: center;
+    color: rgba(255,255,255,0.5);
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <span class="brand">Notre Histoire</span>
+  <span class="meta">Video du carnet</span>
+</header>
+
+<main class="video-stage">
+  <video controls autoplay playsinline
+         poster="{{ url_for('video_public_poster', token=token) }}"
+         src="{{ url_for('video_public_file', token=token) }}">
+    Votre navigateur ne lit pas les videos HTML5.
+  </video>
+</main>
+
+<footer class="footer">
+  Lien partage prive · expire avec ce token
+</footer>
+
+</body>
+</html>
