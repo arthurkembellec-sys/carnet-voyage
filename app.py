@@ -28,7 +28,7 @@ from flask import (
 )
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "1.1.0-carnets"
+APP_VERSION = "1.2.0-album"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 SECRET_KEY = os.environ.get('SECRET_KEY') or secrets.token_urlsafe(32)
@@ -108,6 +108,32 @@ def init_db():
         )""",
         "CREATE INDEX IF NOT EXISTS idx_carnets_couple ON carnets(couple_id)",
         "CREATE INDEX IF NOT EXISTS idx_carnets_status ON carnets(status)",
+        # ── v1.2 — album : photos + pages (texte ou photo) ────────────
+        """CREATE TABLE IF NOT EXISTS photos (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            couple_id     INTEGER NOT NULL REFERENCES couples(id) ON DELETE CASCADE,
+            file_path     TEXT NOT NULL,
+            thumb_path    TEXT NOT NULL,
+            width         INTEGER, height INTEGER,
+            taken_at      TIMESTAMP,
+            location      TEXT DEFAULT '',
+            added_by      INTEGER NOT NULL REFERENCES users(id),
+            added_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS album_pages (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            carnet_id     INTEGER NOT NULL REFERENCES carnets(id) ON DELETE CASCADE,
+            type          TEXT NOT NULL CHECK(type IN ('photo','text')),
+            position      INTEGER NOT NULL DEFAULT 0,
+            photo_id      INTEGER REFERENCES photos(id) ON DELETE CASCADE,
+            caption       TEXT DEFAULT '',
+            text_content  TEXT DEFAULT '',
+            added_by      INTEGER REFERENCES users(id),
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_pages_carnet ON album_pages(carnet_id, position)",
+        "CREATE INDEX IF NOT EXISTS idx_photos_couple ON photos(couple_id)",
     ]
     for sql in migrations:
         try:
@@ -346,6 +372,239 @@ def carnet_supprimer(cid_carnet):
         (cid_carnet,)
     )
     return redirect(url_for('home'))
+
+
+# ══════════════════════════════════════════════════════════════════════
+#                         v1.2 — ALBUM
+# ══════════════════════════════════════════════════════════════════════
+
+from flask import send_from_directory
+from PIL import Image, ExifTags
+
+
+def _carnet_pages(carnet_id):
+    """Retourne les pages d'un carnet, ordonnees, avec infos photo jointes."""
+    rows = query("""
+        SELECT ap.*,
+               p.file_path AS photo_path, p.thumb_path AS photo_thumb,
+               p.width AS photo_width, p.height AS photo_height,
+               u.display_name AS added_by_name
+        FROM album_pages ap
+        LEFT JOIN photos p ON p.id = ap.photo_id
+        LEFT JOIN users u ON u.id = ap.added_by
+        WHERE ap.carnet_id = ?
+        ORDER BY ap.position ASC, ap.id ASC
+    """, (carnet_id,))
+    return [dict(r) for r in rows]
+
+
+def _next_page_position(carnet_id):
+    r = query(
+        "SELECT COALESCE(MAX(position), -1) + 1 AS next FROM album_pages WHERE carnet_id=?",
+        (carnet_id,), one=True
+    )
+    return r['next'] if r else 0
+
+
+def _save_uploaded_photo(file, couple_id):
+    """
+    Sauvegarde une photo uploadee :
+    - Decode + corrige EXIF orientation
+    - Resize a 2000px max (cote long), qualite 85
+    - Genere un thumbnail 400px (qualite 70)
+    - Renomme en token random pour eviter collision
+    Retourne dict {file_path, thumb_path, width, height, taken_at}.
+    """
+    img = Image.open(file.stream)
+
+    # EXIF : orientation + date prise
+    taken_at = None
+    try:
+        exif = img._getexif() or {}
+        orient_key = next((k for k, v in ExifTags.TAGS.items() if v == 'Orientation'), None)
+        if orient_key and orient_key in exif:
+            o = exif[orient_key]
+            if o == 3: img = img.rotate(180, expand=True)
+            elif o == 6: img = img.rotate(270, expand=True)
+            elif o == 8: img = img.rotate(90, expand=True)
+        date_key = next((k for k, v in ExifTags.TAGS.items() if v == 'DateTimeOriginal'), None)
+        if date_key and date_key in exif:
+            try:
+                taken_at = datetime.strptime(exif[date_key], '%Y:%m:%d %H:%M:%S').isoformat()
+            except Exception:
+                taken_at = None
+    except Exception:
+        pass
+
+    # Convert RGBA / P -> RGB pour JPEG
+    if img.mode in ('RGBA', 'LA', 'P'):
+        bg = Image.new('RGB', img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
+        img = bg
+    elif img.mode != 'RGB':
+        img = img.convert('RGB')
+
+    # Resize image principale (2000px cote long)
+    img.thumbnail((2000, 2000), Image.Resampling.LANCZOS)
+    w, h = img.size
+
+    # Stockage : /app/data/uploads/<couple_id>/<token>.jpg
+    couple_dir = os.path.join(UPLOAD_DIR, str(couple_id))
+    os.makedirs(couple_dir, exist_ok=True)
+    token = secrets.token_urlsafe(12)
+    fname = f"{token}.jpg"
+    fpath = os.path.join(couple_dir, fname)
+    img.save(fpath, 'JPEG', quality=85, optimize=True)
+
+    # Thumbnail 400px
+    thumb = img.copy()
+    thumb.thumbnail((400, 400), Image.Resampling.LANCZOS)
+    thumb_fname = f"{token}_t.jpg"
+    thumb_fpath = os.path.join(couple_dir, thumb_fname)
+    thumb.save(thumb_fpath, 'JPEG', quality=72, optimize=True)
+
+    rel_file = f"{couple_id}/{fname}"
+    rel_thumb = f"{couple_id}/{thumb_fname}"
+    return {
+        'file_path': rel_file,
+        'thumb_path': rel_thumb,
+        'width': w, 'height': h,
+        'taken_at': taken_at,
+    }
+
+
+@app.route('/carnet/<int:cid_carnet>/album')
+@couple_required
+def carnet_album(cid_carnet):
+    """Mode edition album : photos, captions, blocs texte."""
+    c = _get_carnet_or_404(cid_carnet)
+    pages = _carnet_pages(cid_carnet)
+    return render_template('album.html', carnet=c, pages=pages, types=CARNET_TYPES)
+
+
+@app.route('/carnet/<int:cid_carnet>/photos', methods=['POST'])
+@couple_required
+def carnet_upload_photos(cid_carnet):
+    """Upload multi-photos. Renvoie JSON pour optimistic UI."""
+    c = _get_carnet_or_404(cid_carnet)
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    files = request.files.getlist('photos')
+    if not files:
+        return jsonify({'ok': False, 'error': 'Aucun fichier'}), 400
+    created = []
+    errors = []
+    for f in files:
+        if not f or not f.filename:
+            continue
+        try:
+            data = _save_uploaded_photo(f, c['couple_id'])
+        except Exception as e:
+            errors.append(str(e))
+            continue
+        photo_id = execute(
+            "INSERT INTO photos (couple_id, file_path, thumb_path, width, height, "
+            "taken_at, added_by) VALUES (?,?,?,?,?,?,?)",
+            (c['couple_id'], data['file_path'], data['thumb_path'],
+             data['width'], data['height'], data['taken_at'], session['uid'])
+        )
+        pos = _next_page_position(cid_carnet)
+        page_id = execute(
+            "INSERT INTO album_pages (carnet_id, type, position, photo_id, added_by) "
+            "VALUES (?,?,?,?,?)",
+            (cid_carnet, 'photo', pos, photo_id, session['uid'])
+        )
+        created.append({
+            'page_id': page_id,
+            'photo_id': photo_id,
+            'thumb_url': url_for('serve_upload', filename=data['thumb_path']),
+            'full_url': url_for('serve_upload', filename=data['file_path']),
+            'width': data['width'], 'height': data['height'],
+        })
+    return jsonify({'ok': True, 'created': created, 'errors': errors})
+
+
+@app.route('/album_page/<int:page_id>/caption', methods=['POST'])
+@couple_required
+def page_update_caption(page_id):
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    page = query("SELECT ap.*, c.couple_id FROM album_pages ap "
+                 "JOIN carnets c ON c.id=ap.carnet_id WHERE ap.id=?",
+                 (page_id,), one=True)
+    if not page or page['couple_id'] != session['couple_id']:
+        return jsonify({'ok': False, 'error': '404'}), 404
+    caption = (request.form.get('caption') or '').strip()
+    execute(
+        "UPDATE album_pages SET caption=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (caption, page_id)
+    )
+    return jsonify({'ok': True, 'caption': caption})
+
+
+@app.route('/album_page/<int:page_id>/text', methods=['POST'])
+@couple_required
+def page_update_text(page_id):
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    page = query("SELECT ap.*, c.couple_id FROM album_pages ap "
+                 "JOIN carnets c ON c.id=ap.carnet_id WHERE ap.id=?",
+                 (page_id,), one=True)
+    if not page or page['couple_id'] != session['couple_id']:
+        return jsonify({'ok': False, 'error': '404'}), 404
+    text = (request.form.get('text_content') or '').strip()
+    execute(
+        "UPDATE album_pages SET text_content=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (text, page_id)
+    )
+    return jsonify({'ok': True, 'text_content': text})
+
+
+@app.route('/carnet/<int:cid_carnet>/text', methods=['POST'])
+@couple_required
+def carnet_add_text(cid_carnet):
+    c = _get_carnet_or_404(cid_carnet)
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    pos = _next_page_position(cid_carnet)
+    page_id = execute(
+        "INSERT INTO album_pages (carnet_id, type, position, text_content, added_by) "
+        "VALUES (?,?,?,?,?)",
+        (cid_carnet, 'text', pos, '', session['uid'])
+    )
+    return jsonify({'ok': True, 'page_id': page_id, 'position': pos})
+
+
+@app.route('/album_page/<int:page_id>/supprimer', methods=['POST'])
+@couple_required
+def page_supprimer(page_id):
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    page = query("SELECT ap.*, c.couple_id FROM album_pages ap "
+                 "JOIN carnets c ON c.id=ap.carnet_id WHERE ap.id=?",
+                 (page_id,), one=True)
+    if not page or page['couple_id'] != session['couple_id']:
+        return jsonify({'ok': False, 'error': '404'}), 404
+    # On supprime la page (la photo reste en BDD : pourra etre reutilisee plus tard)
+    execute("DELETE FROM album_pages WHERE id=?", (page_id,))
+    return jsonify({'ok': True})
+
+
+@app.route('/uploads/<path:filename>')
+@couple_required
+def serve_upload(filename):
+    """Sert un fichier upload — verifie que le user appartient au couple proprietaire."""
+    # Le path commence par <couple_id>/...
+    parts = filename.split('/', 1)
+    if len(parts) != 2:
+        abort(404)
+    try:
+        owner_couple = int(parts[0])
+    except ValueError:
+        abort(404)
+    if owner_couple != session.get('couple_id'):
+        abort(403)
+    return send_from_directory(UPLOAD_DIR, filename, max_age=31536000)
 
 
 # ── Routes : auth ─────────────────────────────────────────────────────

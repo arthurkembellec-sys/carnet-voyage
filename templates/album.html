@@ -1,0 +1,361 @@
+{% extends '_base.html' %}
+{% block title %}{{ carnet.title }} — Album{% endblock %}
+{% block content %}
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <a href="{{ url_for('carnet_view', cid_carnet=carnet.id) }}" class="brand">← {{ carnet.title }}</a>
+    <nav class="topbar-nav">
+      <a href="{{ url_for('carnet_modifier', cid_carnet=carnet.id) }}" class="link">Fiche</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page album-page">
+
+  <section class="album-head">
+    <p class="kicker">Album</p>
+    <h1 class="display"><em>{{ carnet.title }}</em></h1>
+    <p class="lead" id="album-status">
+      <span id="album-count">{{ pages|length }}</span>
+      page{% if pages|length > 1 %}s{% endif %}
+      <span id="save-status" class="save-indicator"></span>
+    </p>
+  </section>
+
+  <ul class="pages-list" id="pages-list">
+    {% for p in pages %}
+    <li class="page-item" data-page-id="{{ p.id }}" data-type="{{ p.type }}">
+      {% if p.type == 'photo' %}
+        <a class="page-photo" href="javascript:void(0)" onclick="openViewer({{ p.id }})">
+          <img src="{{ url_for('serve_upload', filename=p.photo_thumb) }}"
+               data-full="{{ url_for('serve_upload', filename=p.photo_path) }}"
+               data-page-id="{{ p.id }}"
+               loading="lazy" alt="">
+        </a>
+        <div class="page-caption-wrap">
+          <textarea class="page-caption" placeholder="Une legende..." rows="1"
+                    data-page-id="{{ p.id }}">{{ p.caption or '' }}</textarea>
+        </div>
+      {% elif p.type == 'text' %}
+        <textarea class="page-text" placeholder="Quelques mots..." rows="3"
+                  data-page-id="{{ p.id }}">{{ p.text_content or '' }}</textarea>
+      {% endif %}
+      <button class="page-delete" type="button"
+              onclick="deletePage({{ p.id }})" title="Supprimer">
+        ✕
+      </button>
+    </li>
+    {% endfor %}
+  </ul>
+
+  {% if not pages %}
+  <div class="empty-state" id="empty-album">
+    <p class="empty-display"><em>L'album est vide.</em></p>
+    <p class="empty-lead">Ajoute des photos ou un bloc de texte pour commencer.</p>
+  </div>
+  {% endif %}
+
+</main>
+
+<!-- Footer flottant : actions ajout -->
+<div class="album-footer">
+  <input type="file" id="file-photos" accept="image/*" multiple hidden>
+  <input type="file" id="file-camera" accept="image/*" capture="environment" hidden>
+
+  <button type="button" class="fab-btn" onclick="document.getElementById('file-photos').click()">
+    <span class="fab-icon">+</span> Photos
+  </button>
+  <button type="button" class="fab-btn" onclick="document.getElementById('file-camera').click()">
+    <span class="fab-icon">📷</span> Camera
+  </button>
+  <button type="button" class="fab-btn" onclick="addTextBlock()">
+    <span class="fab-icon">¶</span> Texte
+  </button>
+</div>
+
+<!-- Viewer plein ecran -->
+<div class="photo-viewer" id="photo-viewer" hidden>
+  <button type="button" class="viewer-close" onclick="closeViewer()" aria-label="Fermer">✕</button>
+  <button type="button" class="viewer-prev" onclick="viewerNav(-1)" aria-label="Precedente">‹</button>
+  <button type="button" class="viewer-next" onclick="viewerNav(1)" aria-label="Suivante">›</button>
+  <div class="viewer-stage">
+    <img id="viewer-img" src="" alt="">
+  </div>
+  <div class="viewer-caption" id="viewer-caption"></div>
+</div>
+
+<script>
+  const CSRF = "{{ csrf_token() }}";
+  const CARNET_ID = {{ carnet.id }};
+  const URL_UPLOAD_PHOTOS = "{{ url_for('carnet_upload_photos', cid_carnet=carnet.id) }}";
+  const URL_ADD_TEXT = "{{ url_for('carnet_add_text', cid_carnet=carnet.id) }}";
+  const SERVE_UPLOAD_BASE = "{{ url_for('serve_upload', filename='__X__') }}".replace('__X__', '');
+
+  // ── Utilitaires ────────────────────────────────────────────────
+  const saveStatus = document.getElementById('save-status');
+  let saveTimer = null;
+  function setSaving() { saveStatus.textContent = 'Enregistrement...'; saveStatus.className = 'save-indicator saving'; }
+  function setSaved() {
+    saveStatus.textContent = '✓ Enregistre';
+    saveStatus.className = 'save-indicator saved';
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(function(){ saveStatus.textContent = ''; }, 1200);
+  }
+  function setError(msg) {
+    saveStatus.textContent = msg || 'Erreur';
+    saveStatus.className = 'save-indicator error';
+  }
+
+  function autoresize(ta) {
+    ta.style.height = 'auto';
+    ta.style.height = (ta.scrollHeight + 2) + 'px';
+  }
+  document.querySelectorAll('.page-caption, .page-text').forEach(autoresize);
+
+  // ── Compression cote client (max 2000px / qualite 85) ──────────
+  async function compressImage(file) {
+    return new Promise(function(resolve, reject){
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = function(){
+        const MAX = 2000;
+        let w = img.naturalWidth, h = img.naturalHeight;
+        if (w > MAX || h > MAX) {
+          if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+          else        { w = Math.round(w * MAX / h); h = MAX; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        canvas.toBlob(function(blob){
+          URL.revokeObjectURL(url);
+          if (!blob) reject(new Error('compress failed'));
+          else resolve(new File([blob], (file.name.replace(/\.[^.]+$/, '') || 'photo') + '.jpg', { type: 'image/jpeg' }));
+        }, 'image/jpeg', 0.85);
+      };
+      img.onerror = function(e){ URL.revokeObjectURL(url); reject(e); };
+      img.src = url;
+    });
+  }
+
+  async function uploadFiles(files) {
+    if (!files || !files.length) return;
+    setSaving();
+    const empty = document.getElementById('empty-album');
+    if (empty) empty.style.display = 'none';
+    const list = document.getElementById('pages-list');
+
+    // Compression sequentielle (plus stable mobile que parallele)
+    const compressed = [];
+    for (const f of files) {
+      try {
+        if (f.type && f.type.startsWith('image/')) {
+          compressed.push(await compressImage(f));
+        }
+      } catch (e) { console.warn('compress', e); }
+    }
+    if (!compressed.length) { setError('Aucune image valide'); return; }
+
+    // Upload (multipart, multi-fichier)
+    const fd = new FormData();
+    fd.append('_csrf', CSRF);
+    compressed.forEach(function(f){ fd.append('photos', f, f.name); });
+
+    try {
+      const r = await fetch(URL_UPLOAD_PHOTOS, { method: 'POST', body: fd });
+      const data = await r.json();
+      if (!data.ok) { setError('Upload echoue'); return; }
+      data.created.forEach(function(p){
+        const li = document.createElement('li');
+        li.className = 'page-item';
+        li.dataset.pageId = p.page_id;
+        li.dataset.type = 'photo';
+        li.innerHTML = `
+          <a class="page-photo" href="javascript:void(0)" onclick="openViewer(${p.page_id})">
+            <img src="${p.thumb_url}" data-full="${p.full_url}" data-page-id="${p.page_id}" loading="lazy" alt="">
+          </a>
+          <div class="page-caption-wrap">
+            <textarea class="page-caption" placeholder="Une legende..." rows="1" data-page-id="${p.page_id}"></textarea>
+          </div>
+          <button class="page-delete" type="button" onclick="deletePage(${p.page_id})" title="Supprimer">✕</button>
+        `;
+        list.appendChild(li);
+        const ta = li.querySelector('.page-caption');
+        attachCaptionAutosave(ta);
+        autoresize(ta);
+      });
+      updateCount();
+      setSaved();
+    } catch (e) { setError('Reseau'); console.error(e); }
+  }
+
+  document.getElementById('file-photos').addEventListener('change', function(e){
+    uploadFiles(e.target.files);
+    e.target.value = '';
+  });
+  document.getElementById('file-camera').addEventListener('change', function(e){
+    uploadFiles(e.target.files);
+    e.target.value = '';
+  });
+
+  // ── Auto-save captions / texte (debounce 600ms) ────────────────
+  function debounce(fn, ms) {
+    let t; return function(){ clearTimeout(t); t = setTimeout(fn, ms); };
+  }
+  function attachCaptionAutosave(ta) {
+    ta.addEventListener('input', function(){
+      autoresize(ta);
+      const save = debounce(async function(){
+        setSaving();
+        const fd = new FormData();
+        fd.append('_csrf', CSRF);
+        fd.append('caption', ta.value);
+        try {
+          const r = await fetch(`/album_page/${ta.dataset.pageId}/caption`, { method: 'POST', body: fd });
+          const d = await r.json();
+          if (d.ok) setSaved(); else setError();
+        } catch (e) { setError('Reseau'); }
+      }, 600);
+      save();
+    });
+  }
+  document.querySelectorAll('.page-caption').forEach(attachCaptionAutosave);
+
+  function attachTextAutosave(ta) {
+    ta.addEventListener('input', function(){
+      autoresize(ta);
+      const save = debounce(async function(){
+        setSaving();
+        const fd = new FormData();
+        fd.append('_csrf', CSRF);
+        fd.append('text_content', ta.value);
+        try {
+          const r = await fetch(`/album_page/${ta.dataset.pageId}/text`, { method: 'POST', body: fd });
+          const d = await r.json();
+          if (d.ok) setSaved(); else setError();
+        } catch (e) { setError('Reseau'); }
+      }, 600);
+      save();
+    });
+  }
+  document.querySelectorAll('.page-text').forEach(attachTextAutosave);
+
+  // ── Bloc texte ────────────────────────────────────────────────
+  async function addTextBlock() {
+    setSaving();
+    const fd = new FormData();
+    fd.append('_csrf', CSRF);
+    try {
+      const r = await fetch(URL_ADD_TEXT, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!d.ok) { setError(); return; }
+      const empty = document.getElementById('empty-album');
+      if (empty) empty.style.display = 'none';
+      const list = document.getElementById('pages-list');
+      const li = document.createElement('li');
+      li.className = 'page-item';
+      li.dataset.pageId = d.page_id;
+      li.dataset.type = 'text';
+      li.innerHTML = `
+        <textarea class="page-text" placeholder="Quelques mots..." rows="3" data-page-id="${d.page_id}"></textarea>
+        <button class="page-delete" type="button" onclick="deletePage(${d.page_id})" title="Supprimer">✕</button>
+      `;
+      list.appendChild(li);
+      const ta = li.querySelector('.page-text');
+      attachTextAutosave(ta);
+      ta.focus();
+      updateCount();
+      setSaved();
+    } catch (e) { setError('Reseau'); }
+  }
+
+  // ── Suppression ───────────────────────────────────────────────
+  async function deletePage(pageId) {
+    if (!confirm('Supprimer cette page ?')) return;
+    setSaving();
+    const fd = new FormData();
+    fd.append('_csrf', CSRF);
+    try {
+      const r = await fetch(`/album_page/${pageId}/supprimer`, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!d.ok) { setError(); return; }
+      const li = document.querySelector(`.page-item[data-page-id="${pageId}"]`);
+      if (li) li.remove();
+      updateCount();
+      setSaved();
+    } catch (e) { setError('Reseau'); }
+  }
+
+  function updateCount() {
+    const n = document.querySelectorAll('.page-item').length;
+    document.getElementById('album-count').textContent = n;
+    const empty = document.getElementById('empty-album');
+    if (empty) empty.style.display = n === 0 ? '' : 'none';
+  }
+
+  // ── Viewer plein ecran ────────────────────────────────────────
+  let viewerPhotos = [];
+  let viewerIdx = 0;
+  function refreshViewerList() {
+    viewerPhotos = Array.from(document.querySelectorAll('.page-photo img')).map(function(img){
+      return {
+        full: img.dataset.full,
+        thumb: img.src,
+        pageId: img.dataset.pageId,
+        caption: (img.parentElement.parentElement.querySelector('.page-caption') || {}).value || '',
+      };
+    });
+  }
+  function openViewer(pageId) {
+    refreshViewerList();
+    viewerIdx = viewerPhotos.findIndex(function(p){ return String(p.pageId) === String(pageId); });
+    if (viewerIdx < 0) viewerIdx = 0;
+    showViewer();
+  }
+  function showViewer() {
+    if (!viewerPhotos.length) return;
+    const v = document.getElementById('photo-viewer');
+    document.getElementById('viewer-img').src = viewerPhotos[viewerIdx].full;
+    document.getElementById('viewer-caption').textContent = viewerPhotos[viewerIdx].caption;
+    v.hidden = false;
+    document.body.style.overflow = 'hidden';
+  }
+  function closeViewer() {
+    document.getElementById('photo-viewer').hidden = true;
+    document.body.style.overflow = '';
+  }
+  function viewerNav(d) {
+    if (!viewerPhotos.length) return;
+    viewerIdx = (viewerIdx + d + viewerPhotos.length) % viewerPhotos.length;
+    showViewer();
+  }
+  document.addEventListener('keydown', function(e){
+    if (document.getElementById('photo-viewer').hidden) return;
+    if (e.key === 'Escape') closeViewer();
+    if (e.key === 'ArrowLeft') viewerNav(-1);
+    if (e.key === 'ArrowRight') viewerNav(1);
+  });
+  // Swipe horizontal mobile
+  (function(){
+    let startX = null;
+    const v = document.getElementById('photo-viewer');
+    v.addEventListener('touchstart', function(e){ startX = e.touches[0].clientX; });
+    v.addEventListener('touchend', function(e){
+      if (startX === null) return;
+      const dx = e.changedTouches[0].clientX - startX;
+      if (Math.abs(dx) > 60) viewerNav(dx < 0 ? 1 : -1);
+      startX = null;
+    });
+  })();
+
+  // Expose pour onclick inline
+  window.openViewer = openViewer;
+  window.closeViewer = closeViewer;
+  window.viewerNav = viewerNav;
+  window.deletePage = deletePage;
+  window.addTextBlock = addTextBlock;
+</script>
+
+{% endblock %}

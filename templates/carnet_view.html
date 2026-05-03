@@ -6,6 +6,7 @@
   <div class="topbar-inner">
     <a href="{{ url_for('home') }}" class="brand">← Notre Histoire</a>
     <nav class="topbar-nav">
+      <a href="{{ url_for('carnet_album', cid_carnet=carnet.id) }}" class="link">Album</a>
       <a href="{{ url_for('carnet_modifier', cid_carnet=carnet.id) }}" class="link">Modifier</a>
     </nav>
   </div>
@@ -28,16 +29,10 @@
       {%- endif -%}
     </p>
     {% endif %}
+    <div class="cta-row">
+      <a href="{{ url_for('carnet_album', cid_carnet=carnet.id) }}" class="btn btn-primary">Ouvrir l'album</a>
+    </div>
   </section>
-
-  <section class="album-placeholder">
-    <p class="empty-display"><em>L'album arrive bientot.</em></p>
-    <p class="empty-lead">
-      L'ajout de photos et de captions sera disponible avec la V1.2.
-      Pour l'instant, votre carnet est cree et votre partenaire peut le voir.
-    </p>
-  </section>
-
 </main>
 
 {% endblock %}
