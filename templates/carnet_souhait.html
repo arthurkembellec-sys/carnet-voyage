@@ -1,0 +1,196 @@
+{% extends '_base.html' %}
+{% block title %}{{ carnet.title }} — Souhait{% endblock %}
+{% block content %}
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <a href="{{ url_for('home') }}" class="brand">← Notre Histoire</a>
+    <nav class="topbar-nav">
+      <a href="{{ url_for('carnet_modifier', cid_carnet=carnet.id) }}" class="link">Fiche</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page souhait-page">
+
+  <section class="hero souhait-hero">
+    <p class="kicker">Souhait</p>
+    <h1 class="display"><em>{{ carnet.title }}</em></h1>
+    {% if carnet.location %}<p class="lead">{{ carnet.location }}</p>{% endif %}
+    <div class="cta-row">
+      <a href="{{ url_for('carnet_transformer', cid_carnet=carnet.id) }}" class="btn btn-primary">
+        ✨ Transformer en voyage
+      </a>
+    </div>
+  </section>
+
+  {% if voyages %}
+  <section class="voyages-issus">
+    <h2 class="section-title">Voyages issus de ce souhait</h2>
+    <ul class="member-list">
+      {% for v in voyages %}
+      <li class="member-item">
+        <div class="member-avatar" style="background:#A8503D">✈</div>
+        <div class="member-info">
+          <a href="{{ url_for('carnet_view', cid_carnet=v.id) }}" class="member-name" style="color:var(--ink)">
+            {{ v.title }}
+          </a>
+          <div class="member-meta">{{ v.status }} · {{ (v.created_at or '')|truncate(10, true, '') }}</div>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  <section class="souhait-items">
+    <h2 class="section-title">Items <span class="section-hint">Liens, photos, lieux, budget — pour preparer le voyage</span></h2>
+
+    <ul class="items-grid" id="items-grid">
+      {% for it in items %}
+        {% include '_souhait_item.html' %}
+      {% endfor %}
+    </ul>
+
+    {% if not items %}
+    <div class="empty-state empty-section" id="empty-items">
+      <p class="empty-display"><em>Pas encore d'idee.</em></p>
+      <p class="empty-lead">Ajoute des liens, photos, lieux, budget — tout ce qui fait rever vers ce voyage.</p>
+    </div>
+    {% endif %}
+  </section>
+
+</main>
+
+<!-- Footer flottant : actions ajout -->
+<div class="album-footer">
+  <button type="button" class="fab-btn" onclick="showAddModal('link')"><span class="fab-icon">🔗</span> Lien</button>
+  <button type="button" class="fab-btn" onclick="showAddModal('photo')"><span class="fab-icon">📷</span> Photo</button>
+  <button type="button" class="fab-btn" onclick="showAddModal('note')"><span class="fab-icon">¶</span> Note</button>
+  <button type="button" class="fab-btn" onclick="showAddModal('location')"><span class="fab-icon">📍</span> Lieu</button>
+  <button type="button" class="fab-btn" onclick="showAddModal('budget')"><span class="fab-icon">€</span> Budget</button>
+</div>
+
+<!-- Modal d'ajout -->
+<div class="souhait-modal" id="add-modal" hidden>
+  <div class="souhait-modal-card">
+    <div class="souhait-modal-head">
+      <h3 id="modal-title">Ajouter</h3>
+      <button type="button" class="souhait-modal-close" onclick="closeAddModal()">✕</button>
+    </div>
+    <form id="add-form" enctype="multipart/form-data">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="kind" id="modal-kind" value="">
+
+      {# Champs communs #}
+      <label class="field"><span class="label">Titre</span>
+        <input type="text" name="title" id="modal-input-title" maxlength="120">
+      </label>
+
+      {# Lien #}
+      <label class="field" data-kind="link"><span class="label">URL</span>
+        <input type="url" name="url" id="modal-input-url" placeholder="https://...">
+      </label>
+
+      {# Note #}
+      <label class="field" data-kind="note"><span class="label">Note</span>
+        <textarea name="body" id="modal-input-note" rows="4" placeholder="Une idee, une envie..."></textarea>
+      </label>
+
+      {# Lieu #}
+      <label class="field" data-kind="location"><span class="label">Adresse</span>
+        <input type="text" name="address" id="modal-input-address" placeholder="ex. Taormina, Sicile">
+      </label>
+
+      {# Budget #}
+      <div class="field-row" data-kind="budget">
+        <label class="field"><span class="label">Montant</span>
+          <input type="number" name="amount" step="0.01" id="modal-input-amount">
+        </label>
+        <label class="field"><span class="label">Devise</span>
+          <input type="text" name="currency" maxlength="3" value="EUR" id="modal-input-currency">
+        </label>
+      </div>
+
+      {# Photo #}
+      <label class="field" data-kind="photo"><span class="label">Photo</span>
+        <input type="file" name="photo" accept="image/*" id="modal-input-photo">
+      </label>
+
+      <div class="form-actions">
+        <button type="button" class="btn btn-ghost" onclick="closeAddModal()">Annuler</button>
+        <button type="submit" class="btn btn-primary" id="modal-submit">Ajouter</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/exifr@7/dist/lite.umd.js"></script>
+<script>
+  const CSRF = "{{ csrf_token() }}";
+  const URL_ADD_ITEM = "{{ url_for('carnet_add_item', cid_carnet=carnet.id) }}";
+
+  const KIND_LABELS = { link:'Lien', photo:'Photo', note:'Note', location:'Lieu', budget:'Budget' };
+
+  function showAddModal(kind) {
+    document.getElementById('modal-kind').value = kind;
+    document.getElementById('modal-title').textContent = 'Ajouter — ' + KIND_LABELS[kind];
+    document.querySelectorAll('#add-form [data-kind]').forEach(function(el){
+      el.style.display = (el.dataset.kind === kind) ? '' : 'none';
+    });
+    document.getElementById('add-modal').hidden = false;
+    document.body.style.overflow = 'hidden';
+  }
+  function closeAddModal() {
+    document.getElementById('add-modal').hidden = true;
+    document.body.style.overflow = '';
+    document.getElementById('add-form').reset();
+  }
+
+  document.getElementById('add-form').addEventListener('submit', async function(e){
+    e.preventDefault();
+    var fd = new FormData(e.target);
+    var kind = fd.get('kind');
+
+    // Si photo : lire EXIF avant submit
+    if (kind === 'photo') {
+      var f = document.getElementById('modal-input-photo').files[0];
+      if (f && window.exifr) {
+        try {
+          var meta = await exifr.parse(f, { gps: true, pick: ['DateTimeOriginal','GPSLatitude','GPSLongitude'] });
+          if (meta) {
+            if (meta.DateTimeOriginal) {
+              var dt = meta.DateTimeOriginal instanceof Date ? meta.DateTimeOriginal.toISOString() : meta.DateTimeOriginal;
+              fd.append('taken_at', dt);
+            }
+            if (meta.latitude != null) fd.append('gps_lat', String(meta.latitude));
+            if (meta.longitude != null) fd.append('gps_lng', String(meta.longitude));
+          }
+        } catch(err) { console.warn('EXIF', err); }
+      }
+    }
+
+    try {
+      var r = await fetch(URL_ADD_ITEM, { method:'POST', body: fd });
+      var d = await r.json();
+      if (!d.ok) { alert('Erreur : ' + (d.error || '')); return; }
+      closeAddModal();
+      location.reload();
+    } catch (e) { alert('Reseau : ' + e.message); }
+  });
+
+  async function deleteItem(itemId) {
+    if (!confirm('Supprimer cet item ?')) return;
+    var fd = new FormData(); fd.append('_csrf', CSRF);
+    var r = await fetch('/item/' + itemId + '/supprimer', { method:'POST', body: fd });
+    var d = await r.json();
+    if (!d.ok) { alert('Erreur'); return; }
+    var li = document.querySelector('.item-card[data-item-id="' + itemId + '"]');
+    if (li) li.remove();
+  }
+  window.deleteItem = deleteItem;
+  window.showAddModal = showAddModal;
+  window.closeAddModal = closeAddModal;
+</script>
+
+{% endblock %}

@@ -69,9 +69,9 @@
   <ul class="carnet-list">
     {% for c in carnets %}
     <li>
-      <a href="{{ url_for('carnet_view', cid_carnet=c.id) }}" class="carnet-card">
+      <a href="{{ url_for('carnet_view', cid_carnet=c.id) }}" class="carnet-card carnet-card-{{ c.type }}">
         <div class="carnet-cover">
-          <span class="carnet-type">{{ {'voyage':'Voyage','restaurant':'Restaurant','sortie':'Sortie','autre':'Autre'}[c.type] }}</span>
+          <span class="carnet-type">{{ {'voyage':'Voyage','restaurant':'Restaurant','sortie':'Sortie','souhait':'Souhait','autre':'Autre'}[c.type] }}</span>
         </div>
         <div class="carnet-meta">
           <h3 class="carnet-title">{{ c.title }}</h3>

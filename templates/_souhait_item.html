@@ -1,0 +1,33 @@
+<li class="item-card item-card-{{ it.kind }}" data-item-id="{{ it.id }}">
+  <div class="item-head">
+    <span class="item-kind item-kind-{{ it.kind }}">
+      {% if it.kind == 'link' %}🔗 Lien
+      {% elif it.kind == 'photo' %}📷 Photo
+      {% elif it.kind == 'note' %}¶ Note
+      {% elif it.kind == 'location' %}📍 Lieu
+      {% elif it.kind == 'budget' %}€ Budget
+      {% endif %}
+    </span>
+    <button type="button" class="item-delete" onclick="deleteItem({{ it.id }})" title="Supprimer">✕</button>
+  </div>
+
+  {% if it.kind == 'photo' and it.photo_thumb %}
+    <img class="item-photo" src="{{ url_for('serve_upload', filename=it.photo_thumb) }}" loading="lazy" alt="">
+  {% endif %}
+
+  {% if it.title %}<div class="item-title">{{ it.title }}</div>{% endif %}
+
+  {% if it.kind == 'link' and it.url %}
+    <a class="item-url" href="{{ it.url }}" target="_blank" rel="noopener">{{ it.url }}</a>
+  {% elif it.kind == 'note' and it.body %}
+    <div class="item-body">{{ it.body }}</div>
+  {% elif it.kind == 'location' %}
+    {% if it.address %}<div class="item-body">{{ it.address }}</div>{% endif %}
+  {% elif it.kind == 'budget' %}
+    <div class="item-amount">{{ it.amount }} {{ it.currency or 'EUR' }}</div>
+  {% endif %}
+
+  {% if it.added_by_name %}
+    <div class="item-meta">par {{ it.added_by_name }} · {{ (it.added_at or '')|truncate(10, true, '') }}</div>
+  {% endif %}
+</li>

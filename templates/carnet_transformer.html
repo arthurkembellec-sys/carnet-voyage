@@ -1,0 +1,106 @@
+{% extends '_base.html' %}
+{% block title %}Transformer en voyage — {{ carnet.title }}{% endblock %}
+{% block content %}
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <a href="{{ url_for('carnet_souhait_view', cid_carnet=carnet.id) }}" class="brand">← {{ carnet.title }}</a>
+  </div>
+</header>
+
+<main class="page">
+
+  <section class="hero">
+    <p class="kicker">Transformation</p>
+    <h1 class="display"><em>Du reve<br>au voyage.</em></h1>
+    <p class="lead">
+      Quels items veux-tu emporter dans le voyage ? Les items emportes
+      disparaitront du souhait (sauf si tu coches "dupliquer").
+    </p>
+  </section>
+
+  <form method="POST" action="{{ url_for('carnet_transformer', cid_carnet=carnet.id) }}" class="form form-wide">
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+
+    {# Selection items #}
+    <div class="field">
+      <span class="label">Items du souhait</span>
+      {% if items %}
+      <div class="transform-toggles">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="toggleAll(true)">Tout selectionner</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="toggleAll(false)">Tout deselectionner</button>
+        <span class="transform-counter" id="counter">0 / {{ items|length }} selectionne(s)</span>
+      </div>
+      <ul class="transform-items">
+        {% for it in items %}
+        <li class="transform-item">
+          <label>
+            <input type="checkbox" name="item_ids" value="{{ it.id }}" class="transform-cb" checked>
+            <span class="transform-kind">
+              {% if it.kind == 'link' %}🔗{% elif it.kind == 'photo' %}📷{% elif it.kind == 'note' %}¶{% elif it.kind == 'location' %}📍{% else %}€{% endif %}
+            </span>
+            <span class="transform-title">{{ it.title or it.url or it.body or it.address or '—' }}</span>
+          </label>
+        </li>
+        {% endfor %}
+      </ul>
+      <label class="transform-duplicate">
+        <input type="checkbox" name="duplicate" value="1">
+        Dupliquer plutot que deplacer (les items restent aussi dans le souhait)
+      </label>
+      {% else %}
+      <p class="hint">Aucun item dans ce souhait. Le voyage sera cree vide.</p>
+      {% endif %}
+    </div>
+
+    <hr style="margin:20px 0;border:0;border-top:1px solid var(--border)">
+
+    <h2 class="section-title">Fiche du voyage</h2>
+
+    <label class="field">
+      <span class="label">Titre du voyage</span>
+      <input type="text" name="title" value="{{ carnet.title }}" required maxlength="80">
+    </label>
+
+    <label class="field">
+      <span class="label">Lieu</span>
+      <input type="text" name="location" value="{{ carnet.location or '' }}" maxlength="120">
+    </label>
+
+    <div class="field-row">
+      <label class="field">
+        <span class="label">Date debut</span>
+        <input type="date" name="date_start">
+      </label>
+      <label class="field">
+        <span class="label">Date fin</span>
+        <input type="date" name="date_end">
+      </label>
+    </div>
+
+    <div class="form-actions">
+      <a href="{{ url_for('carnet_souhait_view', cid_carnet=carnet.id) }}" class="btn btn-ghost">Annuler</a>
+      <button type="submit" class="btn btn-primary">✨ Creer le voyage</button>
+    </div>
+  </form>
+</main>
+
+<script>
+  function refreshCounter() {
+    var total = document.querySelectorAll('.transform-cb').length;
+    var n = document.querySelectorAll('.transform-cb:checked').length;
+    var c = document.getElementById('counter');
+    if (c) c.textContent = n + ' / ' + total + ' selectionne(s)';
+  }
+  function toggleAll(v) {
+    document.querySelectorAll('.transform-cb').forEach(function(cb){ cb.checked = v; });
+    refreshCounter();
+  }
+  document.querySelectorAll('.transform-cb').forEach(function(cb){
+    cb.addEventListener('change', refreshCounter);
+  });
+  refreshCounter();
+  window.toggleAll = toggleAll;
+</script>
+
+{% endblock %}

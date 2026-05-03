@@ -35,7 +35,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "1.3.0-multi-espaces"
+APP_VERSION = "1.4.0-souhaits"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 SECRET_KEY = os.environ.get('SECRET_KEY') or secrets.token_urlsafe(32)
@@ -61,12 +61,67 @@ def get_db():
     return conn
 
 
+def _migrate_carnets_souhait(conn):
+    """v1.4 — recree la table carnets pour autoriser type='souhait'
+    et ajouter la colonne parent_souhait_id. Idempotente."""
+    try:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='carnets'"
+        ).fetchone()
+        if not row:
+            return  # table pas encore creee, rien a faire
+        sql = row[0] or ''
+        if "'souhait'" in sql and 'parent_souhait_id' in sql:
+            return  # deja migre
+        log.info("v1.4 migration carnets : ajout 'souhait' + parent_souhait_id")
+        conn.executescript("""
+            PRAGMA foreign_keys=OFF;
+            CREATE TABLE carnets_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                couple_id INTEGER NOT NULL REFERENCES couples(id) ON DELETE CASCADE,
+                title TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'voyage'
+                    CHECK(type IN ('voyage','restaurant','sortie','souhait','autre')),
+                location TEXT DEFAULT '',
+                date_start DATE,
+                date_end DATE,
+                cover_photo_id INTEGER,
+                status TEXT NOT NULL DEFAULT 'draft'
+                    CHECK(status IN ('draft','active','locked','archived')),
+                created_by INTEGER NOT NULL REFERENCES users(id),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                deleted_at TIMESTAMP DEFAULT NULL,
+                parent_souhait_id INTEGER REFERENCES carnets(id) ON DELETE SET NULL
+            );
+            INSERT INTO carnets_new (id, couple_id, title, type, location,
+                date_start, date_end, cover_photo_id, status, created_by,
+                created_at, updated_at, deleted_at)
+            SELECT id, couple_id, title, type, location, date_start, date_end,
+                cover_photo_id, status, created_by, created_at, updated_at, deleted_at
+            FROM carnets;
+            DROP TABLE carnets;
+            ALTER TABLE carnets_new RENAME TO carnets;
+            CREATE INDEX IF NOT EXISTS idx_carnets_couple ON carnets(couple_id);
+            CREATE INDEX IF NOT EXISTS idx_carnets_status ON carnets(status);
+            CREATE INDEX IF NOT EXISTS idx_carnets_parent ON carnets(parent_souhait_id);
+            PRAGMA foreign_keys=ON;
+        """)
+        conn.commit()
+    except Exception as e:
+        log.warning("v1.4 migration carnets ECHEC (skip): %s", e)
+
+
 def init_db():
     """
     Migrations idempotentes. Toute nouvelle table / colonne s'ajoute ici,
     en respectant l'ordre (les FK dependantes apres leurs cibles).
     """
     conn = get_db()
+
+    # v1.4 — migration speciale carnets (CHECK strict + ajout colonne)
+    _migrate_carnets_souhait(conn)
+
     migrations = [
         # ── v1.0 — couple : users + couples + invitations ─────────────
         """CREATE TABLE IF NOT EXISTS couples (
@@ -164,6 +219,27 @@ def init_db():
                   CASE WHEN c.created_by = u.id THEN 'owner' ELSE 'member' END
            FROM users u JOIN couples c ON c.id = u.couple_id
            WHERE u.couple_id IS NOT NULL""",
+        # ── v1.4 — items des carnets de souhait (link/photo/note/lieu/budget)
+        """CREATE TABLE IF NOT EXISTS carnet_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            carnet_id INTEGER REFERENCES carnets(id) ON DELETE CASCADE,
+            target_carnet_id INTEGER REFERENCES carnets(id) ON DELETE SET NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            kind TEXT NOT NULL CHECK(kind IN ('link','photo','note','location','budget')),
+            title TEXT DEFAULT '',
+            body TEXT DEFAULT '',
+            url TEXT DEFAULT '',
+            photo_id INTEGER REFERENCES photos(id) ON DELETE SET NULL,
+            address TEXT DEFAULT '',
+            geo_lat REAL,
+            geo_lng REAL,
+            amount REAL,
+            currency TEXT DEFAULT 'EUR',
+            added_by INTEGER NOT NULL REFERENCES users(id),
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_carnet_items ON carnet_items(carnet_id, position)",
+        "CREATE INDEX IF NOT EXISTS idx_carnet_items_target ON carnet_items(target_carnet_id)",
     ]
     for sql in migrations:
         try:
@@ -331,7 +407,16 @@ CARNET_TYPES = [
     ('voyage',     'Voyage'),
     ('restaurant', 'Restaurant'),
     ('sortie',     'Sortie'),
+    ('souhait',    'Souhait'),
     ('autre',      'Autre'),
+]
+
+ITEM_KINDS = [
+    ('link',     'Lien'),
+    ('photo',    'Photo'),
+    ('note',     'Note'),
+    ('location', 'Lieu'),
+    ('budget',   'Budget'),
 ]
 
 
@@ -423,7 +508,174 @@ def carnet_nouveau():
 @couple_required
 def carnet_view(cid_carnet):
     c = _get_carnet_or_404(cid_carnet)
+    if c['type'] == 'souhait':
+        return redirect(url_for('carnet_souhait_view', cid_carnet=cid_carnet))
     return render_template('carnet_view.html', carnet=c, types=CARNET_TYPES)
+
+
+# ══════════════════════════════════════════════════════════════════════
+#                    v1.4 — CARNETS DE SOUHAIT
+# ══════════════════════════════════════════════════════════════════════
+
+def _carnet_items(carnet_id):
+    rows = query("""
+        SELECT ci.*, p.thumb_path AS photo_thumb, p.file_path AS photo_path,
+               u.display_name AS added_by_name
+        FROM carnet_items ci
+        LEFT JOIN photos p ON p.id = ci.photo_id
+        LEFT JOIN users u ON u.id = ci.added_by
+        WHERE ci.carnet_id = ? AND ci.target_carnet_id IS NULL
+        ORDER BY ci.position ASC, ci.id ASC
+    """, (carnet_id,))
+    return [dict(r) for r in rows]
+
+
+def _next_item_position(carnet_id):
+    r = query(
+        "SELECT COALESCE(MAX(position), -1) + 1 AS next FROM carnet_items WHERE carnet_id=?",
+        (carnet_id,), one=True
+    )
+    return r['next'] if r else 0
+
+
+@app.route('/carnet/<int:cid_carnet>/souhait')
+@couple_required
+def carnet_souhait_view(cid_carnet):
+    c = _get_carnet_or_404(cid_carnet)
+    items = _carnet_items(cid_carnet)
+    # Voyages issus de cette reverie
+    voyages = query(
+        "SELECT id, title, status, created_at FROM carnets "
+        "WHERE parent_souhait_id=? AND deleted_at IS NULL ORDER BY created_at DESC",
+        (cid_carnet,)
+    )
+    return render_template('carnet_souhait.html', carnet=c, items=items,
+        voyages=[dict(v) for v in voyages], item_kinds=ITEM_KINDS)
+
+
+@app.route('/carnet/<int:cid_carnet>/item', methods=['POST'])
+@couple_required
+def carnet_add_item(cid_carnet):
+    c = _get_carnet_or_404(cid_carnet)
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    kind = (request.form.get('kind') or '').strip()
+    if kind not in dict(ITEM_KINDS):
+        return jsonify({'ok': False, 'error': 'Type item invalide'}), 400
+    title = (request.form.get('title') or '').strip()
+    body = (request.form.get('body') or '').strip()
+    url_v = (request.form.get('url') or '').strip()
+    address = (request.form.get('address') or '').strip()
+    amount = _safe_float(request.form.get('amount'))
+    currency = (request.form.get('currency') or 'EUR').strip()[:3].upper() or 'EUR'
+    photo_id = None
+    # Photo : upload optionnel
+    f = request.files.get('photo')
+    if f and f.filename:
+        try:
+            data = _save_uploaded_photo(f, c['couple_id'])
+            ct = request.form.get('taken_at') or ''
+            if ct and ct != 'null': data['taken_at'] = ct
+            gps_lat = _safe_float(request.form.get('gps_lat'))
+            gps_lng = _safe_float(request.form.get('gps_lng'))
+            photo_id = execute(
+                "INSERT INTO photos (couple_id, file_path, thumb_path, width, height, "
+                "taken_at, gps_lat, gps_lng, added_by) VALUES (?,?,?,?,?,?,?,?,?)",
+                (c['couple_id'], data['file_path'], data['thumb_path'],
+                 data['width'], data['height'], data['taken_at'],
+                 gps_lat, gps_lng, session['uid'])
+            )
+        except Exception as e:
+            log.error("upload item photo: %s", e)
+            return jsonify({'ok': False, 'error': 'Photo : ' + str(e)}), 500
+    pos = _next_item_position(cid_carnet)
+    iid = execute(
+        "INSERT INTO carnet_items (carnet_id, position, kind, title, body, url, "
+        "photo_id, address, amount, currency, added_by) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (cid_carnet, pos, kind, title, body, url_v, photo_id, address,
+         amount, currency, session['uid'])
+    )
+    return jsonify({'ok': True, 'item_id': iid})
+
+
+@app.route('/item/<int:item_id>/supprimer', methods=['POST'])
+@couple_required
+def item_supprimer(item_id):
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    item = query("SELECT ci.*, c.couple_id FROM carnet_items ci "
+                 "JOIN carnets c ON c.id=ci.carnet_id WHERE ci.id=?",
+                 (item_id,), one=True)
+    if not item or item['couple_id'] != current_espace_id():
+        return jsonify({'ok': False, 'error': '404'}), 404
+    execute("DELETE FROM carnet_items WHERE id=?", (item_id,))
+    return jsonify({'ok': True})
+
+
+@app.route('/carnet/<int:cid_carnet>/transformer', methods=['GET', 'POST'])
+@couple_required
+def carnet_transformer(cid_carnet):
+    """Transforme un carnet de souhait en carnet de voyage.
+    POST atomique : cree le voyage, deplace les items selectionnes, lie parent."""
+    c = _get_carnet_or_404(cid_carnet)
+    if c['type'] != 'souhait':
+        flash("Seul un carnet de souhait peut etre transforme.", "err")
+        return redirect(url_for('carnet_view', cid_carnet=cid_carnet))
+
+    items = _carnet_items(cid_carnet)
+    if request.method == 'POST':
+        if not csrf_check():
+            flash("Session expiree.", "err")
+            return redirect(url_for('carnet_transformer', cid_carnet=cid_carnet))
+        title = (request.form.get('title') or c['title']).strip()
+        location = (request.form.get('location') or c['location'] or '').strip()
+        date_start = (request.form.get('date_start') or '').strip() or None
+        date_end = (request.form.get('date_end') or '').strip() or None
+        selected_ids = [int(x) for x in request.form.getlist('item_ids') if str(x).isdigit()]
+        duplicate = request.form.get('duplicate') == '1'
+
+        # Atomique : transaction
+        conn = get_db()
+        try:
+            cur = conn.execute(
+                "INSERT INTO carnets (couple_id, title, type, location, date_start, "
+                "date_end, status, created_by, parent_souhait_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                (c['couple_id'], title, 'voyage', location, date_start, date_end,
+                 'active', session['uid'], cid_carnet)
+            )
+            new_cid = cur.lastrowid
+            if selected_ids:
+                placeholders = ','.join('?' * len(selected_ids))
+                if duplicate:
+                    # Copier les items au lieu de les deplacer
+                    conn.execute(
+                        f"INSERT INTO carnet_items (carnet_id, position, kind, title, "
+                        f"body, url, photo_id, address, geo_lat, geo_lng, amount, currency, added_by) "
+                        f"SELECT ?, position, kind, title, body, url, photo_id, address, "
+                        f"geo_lat, geo_lng, amount, currency, added_by "
+                        f"FROM carnet_items WHERE id IN ({placeholders})",
+                        tuple([new_cid] + selected_ids)
+                    )
+                else:
+                    # Deplacer : changer carnet_id (le souhait n'a plus l'item)
+                    conn.execute(
+                        f"UPDATE carnet_items SET carnet_id=?, target_carnet_id=? "
+                        f"WHERE id IN ({placeholders})",
+                        tuple([new_cid, new_cid] + selected_ids)
+                    )
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            log.error("transformation echec: %s\n%s", e, traceback.format_exc())
+            flash("Erreur lors de la transformation : " + str(e), "err")
+            return redirect(url_for('carnet_transformer', cid_carnet=cid_carnet))
+        finally:
+            conn.close()
+        flash("Carnet de voyage cree depuis ton souhait.", "ok")
+        return redirect(url_for('carnet_album', cid_carnet=new_cid))
+
+    return render_template('carnet_transformer.html', carnet=c, items=items)
 
 
 @app.route('/carnet/<int:cid_carnet>/modifier', methods=['GET', 'POST'])
