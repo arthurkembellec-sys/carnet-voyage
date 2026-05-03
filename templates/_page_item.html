@@ -1,0 +1,36 @@
+<li class="page-item{% if p.is_margin %} page-item-margin{% endif %}"
+    data-page-id="{{ p.id }}"
+    data-type="{{ p.type }}"
+    data-taken-at="{{ p.photo_taken_at or '' }}"
+    data-is-margin="{{ '1' if p.is_margin else '0' }}">
+  {% if p.type == 'photo' %}
+    <a class="page-photo" href="javascript:void(0)" onclick="openViewer({{ p.id }})">
+      <img src="{{ url_for('serve_upload', filename=p.photo_thumb) }}"
+           data-full="{{ url_for('serve_upload', filename=p.photo_path) }}"
+           data-page-id="{{ p.id }}"
+           loading="lazy" alt="">
+    </a>
+    <div class="page-meta">
+      {% if p.photo_taken_at %}<div class="page-date">{{ p.photo_taken_at|replace('T',' ') }}</div>{% endif %}
+      {% if p.photo_gps_lat is not none and p.photo_gps_lng is not none %}
+        <a class="page-gps" target="_blank" rel="noopener"
+           href="https://www.google.com/maps?q={{ p.photo_gps_lat }},{{ p.photo_gps_lng }}">
+          📍 {{ "%.5f"|format(p.photo_gps_lat) }},{{ "%.5f"|format(p.photo_gps_lng) }}
+        </a>
+      {% endif %}
+    </div>
+    <div class="page-caption-wrap">
+      <textarea class="page-caption" placeholder="Une legende..." rows="1"
+                data-page-id="{{ p.id }}">{{ p.caption or '' }}</textarea>
+    </div>
+  {% elif p.type == 'text' %}
+    <textarea class="page-text" placeholder="Quelques mots..." rows="3"
+              data-page-id="{{ p.id }}">{{ p.text_content or '' }}</textarea>
+  {% endif %}
+  <div class="page-actions">
+    <button class="page-margin-btn" type="button" onclick="toggleMargin({{ p.id }})">
+      {% if p.is_margin %}↓ Mettre dans l'album{% else %}↑ Mettre en marge{% endif %}
+    </button>
+  </div>
+  <button class="page-delete" type="button" onclick="deletePage({{ p.id }})" title="Supprimer">✕</button>
+</li>

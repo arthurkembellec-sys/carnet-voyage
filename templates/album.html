@@ -17,47 +17,56 @@
     <p class="kicker">Album</p>
     <h1 class="display"><em>{{ carnet.title }}</em></h1>
     <p class="lead" id="album-status">
-      <span id="album-count">{{ pages|length }}</span>
-      page{% if pages|length > 1 %}s{% endif %}
+      <span id="main-count">{{ main_pages|length }}</span> page(s) ·
+      <span id="margin-count">{{ margin_pages|length }}</span> en marge
       <span id="save-status" class="save-indicator"></span>
     </p>
   </section>
 
-  <ul class="pages-list" id="pages-list">
-    {% for p in pages %}
-    <li class="page-item" data-page-id="{{ p.id }}" data-type="{{ p.type }}">
-      {% if p.type == 'photo' %}
-        <a class="page-photo" href="javascript:void(0)" onclick="openViewer({{ p.id }})">
-          <img src="{{ url_for('serve_upload', filename=p.photo_thumb) }}"
-               data-full="{{ url_for('serve_upload', filename=p.photo_path) }}"
-               data-page-id="{{ p.id }}"
-               loading="lazy" alt="">
-        </a>
-        {% if p.photo_taken_at %}
-        <div class="page-date">{{ p.photo_taken_at|replace('T',' ') }}</div>
-        {% endif %}
-        <div class="page-caption-wrap">
-          <textarea class="page-caption" placeholder="Une legende..." rows="1"
-                    data-page-id="{{ p.id }}">{{ p.caption or '' }}</textarea>
-        </div>
-      {% elif p.type == 'text' %}
-        <textarea class="page-text" placeholder="Quelques mots..." rows="3"
-                  data-page-id="{{ p.id }}">{{ p.text_content or '' }}</textarea>
-      {% endif %}
-      <button class="page-delete" type="button"
-              onclick="deletePage({{ p.id }})" title="Supprimer">
-        ✕
-      </button>
-    </li>
-    {% endfor %}
-  </ul>
-
-  {% if not pages %}
-  <div class="empty-state" id="empty-album">
-    <p class="empty-display"><em>L'album est vide.</em></p>
-    <p class="empty-lead">Ajoute des photos ou un bloc de texte pour commencer.</p>
-  </div>
+  {# ────── MINI CARTE (si photos geolocalisees) ────── #}
+  {% if geo_photos %}
+  <section class="album-map-wrap">
+    <div class="album-map-head">
+      <span class="kicker">Sur la carte</span>
+      <span class="map-count">{{ geo_photos|length }} photo(s) localisee(s)</span>
+    </div>
+    <div id="album-map" class="album-map"></div>
+  </section>
   {% endif %}
+
+  {# ────── ALBUM PRINCIPAL ────── #}
+  <section class="album-section">
+    <h2 class="section-title">L'album</h2>
+    <ul class="pages-list" id="pages-main">
+      {% for p in main_pages %}
+        {% include '_page_item.html' %}
+      {% endfor %}
+    </ul>
+    {% if not main_pages %}
+    <div class="empty-state empty-section" id="empty-main">
+      <p class="empty-display"><em>L'album est vide.</em></p>
+      <p class="empty-lead">Ajoute des photos pour commencer.</p>
+    </div>
+    {% endif %}
+  </section>
+
+  {# ────── NOTES EN MARGE ────── #}
+  <section class="album-section album-section-margin">
+    <h2 class="section-title">
+      Notes en marge
+      <span class="section-hint">Photos de contexte (lieux, plans, billets) · separees a l'impression</span>
+    </h2>
+    <ul class="pages-list pages-list-margin" id="pages-margin">
+      {% for p in margin_pages %}
+        {% include '_page_item.html' %}
+      {% endfor %}
+    </ul>
+    {% if not margin_pages %}
+    <div class="empty-state empty-section" id="empty-margin">
+      <p class="empty-lead">Aucune note en marge. Toggle « Marge » sur une page pour la deplacer ici.</p>
+    </div>
+    {% endif %}
+  </section>
 
 </main>
 
@@ -65,6 +74,7 @@
 <div class="album-footer">
   <input type="file" id="file-photos" accept="image/*" multiple hidden>
   <input type="file" id="file-camera" accept="image/*" capture="environment" hidden>
+  <input type="file" id="file-margin" accept="image/*" multiple hidden>
 
   <button type="button" class="fab-btn" onclick="document.getElementById('file-photos').click()">
     <span class="fab-icon">+</span> Photos
@@ -72,8 +82,14 @@
   <button type="button" class="fab-btn" onclick="document.getElementById('file-camera').click()">
     <span class="fab-icon">📷</span> Camera
   </button>
-  <button type="button" class="fab-btn" onclick="addTextBlock()">
+  <button type="button" class="fab-btn" onclick="document.getElementById('file-margin').click()" title="Photo de contexte">
+    <span class="fab-icon">★</span> Marge
+  </button>
+  <button type="button" class="fab-btn" onclick="addTextBlock(false)">
     <span class="fab-icon">¶</span> Texte
+  </button>
+  <button type="button" class="fab-btn fab-btn-margin" onclick="addTextBlock(true)" title="Note de texte en marge">
+    <span class="fab-icon">¶</span> Note
   </button>
 </div>
 
@@ -88,35 +104,60 @@
   <div class="viewer-caption" id="viewer-caption"></div>
 </div>
 
+{# Lib EXIF (extrait date + GPS sans charger l'image complete) #}
+<script src="https://cdn.jsdelivr.net/npm/exifr@7/dist/lite.umd.js"></script>
+{# Lib Leaflet pour la mini-carte (uniquement si geo_photos) #}
+{% if geo_photos %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+{% endif %}
+
 <script>
   const CSRF = "{{ csrf_token() }}";
   const CARNET_ID = {{ carnet.id }};
   const URL_UPLOAD_PHOTOS = "{{ url_for('carnet_upload_photos', cid_carnet=carnet.id) }}";
   const URL_ADD_TEXT = "{{ url_for('carnet_add_text', cid_carnet=carnet.id) }}";
-  const SERVE_UPLOAD_BASE = "{{ url_for('serve_upload', filename='__X__') }}".replace('__X__', '');
 
-  // ── Utilitaires ────────────────────────────────────────────────
+  // ── Save indicator ────────────────────────────────────────────
   const saveStatus = document.getElementById('save-status');
   let saveTimer = null;
-  function setSaving() { saveStatus.textContent = 'Enregistrement...'; saveStatus.className = 'save-indicator saving'; }
-  function setSaved() {
-    saveStatus.textContent = '✓ Enregistre';
+  function setSaving(msg) { saveStatus.textContent = msg || 'Enregistrement...'; saveStatus.className = 'save-indicator saving'; }
+  function setSaved(msg) {
+    saveStatus.textContent = msg || '✓ Enregistre';
     saveStatus.className = 'save-indicator saved';
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(function(){ saveStatus.textContent = ''; }, 1200);
+    saveTimer = setTimeout(function(){ saveStatus.textContent = ''; }, 1400);
   }
-  function setError(msg) {
-    saveStatus.textContent = msg || 'Erreur';
-    saveStatus.className = 'save-indicator error';
-  }
+  function setError(msg) { saveStatus.textContent = msg || 'Erreur'; saveStatus.className = 'save-indicator error'; }
 
-  function autoresize(ta) {
-    ta.style.height = 'auto';
-    ta.style.height = (ta.scrollHeight + 2) + 'px';
-  }
+  function autoresize(ta) { ta.style.height = 'auto'; ta.style.height = (ta.scrollHeight + 2) + 'px'; }
   document.querySelectorAll('.page-caption, .page-text').forEach(autoresize);
 
+  function fmtDate(iso) {
+    if (!iso) return '';
+    var s = String(iso).replace('T', ' ');
+    if (s.length >= 16) return s.substring(0, 16);
+    return s;
+  }
+
   // ── Compression cote client (max 2000px / qualite 85) ──────────
+  // ATTENTION : Canvas supprime les EXIF -> on les lit AVANT compression
+  // via exifr et on les transmet en parallele au serveur.
+  async function readExif(file) {
+    if (!window.exifr) return { taken_at: null, gps_lat: null, gps_lng: null };
+    try {
+      const meta = await exifr.parse(file, { gps: true, pick: ['DateTimeOriginal','CreateDate','GPSLatitude','GPSLongitude'] });
+      if (!meta) return { taken_at: null, gps_lat: null, gps_lng: null };
+      let taken = meta.DateTimeOriginal || meta.CreateDate || null;
+      if (taken instanceof Date) taken = taken.toISOString();
+      return {
+        taken_at: taken,
+        gps_lat: typeof meta.latitude === 'number' ? meta.latitude : (meta.GPSLatitude || null),
+        gps_lng: typeof meta.longitude === 'number' ? meta.longitude : (meta.GPSLongitude || null),
+      };
+    } catch (e) { console.warn('EXIF read fail', file.name, e); return { taken_at: null, gps_lat: null, gps_lng: null }; }
+  }
+
   async function compressImage(file) {
     return new Promise(function(resolve, reject){
       const img = new Image();
@@ -143,97 +184,75 @@
     });
   }
 
-  function fmtDate(iso) {
-    if (!iso) return '';
-    var s = String(iso).replace('T', ' ');
-    if (s.length >= 16) return s.substring(0, 16);
-    return s;
-  }
-
-  async function uploadFiles(files) {
+  // ── Upload de photos ──────────────────────────────────────────
+  async function uploadFiles(files, opts) {
     if (!files || !files.length) return;
     var total = files.length;
-    setSaving();
-    saveStatus.textContent = 'Compression 0 / ' + total + '...';
-    saveStatus.className = 'save-indicator saving';
+    var asMargin = !!(opts && opts.margin);
+    setSaving('Lecture EXIF + compression 0 / ' + total + '...');
 
-    const empty = document.getElementById('empty-album');
+    const empty = document.getElementById(asMargin ? 'empty-margin' : 'empty-main');
     if (empty) empty.style.display = 'none';
-    const list = document.getElementById('pages-list');
 
-    // Compression sequentielle (plus stable mobile que parallele)
     const compressed = [];
-    const compressErrors = [];
+    const exifMeta = [];
+    const errs = [];
     var i = 0;
     for (const f of Array.from(files)) {
       i++;
-      saveStatus.textContent = 'Compression ' + i + ' / ' + total + '...';
+      saveStatus.textContent = 'Photo ' + i + ' / ' + total + '...';
       if (!f || !f.type || !f.type.startsWith('image/')) {
-        compressErrors.push((f && f.name || '?') + ' : pas une image');
+        errs.push((f && f.name || '?') + ' : pas une image');
         continue;
       }
       try {
+        const exif = await readExif(f);
         const blob = await compressImage(f);
         compressed.push(blob);
+        exifMeta.push(exif);
       } catch (e) {
         console.error('compress fail', f.name, e);
-        compressErrors.push((f.name || '?') + ' : compression');
+        errs.push((f.name || '?') + ' : compression');
       }
     }
-    console.log('compresses:', compressed.length, '/', total, 'erreurs:', compressErrors);
-    if (!compressed.length) {
-      setError('Aucune image valide : ' + (compressErrors.join(', ') || 'inconnu'));
-      return;
-    }
+    console.log('compresses:', compressed.length, '/', total, 'erreurs:', errs);
+    if (!compressed.length) { setError('Aucune image valide : ' + (errs.join(', ') || 'inconnu')); return; }
 
-    // Upload (multipart, multi-fichier)
-    saveStatus.textContent = 'Envoi ' + compressed.length + ' photo(s)...';
+    setSaving('Envoi ' + compressed.length + ' photo(s)...');
     const fd = new FormData();
     fd.append('_csrf', CSRF);
-    compressed.forEach(function(f){ fd.append('photos', f, f.name); });
+    compressed.forEach(function(f, k){
+      fd.append('photos', f, f.name);
+      fd.append('taken_at', exifMeta[k].taken_at || '');
+      fd.append('gps_lat', exifMeta[k].gps_lat != null ? String(exifMeta[k].gps_lat) : '');
+      fd.append('gps_lng', exifMeta[k].gps_lng != null ? String(exifMeta[k].gps_lng) : '');
+      fd.append('is_margin', asMargin ? '1' : '0');
+    });
 
     try {
       const r = await fetch(URL_UPLOAD_PHOTOS, { method: 'POST', body: fd });
       const data = await r.json();
       console.log('upload response:', data);
-      if (!data.ok) {
-        setError('Echec : ' + (data.error || 'inconnu'));
-        return;
-      }
-      if (data.errors && data.errors.length) {
-        console.warn('upload server errors:', data.errors);
-      }
+      if (!data.ok) { setError('Echec : ' + (data.error || 'inconnu')); return; }
+
+      // Insere dans la bonne liste, et reordonne par taken_at
       data.created.forEach(function(p){
-        const li = document.createElement('li');
-        li.className = 'page-item';
-        li.dataset.pageId = p.page_id;
-        li.dataset.type = 'photo';
-        var dateHtml = p.taken_at ? '<div class="page-date">' + fmtDate(p.taken_at) + '</div>' : '';
-        li.innerHTML = `
-          <a class="page-photo" href="javascript:void(0)" onclick="openViewer(${p.page_id})">
-            <img src="${p.thumb_url}" data-full="${p.full_url}" data-page-id="${p.page_id}" loading="lazy" alt="">
-          </a>
-          ${dateHtml}
-          <div class="page-caption-wrap">
-            <textarea class="page-caption" placeholder="Une legende..." rows="1" data-page-id="${p.page_id}"></textarea>
-          </div>
-          <button class="page-delete" type="button" onclick="deletePage(${p.page_id})" title="Supprimer">✕</button>
-        `;
-        list.appendChild(li);
-        const ta = li.querySelector('.page-caption');
-        attachCaptionAutosave(ta);
-        autoresize(ta);
+        const li = buildPageLi(p);
+        const targetList = document.getElementById(p.is_margin ? 'pages-margin' : 'pages-main');
+        if (targetList) insertChronological(targetList, li, p.taken_at);
       });
-      updateCount();
+      attachAllAutosaves();
+      updateCounts();
       var msg = data.created.length + ' ajoute(s)';
       if (data.errors && data.errors.length) {
-        msg += ' · ' + data.errors.length + ' erreur(s)';
-        setError(msg);
+        setError(msg + ' · ' + data.errors.length + ' erreur(s)');
         console.warn('Erreurs serveur :', data.errors);
       } else {
-        saveStatus.textContent = msg;
-        saveStatus.className = 'save-indicator saved';
-        setTimeout(setSaved, 1500);
+        setSaved(msg);
+      }
+      // Si geo, recharger la page pour rebuilder la carte (Leaflet pas dispo dynamique sans rechargement)
+      if (data.created.some(function(p){ return p.gps_lat != null && p.gps_lng != null; })) {
+        setTimeout(function(){ location.reload(); }, 1200);
       }
     } catch (e) {
       console.error(e);
@@ -241,82 +260,151 @@
     }
   }
 
+  function buildPageLi(p) {
+    const li = document.createElement('li');
+    li.className = 'page-item' + (p.is_margin ? ' page-item-margin' : '');
+    li.dataset.pageId = p.page_id;
+    li.dataset.type = 'photo';
+    li.dataset.takenAt = p.taken_at || '';
+    li.dataset.isMargin = p.is_margin ? '1' : '0';
+    var dateHtml = p.taken_at ? '<div class="page-date">' + fmtDate(p.taken_at) + '</div>' : '';
+    var gpsHtml = '';
+    if (p.gps_lat != null && p.gps_lng != null) {
+      var ll = p.gps_lat.toFixed(5) + ',' + p.gps_lng.toFixed(5);
+      gpsHtml = '<a class="page-gps" target="_blank" rel="noopener" href="https://www.google.com/maps?q=' + ll + '">📍 ' + ll + '</a>';
+    }
+    var marginLabel = p.is_margin ? '↓ Mettre dans l\\'album' : '↑ Mettre en marge';
+    li.innerHTML = `
+      <a class="page-photo" href="javascript:void(0)" onclick="openViewer(${p.page_id})">
+        <img src="${p.thumb_url}" data-full="${p.full_url}" data-page-id="${p.page_id}" loading="lazy" alt="">
+      </a>
+      <div class="page-meta">${dateHtml}${gpsHtml}</div>
+      <div class="page-caption-wrap">
+        <textarea class="page-caption" placeholder="Une legende..." rows="1" data-page-id="${p.page_id}"></textarea>
+      </div>
+      <div class="page-actions">
+        <button class="page-margin-btn" type="button" onclick="toggleMargin(${p.page_id})">${marginLabel}</button>
+      </div>
+      <button class="page-delete" type="button" onclick="deletePage(${p.page_id})" title="Supprimer">✕</button>
+    `;
+    return li;
+  }
+
+  function insertChronological(list, newLi, takenAt) {
+    if (!takenAt) { list.appendChild(newLi); return; }
+    const items = Array.from(list.querySelectorAll('.page-item'));
+    for (const existing of items) {
+      const t = existing.dataset.takenAt || '';
+      if (!t || t > takenAt) {
+        list.insertBefore(newLi, existing);
+        return;
+      }
+    }
+    list.appendChild(newLi);
+  }
+
   document.getElementById('file-photos').addEventListener('change', function(e){
-    uploadFiles(e.target.files);
-    e.target.value = '';
+    uploadFiles(e.target.files, { margin: false }); e.target.value = '';
   });
   document.getElementById('file-camera').addEventListener('change', function(e){
-    uploadFiles(e.target.files);
-    e.target.value = '';
+    uploadFiles(e.target.files, { margin: false }); e.target.value = '';
+  });
+  document.getElementById('file-margin').addEventListener('change', function(e){
+    uploadFiles(e.target.files, { margin: true }); e.target.value = '';
   });
 
-  // ── Auto-save captions / texte (debounce 600ms) ────────────────
-  function debounce(fn, ms) {
-    let t; return function(){ clearTimeout(t); t = setTimeout(fn, ms); };
-  }
+  // ── Auto-save captions / texte ─────────────────────────────────
+  function debounce(fn, ms) { let t; return function(){ clearTimeout(t); t = setTimeout(fn, ms); }; }
   function attachCaptionAutosave(ta) {
+    if (ta.dataset.bound) return; ta.dataset.bound = '1';
     ta.addEventListener('input', function(){
       autoresize(ta);
       const save = debounce(async function(){
         setSaving();
         const fd = new FormData();
-        fd.append('_csrf', CSRF);
-        fd.append('caption', ta.value);
-        try {
-          const r = await fetch(`/album_page/${ta.dataset.pageId}/caption`, { method: 'POST', body: fd });
-          const d = await r.json();
-          if (d.ok) setSaved(); else setError();
-        } catch (e) { setError('Reseau'); }
+        fd.append('_csrf', CSRF); fd.append('caption', ta.value);
+        try { const r = await fetch(`/album_page/${ta.dataset.pageId}/caption`, { method: 'POST', body: fd });
+              const d = await r.json(); if (d.ok) setSaved(); else setError(); }
+        catch (e) { setError('Reseau'); }
       }, 600);
       save();
     });
   }
-  document.querySelectorAll('.page-caption').forEach(attachCaptionAutosave);
-
   function attachTextAutosave(ta) {
+    if (ta.dataset.bound) return; ta.dataset.bound = '1';
     ta.addEventListener('input', function(){
       autoresize(ta);
       const save = debounce(async function(){
         setSaving();
         const fd = new FormData();
-        fd.append('_csrf', CSRF);
-        fd.append('text_content', ta.value);
-        try {
-          const r = await fetch(`/album_page/${ta.dataset.pageId}/text`, { method: 'POST', body: fd });
-          const d = await r.json();
-          if (d.ok) setSaved(); else setError();
-        } catch (e) { setError('Reseau'); }
+        fd.append('_csrf', CSRF); fd.append('text_content', ta.value);
+        try { const r = await fetch(`/album_page/${ta.dataset.pageId}/text`, { method: 'POST', body: fd });
+              const d = await r.json(); if (d.ok) setSaved(); else setError(); }
+        catch (e) { setError('Reseau'); }
       }, 600);
       save();
     });
   }
-  document.querySelectorAll('.page-text').forEach(attachTextAutosave);
+  function attachAllAutosaves() {
+    document.querySelectorAll('.page-caption').forEach(attachCaptionAutosave);
+    document.querySelectorAll('.page-text').forEach(attachTextAutosave);
+  }
+  attachAllAutosaves();
 
   // ── Bloc texte ────────────────────────────────────────────────
-  async function addTextBlock() {
+  async function addTextBlock(asMargin) {
     setSaving();
     const fd = new FormData();
     fd.append('_csrf', CSRF);
+    fd.append('is_margin', asMargin ? '1' : '0');
     try {
       const r = await fetch(URL_ADD_TEXT, { method: 'POST', body: fd });
       const d = await r.json();
       if (!d.ok) { setError(); return; }
-      const empty = document.getElementById('empty-album');
+      const empty = document.getElementById(asMargin ? 'empty-margin' : 'empty-main');
       if (empty) empty.style.display = 'none';
-      const list = document.getElementById('pages-list');
+      const list = document.getElementById(asMargin ? 'pages-margin' : 'pages-main');
       const li = document.createElement('li');
-      li.className = 'page-item';
+      li.className = 'page-item' + (asMargin ? ' page-item-margin' : '');
       li.dataset.pageId = d.page_id;
       li.dataset.type = 'text';
+      li.dataset.isMargin = asMargin ? '1' : '0';
+      var marginLabel = asMargin ? '↓ Mettre dans l\\'album' : '↑ Mettre en marge';
       li.innerHTML = `
         <textarea class="page-text" placeholder="Quelques mots..." rows="3" data-page-id="${d.page_id}"></textarea>
+        <div class="page-actions">
+          <button class="page-margin-btn" type="button" onclick="toggleMargin(${d.page_id})">${marginLabel}</button>
+        </div>
         <button class="page-delete" type="button" onclick="deletePage(${d.page_id})" title="Supprimer">✕</button>
       `;
       list.appendChild(li);
+      attachAllAutosaves();
       const ta = li.querySelector('.page-text');
-      attachTextAutosave(ta);
-      ta.focus();
-      updateCount();
+      if (ta) ta.focus();
+      updateCounts();
+      setSaved();
+    } catch (e) { setError('Reseau'); }
+  }
+
+  // ── Toggle margin ─────────────────────────────────────────────
+  async function toggleMargin(pageId) {
+    setSaving();
+    const fd = new FormData(); fd.append('_csrf', CSRF);
+    try {
+      const r = await fetch(`/album_page/${pageId}/margin`, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!d.ok) { setError(); return; }
+      const li = document.querySelector(`.page-item[data-page-id="${pageId}"]`);
+      if (!li) return;
+      li.classList.toggle('page-item-margin', d.is_margin);
+      li.dataset.isMargin = d.is_margin ? '1' : '0';
+      const targetList = document.getElementById(d.is_margin ? 'pages-margin' : 'pages-main');
+      if (targetList) {
+        insertChronological(targetList, li, li.dataset.takenAt);
+      }
+      const btn = li.querySelector('.page-margin-btn');
+      if (btn) btn.textContent = d.is_margin ? '↓ Mettre dans l\'album' : '↑ Mettre en marge';
+      updateCounts();
       setSaved();
     } catch (e) { setError('Reseau'); }
   }
@@ -325,37 +413,36 @@
   async function deletePage(pageId) {
     if (!confirm('Supprimer cette page ?')) return;
     setSaving();
-    const fd = new FormData();
-    fd.append('_csrf', CSRF);
+    const fd = new FormData(); fd.append('_csrf', CSRF);
     try {
       const r = await fetch(`/album_page/${pageId}/supprimer`, { method: 'POST', body: fd });
       const d = await r.json();
       if (!d.ok) { setError(); return; }
       const li = document.querySelector(`.page-item[data-page-id="${pageId}"]`);
       if (li) li.remove();
-      updateCount();
+      updateCounts();
       setSaved();
     } catch (e) { setError('Reseau'); }
   }
 
-  function updateCount() {
-    const n = document.querySelectorAll('.page-item').length;
-    document.getElementById('album-count').textContent = n;
-    const empty = document.getElementById('empty-album');
-    if (empty) empty.style.display = n === 0 ? '' : 'none';
+  function updateCounts() {
+    const m = document.querySelectorAll('#pages-main > .page-item').length;
+    const g = document.querySelectorAll('#pages-margin > .page-item').length;
+    document.getElementById('main-count').textContent = m;
+    document.getElementById('margin-count').textContent = g;
+    const eMain = document.getElementById('empty-main');
+    if (eMain) eMain.style.display = m === 0 ? '' : 'none';
+    const eMarg = document.getElementById('empty-margin');
+    if (eMarg) eMarg.style.display = g === 0 ? '' : 'none';
   }
 
   // ── Viewer plein ecran ────────────────────────────────────────
-  let viewerPhotos = [];
-  let viewerIdx = 0;
+  let viewerPhotos = [], viewerIdx = 0;
   function refreshViewerList() {
     viewerPhotos = Array.from(document.querySelectorAll('.page-photo img')).map(function(img){
-      return {
-        full: img.dataset.full,
-        thumb: img.src,
-        pageId: img.dataset.pageId,
-        caption: (img.parentElement.parentElement.querySelector('.page-caption') || {}).value || '',
-      };
+      const pwrap = img.parentElement.parentElement;
+      const cap = pwrap.querySelector('.page-caption');
+      return { full: img.dataset.full, pageId: img.dataset.pageId, caption: (cap ? cap.value : '') };
     });
   }
   function openViewer(pageId) {
@@ -372,22 +459,14 @@
     v.hidden = false;
     document.body.style.overflow = 'hidden';
   }
-  function closeViewer() {
-    document.getElementById('photo-viewer').hidden = true;
-    document.body.style.overflow = '';
-  }
-  function viewerNav(d) {
-    if (!viewerPhotos.length) return;
-    viewerIdx = (viewerIdx + d + viewerPhotos.length) % viewerPhotos.length;
-    showViewer();
-  }
+  function closeViewer() { document.getElementById('photo-viewer').hidden = true; document.body.style.overflow = ''; }
+  function viewerNav(d) { if (!viewerPhotos.length) return; viewerIdx = (viewerIdx + d + viewerPhotos.length) % viewerPhotos.length; showViewer(); }
   document.addEventListener('keydown', function(e){
     if (document.getElementById('photo-viewer').hidden) return;
     if (e.key === 'Escape') closeViewer();
     if (e.key === 'ArrowLeft') viewerNav(-1);
     if (e.key === 'ArrowRight') viewerNav(1);
   });
-  // Swipe horizontal mobile
   (function(){
     let startX = null;
     const v = document.getElementById('photo-viewer');
@@ -400,12 +479,35 @@
     });
   })();
 
-  // Expose pour onclick inline
-  window.openViewer = openViewer;
-  window.closeViewer = closeViewer;
-  window.viewerNav = viewerNav;
-  window.deletePage = deletePage;
-  window.addTextBlock = addTextBlock;
+  window.openViewer = openViewer; window.closeViewer = closeViewer; window.viewerNav = viewerNav;
+  window.deletePage = deletePage; window.addTextBlock = addTextBlock; window.toggleMargin = toggleMargin;
+
+  // ── Mini-carte (si geo_photos) ────────────────────────────────
+  {% if geo_photos %}
+  (function(){
+    var el = document.getElementById('album-map');
+    if (!el || !window.L) return;
+    var pts = [
+      {% for p in geo_photos %}
+      { lat: {{ p.photo_gps_lat }}, lng: {{ p.photo_gps_lng }},
+        thumb: "{{ url_for('serve_upload', filename=p.photo_thumb) }}",
+        date: "{{ (p.photo_taken_at or '')|replace('T',' ') }}" },
+      {% endfor %}
+    ];
+    var map = L.map(el, { scrollWheelZoom: false });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+    var bounds = [];
+    pts.forEach(function(p){
+      var marker = L.marker([p.lat, p.lng]).addTo(map);
+      marker.bindPopup('<img src="' + p.thumb + '" style="max-width:160px;display:block;margin-bottom:6px"><div style="font-size:11px;color:#6B6963">' + p.date + '</div>');
+      bounds.push([p.lat, p.lng]);
+    });
+    if (bounds.length) map.fitBounds(bounds, { padding: [24, 24], maxZoom: 14 });
+  })();
+  {% endif %}
 </script>
 
 {% endblock %}

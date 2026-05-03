@@ -503,9 +503,12 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
   background: #f0eee9;
 }
 
-.page-date {
+.page-meta {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px;
   margin-top: 8px;
   padding: 0 6px;
+}
+.page-date {
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.18em;
@@ -514,8 +517,123 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
   font-family: var(--font-ui);
   font-variant-numeric: tabular-nums;
 }
+.page-gps {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  text-decoration: none;
+}
+.page-gps:hover { text-decoration: underline; text-underline-offset: 3px; }
 
 .page-caption-wrap { padding: 6px 4px 2px; }
+
+/* ── Actions sur la page (margin toggle) ──────────────────────────── */
+.page-actions {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 6px 4px 0;
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity .2s;
+}
+.page-item:hover .page-actions { opacity: 1; }
+@media (max-width: 480px) { .page-actions { opacity: 1; } }
+
+.page-margin-btn {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background .2s, color .2s;
+}
+.page-margin-btn:hover { background: rgba(28,26,23,0.04); color: var(--ink); }
+
+/* ── Sections album / marge ───────────────────────────────────────── */
+.album-section { margin-top: 32px; }
+.album-section-margin {
+  margin-top: 56px;
+  padding-top: 32px;
+  border-top: 1px dashed var(--border-strong);
+}
+.section-title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 22px;
+  line-height: 1.2;
+  margin: 0 0 16px;
+  color: var(--ink);
+}
+.section-hint {
+  display: block;
+  font-family: var(--font-ui);
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--whisper);
+  margin-top: 4px;
+}
+
+/* Pages en marge : look "brouillon" */
+.pages-list-margin {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+}
+.page-item-margin {
+  background: #F5F0E6 !important;
+  border-style: dashed !important;
+}
+.pages-list-margin .page-item {
+  /* Format compact en marge */
+}
+.pages-list-margin .page-photo img { max-height: 200px; }
+.pages-list-margin .page-text { font-size: 16px; }
+
+/* Empty state plus discret par section */
+.empty-section {
+  padding: 24px;
+  margin: 0;
+  background: transparent;
+  border-style: dashed;
+}
+
+/* ── Mini-carte ───────────────────────────────────────────────────── */
+.album-map-wrap {
+  margin-top: 32px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.album-map-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  gap: 12px;
+}
+.map-count {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--whisper);
+}
+.album-map {
+  width: 100%;
+  height: 280px;
+}
+.album-map img.leaflet-marker-icon { /* placeholder, Leaflet gere */ }
+
+/* Bouton "Marge" du footer */
+.fab-btn-margin .fab-icon { background: rgba(168,80,61,0.4); }
 .page-caption {
   width: 100%;
   border: 0;
