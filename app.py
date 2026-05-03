@@ -28,7 +28,7 @@ from flask import (
 )
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "1.0.0-couple"
+APP_VERSION = "1.1.0-carnets"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 SECRET_KEY = os.environ.get('SECRET_KEY') or secrets.token_urlsafe(32)
@@ -88,6 +88,26 @@ def init_db():
         )""",
         "CREATE INDEX IF NOT EXISTS idx_users_couple ON users(couple_id)",
         "CREATE INDEX IF NOT EXISTS idx_invit_couple ON invitations(couple_id)",
+        # ── v1.1 — carnets : fiche d'un voyage / restau / sortie ──────
+        """CREATE TABLE IF NOT EXISTS carnets (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            couple_id     INTEGER NOT NULL REFERENCES couples(id) ON DELETE CASCADE,
+            title         TEXT NOT NULL,
+            type          TEXT NOT NULL DEFAULT 'voyage'
+                          CHECK(type IN ('voyage','restaurant','sortie','autre')),
+            location      TEXT DEFAULT '',
+            date_start    DATE,
+            date_end      DATE,
+            cover_photo_id INTEGER,
+            status        TEXT NOT NULL DEFAULT 'draft'
+                          CHECK(status IN ('draft','active','locked','archived')),
+            created_by    INTEGER NOT NULL REFERENCES users(id),
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            deleted_at    TIMESTAMP DEFAULT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_carnets_couple ON carnets(couple_id)",
+        "CREATE INDEX IF NOT EXISTS idx_carnets_status ON carnets(status)",
     ]
     for sql in migrations:
         try:
@@ -192,14 +212,140 @@ def healthz():
     return jsonify({'ok': True, 'version': APP_VERSION})
 
 
+CARNET_TYPES = [
+    ('voyage',     'Voyage'),
+    ('restaurant', 'Restaurant'),
+    ('sortie',     'Sortie'),
+    ('autre',      'Autre'),
+]
+
+
 @app.route('/')
 def home():
-    """Landing : login si non-connecte, accueil si connecte (placeholder V1.1)."""
+    """Accueil : liste verticale des carnets du couple, avec filtre par type."""
     if not session.get('uid'):
         return redirect(url_for('login'))
     if not session.get('couple_id'):
         return redirect(url_for('onboarding_couple'))
-    return render_template('accueil.html', user=current_user())
+    cid = session['couple_id']
+    type_filter = request.args.get('type') or ''
+    if type_filter and type_filter not in dict(CARNET_TYPES):
+        type_filter = ''
+    if type_filter:
+        rows = query(
+            "SELECT * FROM carnets WHERE couple_id=? AND type=? AND deleted_at IS NULL "
+            "ORDER BY COALESCE(date_start, created_at) DESC, id DESC",
+            (cid, type_filter)
+        )
+    else:
+        rows = query(
+            "SELECT * FROM carnets WHERE couple_id=? AND deleted_at IS NULL "
+            "ORDER BY COALESCE(date_start, created_at) DESC, id DESC",
+            (cid,)
+        )
+    return render_template(
+        'index.html',
+        carnets=[dict(r) for r in rows],
+        types=CARNET_TYPES,
+        type_filter=type_filter,
+    )
+
+
+# ── Routes : carnets ─────────────────────────────────────────────────
+def _get_carnet_or_404(cid_carnet):
+    """Recupere un carnet en verifiant qu'il appartient au couple courant."""
+    c = query("SELECT * FROM carnets WHERE id=? AND deleted_at IS NULL", (cid_carnet,), one=True)
+    if not c or c['couple_id'] != session.get('couple_id'):
+        abort(404)
+    return dict(c)
+
+
+def _parse_carnet_form(form):
+    """Extrait + valide les champs du formulaire carnet. Renvoie (data, errors)."""
+    title = (form.get('title') or '').strip()
+    type_ = (form.get('type') or 'voyage').strip()
+    location = (form.get('location') or '').strip()
+    date_start = (form.get('date_start') or '').strip() or None
+    date_end = (form.get('date_end') or '').strip() or None
+    errors = []
+    if not title:
+        errors.append("Donne un titre au carnet.")
+    elif len(title) > 80:
+        errors.append("Titre : 80 caracteres maximum.")
+    if type_ not in dict(CARNET_TYPES):
+        type_ = 'voyage'
+    if date_start and date_end and date_end < date_start:
+        errors.append("La date de fin est avant la date de debut.")
+    return {
+        'title': title, 'type': type_, 'location': location,
+        'date_start': date_start, 'date_end': date_end,
+    }, errors
+
+
+@app.route('/carnet/nouveau', methods=['GET', 'POST'])
+@couple_required
+def carnet_nouveau():
+    if request.method == 'POST':
+        if not csrf_check():
+            flash("Session expiree.", "err")
+            return redirect(url_for('carnet_nouveau'))
+        data, errors = _parse_carnet_form(request.form)
+        if errors:
+            for e in errors:
+                flash(e, "err")
+            return render_template('carnet_form.html', mode='nouveau', carnet=data, types=CARNET_TYPES)
+        cid = execute(
+            "INSERT INTO carnets (couple_id, title, type, location, date_start, date_end, "
+            "status, created_by) VALUES (?,?,?,?,?,?,?,?)",
+            (session['couple_id'], data['title'], data['type'], data['location'],
+             data['date_start'], data['date_end'], 'active', session['uid'])
+        )
+        return redirect(url_for('carnet_view', cid_carnet=cid))
+    return render_template('carnet_form.html', mode='nouveau', carnet=None, types=CARNET_TYPES)
+
+
+@app.route('/carnet/<int:cid_carnet>')
+@couple_required
+def carnet_view(cid_carnet):
+    c = _get_carnet_or_404(cid_carnet)
+    return render_template('carnet_view.html', carnet=c, types=CARNET_TYPES)
+
+
+@app.route('/carnet/<int:cid_carnet>/modifier', methods=['GET', 'POST'])
+@couple_required
+def carnet_modifier(cid_carnet):
+    c = _get_carnet_or_404(cid_carnet)
+    if request.method == 'POST':
+        if not csrf_check():
+            flash("Session expiree.", "err")
+            return redirect(url_for('carnet_modifier', cid_carnet=cid_carnet))
+        data, errors = _parse_carnet_form(request.form)
+        if errors:
+            for e in errors:
+                flash(e, "err")
+            return render_template('carnet_form.html', mode='modifier', carnet=data, types=CARNET_TYPES, cid_carnet=cid_carnet)
+        execute(
+            "UPDATE carnets SET title=?, type=?, location=?, date_start=?, date_end=?, "
+            "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (data['title'], data['type'], data['location'],
+             data['date_start'], data['date_end'], cid_carnet)
+        )
+        return redirect(url_for('carnet_view', cid_carnet=cid_carnet))
+    return render_template('carnet_form.html', mode='modifier', carnet=c, types=CARNET_TYPES, cid_carnet=cid_carnet)
+
+
+@app.route('/carnet/<int:cid_carnet>/supprimer', methods=['POST'])
+@couple_required
+def carnet_supprimer(cid_carnet):
+    _get_carnet_or_404(cid_carnet)
+    if not csrf_check():
+        flash("Session expiree.", "err")
+        return redirect(url_for('carnet_view', cid_carnet=cid_carnet))
+    execute(
+        "UPDATE carnets SET deleted_at=CURRENT_TIMESTAMP WHERE id=?",
+        (cid_carnet,)
+    )
+    return redirect(url_for('home'))
 
 
 # ── Routes : auth ─────────────────────────────────────────────────────

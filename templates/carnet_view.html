@@ -1,0 +1,43 @@
+{% extends '_base.html' %}
+{% block title %}{{ carnet.title }} — Notre Histoire{% endblock %}
+{% block content %}
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <a href="{{ url_for('home') }}" class="brand">← Notre Histoire</a>
+    <nav class="topbar-nav">
+      <a href="{{ url_for('carnet_modifier', cid_carnet=carnet.id) }}" class="link">Modifier</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <section class="hero">
+    <p class="kicker">{{ {'voyage':'Voyage','restaurant':'Restaurant','sortie':'Sortie','autre':'Autre'}[carnet.type] }}</p>
+    <h1 class="display"><em>{{ carnet.title }}</em></h1>
+    {% if carnet.location or carnet.date_start or carnet.date_end %}
+    <p class="lead">
+      {%- if carnet.location %}{{ carnet.location }}{% endif -%}
+      {%- if carnet.location and (carnet.date_start or carnet.date_end) %} · {% endif -%}
+      {%- if carnet.date_start and carnet.date_end and carnet.date_start != carnet.date_end -%}
+        du {{ carnet.date_start }} au {{ carnet.date_end }}
+      {%- elif carnet.date_start -%}
+        le {{ carnet.date_start }}
+      {%- elif carnet.date_end -%}
+        le {{ carnet.date_end }}
+      {%- endif -%}
+    </p>
+    {% endif %}
+  </section>
+
+  <section class="album-placeholder">
+    <p class="empty-display"><em>L'album arrive bientot.</em></p>
+    <p class="empty-lead">
+      L'ajout de photos et de captions sera disponible avec la V1.2.
+      Pour l'instant, votre carnet est cree et votre partenaire peut le voir.
+    </p>
+  </section>
+
+</main>
+
+{% endblock %}

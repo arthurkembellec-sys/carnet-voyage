@@ -14,3 +14,7 @@ static/uploads/
 .vscode/
 .idea/
 *.log
+
+# Briefs (gardes uniquement dans le repo AqGK)
+briefdu jour/
+briefs/

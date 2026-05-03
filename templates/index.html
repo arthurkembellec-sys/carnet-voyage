@@ -1,0 +1,74 @@
+{% extends '_base.html' %}
+{% block title %}Notre Histoire{% endblock %}
+{% block content %}
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <span class="brand">Notre Histoire</span>
+    <nav class="topbar-nav">
+      <a href="{{ url_for('invite_share') }}" class="link">Inviter</a>
+      <a href="{{ url_for('logout') }}" class="link">Deconnexion</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+
+  <section class="hero">
+    <p class="kicker">{% if current_user %}Bonjour {{ current_user.display_name }}{% endif %}</p>
+    <h1 class="display"><em>Vos carnets</em></h1>
+  </section>
+
+  <div class="filter-row">
+    <div class="chips">
+      <a href="{{ url_for('home') }}" class="chip {% if not type_filter %}chip-active{% endif %}">Tous</a>
+      {% for key, label in types %}
+      <a href="{{ url_for('home', type=key) }}" class="chip {% if type_filter == key %}chip-active{% endif %}">{{ label }}</a>
+      {% endfor %}
+    </div>
+    <a href="{{ url_for('carnet_nouveau') }}" class="btn btn-primary">+ Nouveau carnet</a>
+  </div>
+
+  {% if carnets %}
+  <ul class="carnet-list">
+    {% for c in carnets %}
+    <li>
+      <a href="{{ url_for('carnet_view', cid_carnet=c.id) }}" class="carnet-card">
+        <div class="carnet-cover">
+          <span class="carnet-type">{{ {'voyage':'Voyage','restaurant':'Restaurant','sortie':'Sortie','autre':'Autre'}[c.type] }}</span>
+        </div>
+        <div class="carnet-meta">
+          <h3 class="carnet-title">{{ c.title }}</h3>
+          <p class="carnet-sub">
+            {%- if c.location %}{{ c.location }}{% endif -%}
+            {%- if c.location and (c.date_start or c.date_end) %} · {% endif -%}
+            {%- if c.date_start and c.date_end and c.date_start != c.date_end -%}
+              du {{ c.date_start }} au {{ c.date_end }}
+            {%- elif c.date_start -%}
+              le {{ c.date_start }}
+            {%- elif c.date_end -%}
+              le {{ c.date_end }}
+            {%- endif -%}
+          </p>
+        </div>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty-state">
+    <p class="empty-display"><em>Pas encore de carnet.</em></p>
+    <p class="empty-lead">
+      {% if type_filter %}
+      Aucun carnet de ce type pour l'instant.
+      {% else %}
+      Commencez votre premier carnet — un voyage, un restaurant, une sortie.
+      {% endif %}
+    </p>
+    <a href="{{ url_for('carnet_nouveau') }}" class="btn btn-primary">Creer un carnet</a>
+  </div>
+  {% endif %}
+
+</main>
+
+{% endblock %}
