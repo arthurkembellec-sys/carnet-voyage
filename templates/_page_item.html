@@ -3,18 +3,30 @@
     data-type="{{ p.type }}"
     data-taken-at="{{ p.photo_taken_at or '' }}"
     data-is-margin="{{ '1' if p.is_margin else '0' }}">
-  {% if p.type == 'photo' %}
+
+  {# Photo principale (toujours affichee si photo_id, quel que soit type) #}
+  {% if p.photo_path %}
     <a class="page-photo" href="javascript:void(0)" onclick="openViewer({{ p.id }})">
       <img src="{{ url_for('serve_upload', filename=p.photo_thumb) }}"
            data-full="{{ url_for('serve_upload', filename=p.photo_path) }}"
            data-page-id="{{ p.id }}"
            loading="lazy" alt="">
     </a>
+  {% endif %}
+
+  {# Bloc texte si type=text (inline editable) #}
+  {% if p.type == 'text' %}
+    <textarea class="page-text" placeholder="Quelques mots..." rows="3"
+              data-page-id="{{ p.id }}">{{ p.text_content or '' }}</textarea>
+  {% endif %}
+
+  {# Date + GPS + Caption (uniquement pour les pages photo) #}
+  {% if p.type == 'photo' %}
     <div class="page-meta">
       {% if p.photo_taken_at %}
         <div class="page-date" title="Date de prise (EXIF)">{{ p.photo_taken_at|replace('T',' ') }}</div>
       {% else %}
-        <div class="page-date page-date-fallback" title="Date d'ajout dans l'album (EXIF non disponible)">
+        <div class="page-date page-date-fallback" title="Date d'ajout">
           ajoutee {{ (p.created_at or '')|replace('T',' ') }}
         </div>
       {% endif %}
@@ -29,14 +41,35 @@
       <textarea class="page-caption" placeholder="Une legende..." rows="1"
                 data-page-id="{{ p.id }}">{{ p.caption or '' }}</textarea>
     </div>
-  {% elif p.type == 'text' %}
-    <textarea class="page-text" placeholder="Quelques mots..." rows="3"
-              data-page-id="{{ p.id }}">{{ p.text_content or '' }}</textarea>
   {% endif %}
+
+  {# Date d'ajout discrete pour les blocs texte #}
+  {% if p.type == 'text' %}
+    <div class="page-meta page-meta-text">
+      <div class="page-date page-date-fallback">
+        ajoute {{ (p.created_at or '')|replace('T',' ') }}
+      </div>
+    </div>
+  {% endif %}
+
+  {# Barre d'actions UNIFIEE : toujours visible en bas du bloc #}
   <div class="page-actions">
-    <button class="page-margin-btn" type="button" onclick="toggleMargin({{ p.id }})">
-      {% if p.is_margin %}↓ Mettre dans l'album{% else %}↑ Mettre en marge{% endif %}
+    {% if p.type == 'text' %}
+      {% if p.photo_path %}
+        <button class="page-action-btn" type="button" onclick="detachPhoto({{ p.id }})">
+          ✕ Photo
+        </button>
+      {% else %}
+        <button class="page-action-btn" type="button" onclick="attachPhoto({{ p.id }})">
+          + Photo
+        </button>
+      {% endif %}
+    {% endif %}
+    <button class="page-action-btn" type="button" onclick="toggleMargin({{ p.id }})">
+      {% if p.is_margin %}↓ Album{% else %}↑ Marge{% endif %}
+    </button>
+    <button class="page-action-btn page-action-danger" type="button" onclick="deletePage({{ p.id }})">
+      ✕ Supprimer
     </button>
   </div>
-  <button class="page-delete" type="button" onclick="deletePage({{ p.id }})" title="Supprimer">✕</button>
 </li>

@@ -276,7 +276,7 @@
       var ll = p.gps_lat.toFixed(5) + ',' + p.gps_lng.toFixed(5);
       gpsHtml = '<a class="page-gps" target="_blank" rel="noopener" href="https://www.google.com/maps?q=' + ll + '">📍 ' + ll + '</a>';
     }
-    var marginLabel = p.is_margin ? '↓ Mettre dans l\\'album' : '↑ Mettre en marge';
+    var marginLabel = p.is_margin ? '↓ Album' : '↑ Marge';
     li.innerHTML = `
       <a class="page-photo" href="javascript:void(0)" onclick="openViewer(${p.page_id})">
         <img src="${p.thumb_url}" data-full="${p.full_url}" data-page-id="${p.page_id}" loading="lazy" alt="">
@@ -286,9 +286,9 @@
         <textarea class="page-caption" placeholder="Une legende..." rows="1" data-page-id="${p.page_id}"></textarea>
       </div>
       <div class="page-actions">
-        <button class="page-margin-btn" type="button" onclick="toggleMargin(${p.page_id})">${marginLabel}</button>
+        <button class="page-action-btn" type="button" onclick="toggleMargin(${p.page_id})">${marginLabel}</button>
+        <button class="page-action-btn page-action-danger" type="button" onclick="deletePage(${p.page_id})">✕ Supprimer</button>
       </div>
-      <button class="page-delete" type="button" onclick="deletePage(${p.page_id})" title="Supprimer">✕</button>
     `;
     return li;
   }
@@ -372,19 +372,86 @@
       li.dataset.pageId = d.page_id;
       li.dataset.type = 'text';
       li.dataset.isMargin = asMargin ? '1' : '0';
-      var marginLabel = asMargin ? '↓ Mettre dans l\\'album' : '↑ Mettre en marge';
+      var nowFallback = new Date().toISOString().slice(0, 16).replace('T', ' ');
+      var marginLabel = asMargin ? '↓ Album' : '↑ Marge';
       li.innerHTML = `
         <textarea class="page-text" placeholder="Quelques mots..." rows="3" data-page-id="${d.page_id}"></textarea>
-        <div class="page-actions">
-          <button class="page-margin-btn" type="button" onclick="toggleMargin(${d.page_id})">${marginLabel}</button>
+        <div class="page-meta page-meta-text">
+          <div class="page-date page-date-fallback">ajoute ${nowFallback}</div>
         </div>
-        <button class="page-delete" type="button" onclick="deletePage(${d.page_id})" title="Supprimer">✕</button>
+        <div class="page-actions">
+          <button class="page-action-btn" type="button" onclick="attachPhoto(${d.page_id})">+ Photo</button>
+          <button class="page-action-btn" type="button" onclick="toggleMargin(${d.page_id})">${marginLabel}</button>
+          <button class="page-action-btn page-action-danger" type="button" onclick="deletePage(${d.page_id})">✕ Supprimer</button>
+        </div>
       `;
       list.appendChild(li);
       attachAllAutosaves();
       const ta = li.querySelector('.page-text');
       if (ta) ta.focus();
       updateCounts();
+      setSaved();
+    } catch (e) { setError('Reseau'); }
+  }
+
+  // ── Attach / detach photo sur un bloc texte ────────────────────
+  function attachPhoto(pageId) {
+    var inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/*';
+    inp.onchange = async function(){
+      var f = inp.files && inp.files[0];
+      if (!f) return;
+      setSaving('Ajout photo...');
+      try {
+        var exif = await readExif(f);
+        var blob = await compressImage(f);
+        const fd = new FormData();
+        fd.append('_csrf', CSRF);
+        fd.append('photo', blob, blob.name);
+        fd.append('taken_at', exif.taken_at || '');
+        fd.append('gps_lat', exif.gps_lat != null ? String(exif.gps_lat) : '');
+        fd.append('gps_lng', exif.gps_lng != null ? String(exif.gps_lng) : '');
+        const r = await fetch(`/album_page/${pageId}/attach_photo`, { method: 'POST', body: fd });
+        const d = await r.json();
+        if (!d.ok) { setError('Echec : ' + (d.error || '')); return; }
+        // Insere l'image en debut du bloc et bascule le bouton sur "Detach"
+        const li = document.querySelector(`.page-item[data-page-id="${pageId}"]`);
+        if (!li) return;
+        const a = document.createElement('a');
+        a.className = 'page-photo';
+        a.href = 'javascript:void(0)';
+        a.setAttribute('onclick', 'openViewer(' + pageId + ')');
+        a.innerHTML = '<img src="' + d.thumb_url + '" data-full="' + d.full_url + '" data-page-id="' + pageId + '" loading="lazy" alt="">';
+        li.insertBefore(a, li.firstChild);
+        // Remplacer le bouton "+ Photo" en "✕ Photo"
+        const btn = li.querySelector('.page-action-btn');
+        if (btn && btn.textContent.indexOf('Photo') >= 0) {
+          btn.textContent = '✕ Photo';
+          btn.setAttribute('onclick', 'detachPhoto(' + pageId + ')');
+        }
+        setSaved('Photo ajoutee');
+      } catch (e) { setError('Reseau : ' + e.message); console.error(e); }
+    };
+    inp.click();
+  }
+
+  async function detachPhoto(pageId) {
+    if (!confirm('Retirer la photo de ce bloc ? Le texte est conserve.')) return;
+    setSaving();
+    const fd = new FormData(); fd.append('_csrf', CSRF);
+    try {
+      const r = await fetch(`/album_page/${pageId}/detach_photo`, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!d.ok) { setError(); return; }
+      const li = document.querySelector(`.page-item[data-page-id="${pageId}"]`);
+      if (!li) return;
+      const ph = li.querySelector('.page-photo');
+      if (ph) ph.remove();
+      const btn = li.querySelector('.page-action-btn');
+      if (btn && btn.textContent.indexOf('Photo') >= 0) {
+        btn.textContent = '+ Photo';
+        btn.setAttribute('onclick', 'attachPhoto(' + pageId + ')');
+      }
       setSaved();
     } catch (e) { setError('Reseau'); }
   }

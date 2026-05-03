@@ -587,6 +587,70 @@ def carnet_upload_photos(cid_carnet):
     return jsonify({'ok': True, 'created': created, 'errors': errors})
 
 
+@app.route('/album_page/<int:page_id>/attach_photo', methods=['POST'])
+@couple_required
+def page_attach_photo(page_id):
+    """Attache une photo a une page existante (souvent un bloc texte) :
+    le bloc devient mixte texte + photo, dans le meme cadre visuel."""
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    page = query("SELECT ap.*, c.couple_id FROM album_pages ap "
+                 "JOIN carnets c ON c.id=ap.carnet_id WHERE ap.id=?",
+                 (page_id,), one=True)
+    if not page or page['couple_id'] != session['couple_id']:
+        return jsonify({'ok': False, 'error': '404'}), 404
+    f = request.files.get('photo')
+    if not f or not f.filename:
+        return jsonify({'ok': False, 'error': 'Aucun fichier'}), 400
+    try:
+        data = _save_uploaded_photo(f, page['couple_id'])
+    except Exception as e:
+        log.error("attach_photo page=%s ECHEC: %s\n%s", page_id, e, traceback.format_exc())
+        return jsonify({'ok': False, 'error': str(e)}), 500
+    # EXIF override par client si dispo
+    ct = request.form.get('taken_at') or ''
+    if ct and ct != 'null':
+        data['taken_at'] = ct
+    gps_lat = _safe_float(request.form.get('gps_lat'))
+    gps_lng = _safe_float(request.form.get('gps_lng'))
+    photo_id = execute(
+        "INSERT INTO photos (couple_id, file_path, thumb_path, width, height, "
+        "taken_at, gps_lat, gps_lng, added_by) VALUES (?,?,?,?,?,?,?,?,?)",
+        (page['couple_id'], data['file_path'], data['thumb_path'],
+         data['width'], data['height'], data['taken_at'],
+         gps_lat, gps_lng, session['uid'])
+    )
+    execute(
+        "UPDATE album_pages SET photo_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (photo_id, page_id)
+    )
+    return jsonify({
+        'ok': True, 'photo_id': photo_id,
+        'thumb_url': url_for('serve_upload', filename=data['thumb_path']),
+        'full_url': url_for('serve_upload', filename=data['file_path']),
+        'taken_at': data['taken_at'],
+        'gps_lat': gps_lat, 'gps_lng': gps_lng,
+    })
+
+
+@app.route('/album_page/<int:page_id>/detach_photo', methods=['POST'])
+@couple_required
+def page_detach_photo(page_id):
+    """Retire la photo d'un bloc mixte (le texte reste)."""
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    page = query("SELECT ap.*, c.couple_id FROM album_pages ap "
+                 "JOIN carnets c ON c.id=ap.carnet_id WHERE ap.id=?",
+                 (page_id,), one=True)
+    if not page or page['couple_id'] != session['couple_id']:
+        return jsonify({'ok': False, 'error': '404'}), 404
+    execute(
+        "UPDATE album_pages SET photo_id=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (page_id,)
+    )
+    return jsonify({'ok': True})
+
+
 @app.route('/album_page/<int:page_id>/margin', methods=['POST'])
 @couple_required
 def page_toggle_margin(page_id):

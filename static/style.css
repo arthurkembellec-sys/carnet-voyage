@@ -536,29 +536,35 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
 
 .page-caption-wrap { padding: 4px 4px 2px; }
 
-/* ── Actions sur la page (margin toggle) ──────────────────────────── */
+/* ── Actions sur la page (toujours visibles) ──────────────────────── */
 .page-actions {
-  display: flex; justify-content: flex-end; gap: 8px;
-  padding: 6px 4px 0;
-  margin-top: 4px;
-  opacity: 0;
-  transition: opacity .2s;
+  display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap;
+  padding: 10px 4px 0;
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
 }
-.page-item:hover .page-actions { opacity: 1; }
-@media (max-width: 480px) { .page-actions { opacity: 1; } }
-
-.page-margin-btn {
+.page-action-btn {
   background: transparent;
   border: 1px solid var(--border-strong);
   color: var(--muted);
   font-size: 11px;
   font-weight: 500;
-  padding: 4px 10px;
+  padding: 6px 12px;
   border-radius: 999px;
   cursor: pointer;
-  transition: background .2s, color .2s;
+  transition: background .2s, color .2s, border-color .2s;
+  font-family: var(--font-ui);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
 }
-.page-margin-btn:hover { background: rgba(28,26,23,0.04); color: var(--ink); }
+.page-action-btn:hover { background: rgba(28,26,23,0.04); color: var(--ink); border-color: var(--ink); }
+.page-action-btn:active { transform: scale(.97); }
+.page-action-danger { color: var(--error-ink); border-color: rgba(126,42,26,0.25); }
+.page-action-danger:hover { background: var(--error-bg); color: var(--error-ink); border-color: var(--error-ink); }
+
+/* L'ancien bouton croix flottant n'est plus utilise — masque pour compat */
+.page-delete { display: none !important; }
+.page-margin-btn, .page-delete-btn { display: none !important; }
 
 /* ── Sections album / marge ───────────────────────────────────────── */
 .album-section { margin-top: 32px; }
