@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "1.4.3-backup"
+APP_VERSION = "1.2.4-exif-reinject"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
@@ -696,6 +696,11 @@ def carnet_add_item(cid_carnet):
             if ct and ct != 'null': data['taken_at'] = ct
             gps_lat = _safe_float(request.form.get('gps_lat'))
             gps_lng = _safe_float(request.form.get('gps_lng'))
+            # v1.2.4 — reinjection EXIF
+            _inject_exif_to_jpeg(os.path.join(UPLOAD_DIR, data['file_path']),
+                                 data.get('taken_at'), gps_lat, gps_lng)
+            _inject_exif_to_jpeg(os.path.join(UPLOAD_DIR, data['thumb_path']),
+                                 data.get('taken_at'), gps_lat, gps_lng)
             photo_id = execute(
                 "INSERT INTO photos (couple_id, file_path, thumb_path, width, height, "
                 "taken_at, gps_lat, gps_lng, added_by) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -944,6 +949,62 @@ def _save_uploaded_photo(file, couple_id):
     }
 
 
+def _deg_to_dms_rational(deg):
+    """Convertit un float degrees en rationals EXIF DMS."""
+    deg_abs = abs(deg)
+    d = int(deg_abs)
+    m_full = (deg_abs - d) * 60
+    m = int(m_full)
+    s = (m_full - m) * 60
+    return ((d, 1), (m, 1), (int(round(s * 100)), 100))
+
+
+def _inject_exif_to_jpeg(jpeg_path, taken_at_iso=None, gps_lat=None, gps_lng=None):
+    """v1.2.4 — Reinjecte les EXIF DateTimeOriginal + GPS dans le JPEG
+    apres la compression Pillow (qui les supprime). Silencieux en cas d'erreur."""
+    try:
+        import piexif
+    except ImportError:
+        return
+    try:
+        try:
+            exif_dict = piexif.load(jpeg_path)
+        except Exception:
+            exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
+
+        if taken_at_iso:
+            try:
+                # ISO 'YYYY-MM-DDTHH:MM:SS[.fff]' -> EXIF 'YYYY:MM:DD HH:MM:SS'
+                s = str(taken_at_iso).replace('T', ' ').split('.')[0]
+                # Remplace seulement les '-' de la date (pas ceux d'eventuel TZ apres seconds)
+                if len(s) >= 10:
+                    s = s[:10].replace('-', ':') + s[10:]
+                if len(s) >= 19:
+                    s = s[:19]
+                b = s.encode('ascii')
+                exif_dict.setdefault('Exif', {})[piexif.ExifIFD.DateTimeOriginal] = b
+                exif_dict['Exif'][piexif.ExifIFD.DateTimeDigitized] = b
+                exif_dict.setdefault('0th', {})[piexif.ImageIFD.DateTime] = b
+            except Exception as e:
+                log.debug("EXIF date inject skip: %s", e)
+
+        if gps_lat is not None and gps_lng is not None:
+            try:
+                exif_dict.setdefault('GPS', {})
+                exif_dict['GPS'][piexif.GPSIFD.GPSLatitudeRef]  = b'N' if gps_lat >= 0 else b'S'
+                exif_dict['GPS'][piexif.GPSIFD.GPSLatitude]     = _deg_to_dms_rational(gps_lat)
+                exif_dict['GPS'][piexif.GPSIFD.GPSLongitudeRef] = b'E' if gps_lng >= 0 else b'W'
+                exif_dict['GPS'][piexif.GPSIFD.GPSLongitude]    = _deg_to_dms_rational(gps_lng)
+                exif_dict['GPS'][piexif.GPSIFD.GPSVersionID]    = (2, 3, 0, 0)
+            except Exception as e:
+                log.debug("EXIF GPS inject skip: %s", e)
+
+        if any(exif_dict.get(k) for k in ('0th', 'Exif', 'GPS')):
+            piexif.insert(piexif.dump(exif_dict), jpeg_path)
+    except Exception as e:
+        log.warning("EXIF reinjection failed for %s: %s", jpeg_path, e)
+
+
 @app.route('/carnet/<int:cid_carnet>/album')
 @couple_required
 def carnet_album(cid_carnet):
@@ -1011,6 +1072,11 @@ def carnet_upload_photos(cid_carnet):
         gps_lat = _safe_float(client_lat[idx]) if idx < len(client_lat) else None
         gps_lng = _safe_float(client_lng[idx]) if idx < len(client_lng) else None
         is_margin = (client_margin[idx] == '1') if idx < len(client_margin) else False
+        # v1.2.4 — Reinjecte les EXIF dans le fichier final + thumbnail
+        _inject_exif_to_jpeg(os.path.join(UPLOAD_DIR, data['file_path']),
+                             data.get('taken_at'), gps_lat, gps_lng)
+        _inject_exif_to_jpeg(os.path.join(UPLOAD_DIR, data['thumb_path']),
+                             data.get('taken_at'), gps_lat, gps_lng)
         photo_id = execute(
             "INSERT INTO photos (couple_id, file_path, thumb_path, width, height, "
             "taken_at, gps_lat, gps_lng, added_by) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -1064,6 +1130,11 @@ def page_attach_photo(page_id):
         data['taken_at'] = ct
     gps_lat = _safe_float(request.form.get('gps_lat'))
     gps_lng = _safe_float(request.form.get('gps_lng'))
+    # v1.2.4 — reinjection EXIF
+    _inject_exif_to_jpeg(os.path.join(UPLOAD_DIR, data['file_path']),
+                         data.get('taken_at'), gps_lat, gps_lng)
+    _inject_exif_to_jpeg(os.path.join(UPLOAD_DIR, data['thumb_path']),
+                         data.get('taken_at'), gps_lat, gps_lng)
     photo_id = execute(
         "INSERT INTO photos (couple_id, file_path, thumb_path, width, height, "
         "taken_at, gps_lat, gps_lng, added_by) VALUES (?,?,?,?,?,?,?,?,?)",

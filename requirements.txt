@@ -5,3 +5,4 @@ qrcode>=7.4
 reportlab>=4.0.0
 Pillow>=10.0.0
 python-dotenv>=1.0.0
+piexif>=1.1.3
