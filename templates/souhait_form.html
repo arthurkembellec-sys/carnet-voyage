@@ -1,0 +1,63 @@
+{% extends '_base.html' %}
+{% block title %}Nouveau souhait — Notre Histoire{% endblock %}
+{% block content %}
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <a href="{{ url_for('souhaits_index') }}" class="brand">← Souhaits</a>
+  </div>
+</header>
+
+<main class="page">
+  <section class="hero">
+    <p class="kicker">Nouveau souhait</p>
+    <h1 class="display"><em>Quelle envie ?</em></h1>
+    <p class="lead">
+      Donne-lui un nom et choisis sa categorie. Tu pourras y ajouter
+      des liens, photos, lieux et un budget pour preparer.
+    </p>
+  </section>
+
+  <form method="POST" action="{{ url_for('souhait_nouveau') }}" class="form form-wide">
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+
+    <label class="field">
+      <span class="label">Titre</span>
+      <input type="text" name="title" required maxlength="80" autofocus
+             value="{{ souhait.title if souhait else '' }}"
+             placeholder="ex. Sicile septembre · Restos a tester · Lune de miel">
+    </label>
+
+    <div class="field">
+      <span class="label">Categorie</span>
+      <div class="segmented">
+        {% set current = (souhait.souhait_kind if souhait else 'voyage') %}
+        {% for key, label in kinds %}
+        <label class="seg {% if current == key %}seg-active{% endif %}">
+          <input type="radio" name="souhait_kind" value="{{ key }}"
+                 {% if current == key %}checked{% endif %} hidden>
+          <span>{{ label }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <a href="{{ url_for('souhaits_index') }}" class="btn btn-ghost">Annuler</a>
+      <button type="submit" class="btn btn-primary">Creer le souhait</button>
+    </div>
+  </form>
+</main>
+
+<script>
+  document.querySelectorAll('.segmented .seg').forEach(function(seg){
+    seg.addEventListener('click', function(){
+      document.querySelectorAll('.segmented .seg').forEach(function(s){ s.classList.remove('seg-active'); });
+      seg.classList.add('seg-active');
+      var input = seg.querySelector('input[type=radio]');
+      if (input) input.checked = true;
+    });
+  });
+</script>
+
+{% endblock %}

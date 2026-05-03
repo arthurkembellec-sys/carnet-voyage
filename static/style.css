@@ -251,6 +251,45 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
   .espace-menu { min-width: 220px; }
 }
 
+/* ── Onglets nav (Carnets / Souhaits) ────────────────────────────── */
+.topbar-tabs {
+  display: flex; gap: 4px;
+  margin: 0 auto;
+}
+.tab-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  transition: background .2s, color .2s;
+}
+.tab-link:hover { color: var(--ink); background: rgba(28,26,23,0.04); text-decoration: none; }
+.tab-link-active {
+  background: var(--ink);
+  color: var(--bg);
+}
+.tab-link-active:hover { background: var(--ink); color: var(--bg); }
+.tab-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.tab-link-active .tab-badge { background: rgba(255,255,255,0.2); }
+
+@media (max-width: 480px) {
+  .topbar-tabs { gap: 2px; margin: 0; }
+  .tab-link { padding: 6px 10px; font-size: 12px; }
+}
+
 .topbar-nav { display: flex; gap: 18px; }
 .topbar-nav .link {
   font-size: 12px;

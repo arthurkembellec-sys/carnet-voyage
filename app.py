@@ -35,7 +35,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "1.4.1-videos"
+APP_VERSION = "1.4.2-souhaits-categorise"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 SECRET_KEY = os.environ.get('SECRET_KEY') or secrets.token_urlsafe(32)
@@ -235,6 +235,10 @@ def init_db():
         )""",
         "CREATE INDEX IF NOT EXISTS idx_videos_couple ON videos(couple_id)",
         "ALTER TABLE album_pages ADD COLUMN video_id INTEGER REFERENCES videos(id) ON DELETE SET NULL",
+        # ── v1.4.2 — categorisation des souhaits ─────────────────────
+        # Pour les carnets de type='souhait', categorie du futur voyage
+        # (voyage / restaurant / sortie / autre).
+        "ALTER TABLE carnets ADD COLUMN souhait_kind TEXT DEFAULT 'voyage'",
         # ── v1.4 — items des carnets de souhait (link/photo/note/lieu/budget)
         """CREATE TABLE IF NOT EXISTS carnet_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -423,7 +427,14 @@ CARNET_TYPES = [
     ('voyage',     'Voyage'),
     ('restaurant', 'Restaurant'),
     ('sortie',     'Sortie'),
-    ('souhait',    'Souhait'),
+    ('autre',      'Autre'),
+]
+
+# Categories dispo pour un carnet de souhait (le type du futur voyage)
+SOUHAIT_KINDS = [
+    ('voyage',     'Voyage'),
+    ('restaurant', 'Restaurant'),
+    ('sortie',     'Sortie'),
     ('autre',      'Autre'),
 ]
 
@@ -447,24 +458,96 @@ def home():
     type_filter = request.args.get('type') or ''
     if type_filter and type_filter not in dict(CARNET_TYPES):
         type_filter = ''
+    # Exclure les carnets de souhait (page dediee /souhaits)
     if type_filter:
         rows = query(
-            "SELECT * FROM carnets WHERE couple_id=? AND type=? AND deleted_at IS NULL "
-            "ORDER BY COALESCE(date_start, created_at) DESC, id DESC",
+            "SELECT * FROM carnets WHERE couple_id=? AND type=? AND type != 'souhait' "
+            "AND deleted_at IS NULL ORDER BY COALESCE(date_start, created_at) DESC, id DESC",
             (cid, type_filter)
         )
     else:
         rows = query(
-            "SELECT * FROM carnets WHERE couple_id=? AND deleted_at IS NULL "
-            "ORDER BY COALESCE(date_start, created_at) DESC, id DESC",
+            "SELECT * FROM carnets WHERE couple_id=? AND type != 'souhait' "
+            "AND deleted_at IS NULL ORDER BY COALESCE(date_start, created_at) DESC, id DESC",
             (cid,)
         )
+    # Compteur de souhaits actifs (pour le badge nav)
+    nb_row = query(
+        "SELECT COUNT(*) AS n FROM carnets WHERE couple_id=? AND type='souhait' AND deleted_at IS NULL",
+        (cid,), one=True
+    )
+    nb_souhaits = (nb_row['n'] if nb_row else 0)
     return render_template(
         'index.html',
         carnets=[dict(r) for r in rows],
         types=CARNET_TYPES,
         type_filter=type_filter,
+        nb_souhaits=nb_souhaits,
     )
+
+
+@app.route('/souhaits')
+@couple_required
+def souhaits_index():
+    """Page propre des carnets de souhait, avec chips de filtre par categorie."""
+    cid = current_espace_id()
+    kind_filter = request.args.get('kind') or ''
+    if kind_filter and kind_filter not in dict(SOUHAIT_KINDS):
+        kind_filter = ''
+    if kind_filter:
+        rows = query(
+            "SELECT * FROM carnets WHERE couple_id=? AND type='souhait' "
+            "AND COALESCE(souhait_kind,'voyage')=? AND deleted_at IS NULL "
+            "ORDER BY updated_at DESC, id DESC",
+            (cid, kind_filter)
+        )
+    else:
+        rows = query(
+            "SELECT * FROM carnets WHERE couple_id=? AND type='souhait' "
+            "AND deleted_at IS NULL ORDER BY updated_at DESC, id DESC",
+            (cid,)
+        )
+    # Compter items pour chaque souhait
+    souhaits = []
+    for r in rows:
+        r = dict(r)
+        cnt = query(
+            "SELECT COUNT(*) AS n FROM carnet_items WHERE carnet_id=? AND target_carnet_id IS NULL",
+            (r['id'],), one=True
+        )
+        r['nb_items'] = cnt['n'] if cnt else 0
+        souhaits.append(r)
+    return render_template(
+        'souhaits.html',
+        souhaits=souhaits,
+        kinds=SOUHAIT_KINDS,
+        kind_filter=kind_filter,
+    )
+
+
+@app.route('/souhait/nouveau', methods=['GET', 'POST'])
+@couple_required
+def souhait_nouveau():
+    """Creation d'un carnet de souhait avec sa categorie (kind)."""
+    if request.method == 'POST':
+        if not csrf_check():
+            flash("Session expiree.", "err")
+            return redirect(url_for('souhait_nouveau'))
+        title = (request.form.get('title') or '').strip()
+        kind = (request.form.get('souhait_kind') or 'voyage').strip()
+        if kind not in dict(SOUHAIT_KINDS):
+            kind = 'voyage'
+        if not title:
+            flash("Donne un titre au souhait.", "err")
+            return render_template('souhait_form.html', kinds=SOUHAIT_KINDS,
+                souhait={'title': '', 'souhait_kind': kind})
+        cid = execute(
+            "INSERT INTO carnets (couple_id, title, type, souhait_kind, status, created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (current_espace_id(), title, 'souhait', kind, 'active', session['uid'])
+        )
+        return redirect(url_for('carnet_souhait_view', cid_carnet=cid))
+    return render_template('souhait_form.html', kinds=SOUHAIT_KINDS, souhait=None)
 
 
 # ── Routes : carnets ─────────────────────────────────────────────────

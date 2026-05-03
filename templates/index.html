@@ -26,6 +26,13 @@
         <a href="{{ url_for('espace_membres') }}" class="espace-menu-item">Membres de cet espace</a>
       </div>
     </div>
+    <nav class="topbar-tabs">
+      <a href="{{ url_for('home') }}" class="tab-link tab-link-active">Carnets</a>
+      <a href="{{ url_for('souhaits_index') }}" class="tab-link">
+        Souhaits
+        {% if nb_souhaits %}<span class="tab-badge">{{ nb_souhaits }}</span>{% endif %}
+      </a>
+    </nav>
     <nav class="topbar-nav">
       <a href="{{ url_for('invite_share') }}" class="link">Inviter</a>
       <a href="{{ url_for('logout') }}" class="link">Deconnexion</a>

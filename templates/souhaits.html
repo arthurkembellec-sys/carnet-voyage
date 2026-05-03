@@ -1,0 +1,75 @@
+{% extends '_base.html' %}
+{% block title %}Notre Histoire — Souhaits{% endblock %}
+{% block content %}
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <span class="brand">Notre Histoire</span>
+    <nav class="topbar-tabs">
+      <a href="{{ url_for('home') }}" class="tab-link">Carnets</a>
+      <a href="{{ url_for('souhaits_index') }}" class="tab-link tab-link-active">Souhaits</a>
+    </nav>
+    <nav class="topbar-nav">
+      <a href="{{ url_for('logout') }}" class="link">Deconnexion</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+
+  <section class="hero">
+    <p class="kicker">{% if current_espace %}{{ current_espace.name or 'Cet espace' }}{% endif %}</p>
+    <h1 class="display"><em>Souhaits</em></h1>
+    <p class="lead">
+      Ce que vous reverez de faire. Une fois pret, transformez le souhait
+      en vrai carnet de voyage, restaurant ou sortie.
+    </p>
+  </section>
+
+  <div class="filter-row">
+    <div class="chips">
+      <a href="{{ url_for('souhaits_index') }}" class="chip {% if not kind_filter %}chip-active{% endif %}">Tous</a>
+      {% for key, label in kinds %}
+      <a href="{{ url_for('souhaits_index', kind=key) }}" class="chip {% if kind_filter == key %}chip-active{% endif %}">{{ label }}</a>
+      {% endfor %}
+    </div>
+    <a href="{{ url_for('souhait_nouveau') }}" class="btn btn-primary">+ Nouveau souhait</a>
+  </div>
+
+  {% if souhaits %}
+  <ul class="carnet-list">
+    {% for s in souhaits %}
+    <li>
+      <a href="{{ url_for('carnet_souhait_view', cid_carnet=s.id) }}" class="carnet-card carnet-card-souhait carnet-card-souhait-{{ s.souhait_kind or 'voyage' }}">
+        <div class="carnet-cover">
+          <span class="carnet-type">{{ {'voyage':'Voyage','restaurant':'Restaurant','sortie':'Sortie','autre':'Autre'}[s.souhait_kind or 'voyage'] }}</span>
+        </div>
+        <div class="carnet-meta">
+          <h3 class="carnet-title">{{ s.title }}</h3>
+          <p class="carnet-sub">
+            {{ s.nb_items }} item{% if s.nb_items != 1 %}s{% endif %} ·
+            mis a jour {{ (s.updated_at or '')|truncate(10, true, '') }}
+          </p>
+        </div>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty-state">
+    <p class="empty-display"><em>Pas encore de souhait.</em></p>
+    <p class="empty-lead">
+      {% if kind_filter %}
+      Aucun souhait dans cette categorie.
+      {% else %}
+      Commencez votre premier souhait — ce voyage en Sicile, ce restau a tester,
+      cette balade un dimanche.
+      {% endif %}
+    </p>
+    <a href="{{ url_for('souhait_nouveau') }}" class="btn btn-primary">Creer un souhait</a>
+  </div>
+  {% endif %}
+
+</main>
+
+{% endblock %}

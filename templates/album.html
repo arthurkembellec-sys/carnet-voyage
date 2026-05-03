@@ -72,10 +72,10 @@
 
 <!-- Footer flottant : actions ajout -->
 <div class="album-footer">
-  <input type="file" id="file-photos" accept="image/*" multiple hidden>
-  <input type="file" id="file-camera" accept="image/*" capture="environment" hidden>
-  <input type="file" id="file-margin" accept="image/*" multiple hidden>
-  <input type="file" id="file-video" accept="video/*" hidden>
+  <input type="file" id="file-photos" accept="image/*" multiple style="position:absolute;left:-9999px;width:1px;height:1px">
+  <input type="file" id="file-camera" accept="image/*" capture="environment" style="position:absolute;left:-9999px;width:1px;height:1px">
+  <input type="file" id="file-margin" accept="image/*" multiple style="position:absolute;left:-9999px;width:1px;height:1px">
+  <input type="file" id="file-video" accept="video/*,video/mp4,video/quicktime,video/x-m4v,.mp4,.mov,.m4v,.webm" style="position:absolute;left:-9999px;width:1px;height:1px">
 
   <button type="button" class="fab-btn" onclick="document.getElementById('file-photos').click()">
     <span class="fab-icon">+</span> Photos
