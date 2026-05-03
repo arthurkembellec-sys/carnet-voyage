@@ -18,8 +18,13 @@ import sqlite3
 import secrets
 import logging
 import traceback
+import zipfile
+import smtplib
 from functools import wraps
 from datetime import datetime, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 
 import bcrypt
 import qrcode
@@ -35,14 +40,28 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "1.4.2-souhaits-categorise"
+APP_VERSION = "1.4.3-backup"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
+BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
 SECRET_KEY = os.environ.get('SECRET_KEY') or secrets.token_urlsafe(32)
 INVITATION_TTL_DAYS = 14
 
+# Backup
+BACKUP_TOKEN = os.environ.get('BACKUP_TOKEN', '')
+BACKUP_KEEP = int(os.environ.get('BACKUP_KEEP', '7'))
+BACKUP_EMAIL_TO = os.environ.get('BACKUP_EMAIL_TO', 'arthur.kembellec@gmail.com')
+
+# SMTP (optionnel — si non configure, backup local uniquement)
+SMTP_HOST = os.environ.get('SMTP_HOST', '')
+SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
+SMTP_USER = os.environ.get('SMTP_USER', '')
+SMTP_PASS = os.environ.get('SMTP_PASS', '')
+SMTP_FROM = os.environ.get('SMTP_FROM', SMTP_USER)
+
 os.makedirs(os.path.dirname(DB_PATH) or '.', exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = SECRET_KEY
@@ -1562,6 +1581,151 @@ def invite_accept(token):
         return redirect(url_for('home'))
 
     return render_template('invite_accept.html', couple=couple, token=token)
+
+
+# ══════════════════════════════════════════════════════════════════════
+#                      v1.4.3 — BACKUP AUTO BDD
+# ══════════════════════════════════════════════════════════════════════
+
+def _do_backup():
+    """
+    Cree un dump SQLite (atomique via SQLite backup API), le ZIP,
+    applique la rotation, et envoie par email si SMTP configure.
+    Retourne dict {filename, size, email_sent}.
+    """
+    ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    sqlite_dump = os.path.join(BACKUP_DIR, f'carnet_{ts}.sqlite')
+    zip_path = os.path.join(BACKUP_DIR, f'carnet_{ts}.zip')
+
+    # Dump atomique (SQLite backup API : safe meme si ecritures concurrentes)
+    src = sqlite3.connect(DB_PATH)
+    dst = sqlite3.connect(sqlite_dump)
+    src.backup(dst)
+    dst.close()
+    src.close()
+
+    # ZIP
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.write(sqlite_dump, arcname=f'carnet_{ts}.sqlite')
+    try:
+        os.remove(sqlite_dump)
+    except Exception:
+        pass
+
+    # Rotation
+    backups = sorted([f for f in os.listdir(BACKUP_DIR)
+                      if f.startswith('carnet_') and f.endswith('.zip')])
+    while len(backups) > BACKUP_KEEP:
+        oldest = backups.pop(0)
+        try:
+            os.remove(os.path.join(BACKUP_DIR, oldest))
+        except Exception:
+            pass
+
+    size = os.path.getsize(zip_path)
+    log.info("backup cree : %s (%d bytes)", os.path.basename(zip_path), size)
+
+    # Email si SMTP configure
+    sent = False
+    if SMTP_HOST and SMTP_USER and BACKUP_EMAIL_TO:
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = SMTP_FROM or SMTP_USER
+            msg['To'] = BACKUP_EMAIL_TO
+            msg['Subject'] = f'[Notre Histoire] Backup BDD du {ts}'
+            msg.attach(MIMEText(
+                f"Backup automatique de la base SQLite.\n"
+                f"Date : {ts} UTC\n"
+                f"Taille : {size / 1024:.1f} Ko\n"
+                f"Fichier : carnet_{ts}.zip\n",
+                'plain'
+            ))
+            with open(zip_path, 'rb') as fp:
+                attach = MIMEApplication(fp.read(), _subtype='zip')
+                attach.add_header('Content-Disposition', 'attachment',
+                                  filename=f'carnet_{ts}.zip')
+                msg.attach(attach)
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
+                smtp.starttls()
+                smtp.login(SMTP_USER, SMTP_PASS)
+                smtp.send_message(msg)
+            sent = True
+            log.info("backup email envoye a %s", BACKUP_EMAIL_TO)
+        except Exception as e:
+            log.warning("backup email ECHEC: %s", e)
+
+    return {
+        'filename': os.path.basename(zip_path),
+        'size': size,
+        'email_sent': sent,
+    }
+
+
+@app.route('/admin/backup/run', methods=['GET', 'POST'])
+def admin_backup_run():
+    """
+    Declenche un backup. Auth : token (?token=XXX) pour cron externe,
+    ou user logged (admin manuel via UI).
+    """
+    token = (request.args.get('token') or
+             request.headers.get('X-Backup-Token') or
+             request.form.get('token') or '')
+    if BACKUP_TOKEN and token == BACKUP_TOKEN:
+        pass
+    elif session.get('uid'):
+        pass
+    else:
+        abort(403)
+    try:
+        result = _do_backup()
+        return jsonify({'ok': True, **result})
+    except Exception as e:
+        log.error("backup ECHEC: %s\n%s", e, traceback.format_exc())
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/admin/backups')
+@login_required
+def admin_backups_list():
+    """Page admin : liste des backups + bouton 'creer maintenant'."""
+    backups = []
+    if os.path.isdir(BACKUP_DIR):
+        for f in sorted(os.listdir(BACKUP_DIR), reverse=True):
+            if f.startswith('carnet_') and f.endswith('.zip'):
+                p = os.path.join(BACKUP_DIR, f)
+                backups.append({
+                    'name': f,
+                    'size_kb': round(os.path.getsize(p) / 1024, 1),
+                    'mtime': datetime.fromtimestamp(os.path.getmtime(p)).strftime('%Y-%m-%d %H:%M'),
+                })
+    return render_template('admin_backups.html',
+        backups=backups,
+        smtp_configured=bool(SMTP_HOST and SMTP_USER),
+        backup_email=BACKUP_EMAIL_TO,
+        backup_token_set=bool(BACKUP_TOKEN),
+        backup_keep=BACKUP_KEEP,
+    )
+
+
+@app.route('/admin/backups/<path:filename>')
+@login_required
+def admin_backup_download(filename):
+    if not filename.startswith('carnet_') or not filename.endswith('.zip'):
+        abort(404)
+    return send_from_directory(BACKUP_DIR, filename, as_attachment=True)
+
+
+@app.route('/admin/backups/<path:filename>/delete', methods=['POST'])
+@login_required
+def admin_backup_delete(filename):
+    if not csrf_check(): abort(403)
+    if not filename.startswith('carnet_') or not filename.endswith('.zip'):
+        abort(404)
+    p = os.path.join(BACKUP_DIR, filename)
+    if os.path.exists(p):
+        os.remove(p)
+        flash(f"{filename} supprime.", "ok")
+    return redirect(url_for('admin_backups_list'))
 
 
 # ── Bootstrap ─────────────────────────────────────────────────────────

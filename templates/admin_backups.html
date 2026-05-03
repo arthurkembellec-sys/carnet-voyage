@@ -1,0 +1,113 @@
+{% extends '_base.html' %}
+{% block title %}Backups — Notre Histoire{% endblock %}
+{% block content %}
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <a href="{{ url_for('home') }}" class="brand">← Notre Histoire</a>
+  </div>
+</header>
+
+<main class="page">
+
+  <section class="hero">
+    <p class="kicker">Administration</p>
+    <h1 class="display"><em>Sauvegardes.</em></h1>
+    <p class="lead">
+      Sauvegarde de la base de donnees (carnets, photos, souhaits, membres).
+      Rotation automatique : les {{ backup_keep }} dernieres sont conservees.
+    </p>
+  </section>
+
+  {# Statut config #}
+  <ul class="config-status">
+    <li class="config-line {% if smtp_configured %}config-ok{% else %}config-warn{% endif %}">
+      <span class="config-dot"></span>
+      <strong>Email :</strong>
+      {% if smtp_configured %}
+        SMTP configure → emails envoyes a <code>{{ backup_email }}</code>
+      {% else %}
+        SMTP non configure (vars SMTP_HOST, SMTP_USER, SMTP_PASS) — les backups
+        sont conservees seulement sur le volume Railway.
+      {% endif %}
+    </li>
+    <li class="config-line {% if backup_token_set %}config-ok{% else %}config-warn{% endif %}">
+      <span class="config-dot"></span>
+      <strong>Cron externe :</strong>
+      {% if backup_token_set %}
+        Token configure (var BACKUP_TOKEN). Programme un GET sur
+        <code>/admin/backup/run?token=&lt;token&gt;</code> via cron-job.org.
+      {% else %}
+        Pour automatiser, configure la var <code>BACKUP_TOKEN</code> sur Railway
+        puis programme un cron externe (cron-job.org gratuit).
+      {% endif %}
+    </li>
+  </ul>
+
+  <div class="cta-row">
+    <button type="button" class="btn btn-primary" id="run-backup">
+      Creer une sauvegarde maintenant
+    </button>
+    <span class="save-indicator" id="run-status"></span>
+  </div>
+
+  {% if backups %}
+  <ul class="backup-list">
+    {% for b in backups %}
+    <li class="backup-item">
+      <div class="backup-info">
+        <div class="backup-name">{{ b.name }}</div>
+        <div class="backup-meta">{{ b.mtime }} · {{ b.size_kb }} Ko</div>
+      </div>
+      <div class="backup-actions">
+        <a href="{{ url_for('admin_backup_download', filename=b.name) }}" class="btn btn-secondary btn-sm">
+          Telecharger
+        </a>
+        <form method="POST" action="{{ url_for('admin_backup_delete', filename=b.name) }}"
+              style="display:inline" onsubmit="return confirm('Supprimer {{ b.name }} ?');">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-secondary btn-sm" style="color:var(--error-ink)">
+            Supprimer
+          </button>
+        </form>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty-state">
+    <p class="empty-display"><em>Aucune sauvegarde.</em></p>
+    <p class="empty-lead">Cree la premiere maintenant.</p>
+  </div>
+  {% endif %}
+
+</main>
+
+<script>
+  document.getElementById('run-backup').addEventListener('click', async function(){
+    var btn = this, status = document.getElementById('run-status');
+    btn.disabled = true;
+    status.textContent = 'Sauvegarde en cours...';
+    status.className = 'save-indicator saving';
+    try {
+      var r = await fetch("{{ url_for('admin_backup_run') }}", { method: 'POST' });
+      var d = await r.json();
+      if (!d.ok) {
+        status.textContent = 'Echec : ' + (d.error || '');
+        status.className = 'save-indicator error';
+        return;
+      }
+      status.textContent = '✓ ' + d.filename + ' (' + Math.round(d.size/1024) + ' Ko)' +
+                          (d.email_sent ? ' — email envoye' : '');
+      status.className = 'save-indicator saved';
+      setTimeout(function(){ location.reload(); }, 1500);
+    } catch (e) {
+      status.textContent = 'Reseau : ' + e.message;
+      status.className = 'save-indicator error';
+    } finally {
+      btn.disabled = false;
+    }
+  });
+</script>
+
+{% endblock %}
