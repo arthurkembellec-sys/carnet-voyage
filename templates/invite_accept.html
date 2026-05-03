@@ -1,0 +1,38 @@
+{% extends '_base.html' %}
+{% block title %}Notre Histoire — Rejoindre{% endblock %}
+{% block content %}
+
+<main class="auth-wrap">
+  <section class="auth-card">
+    <p class="kicker">Invitation</p>
+    <h1 class="display"><em>{{ couple.name or 'Vous avez recu une invitation.' }}</em></h1>
+    <p class="lead">
+      Cree ton compte pour rejoindre. Si tu as deja un compte avec cet email,
+      saisis le meme mot de passe pour t'y rattacher.
+    </p>
+
+    <form method="POST" action="{{ url_for('invite_accept', token=token) }}" class="form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+
+      <label class="field">
+        <span class="label">Prenom</span>
+        <input type="text" name="display_name" value="{{ display_name or '' }}" autocomplete="given-name">
+      </label>
+
+      <label class="field">
+        <span class="label">Email</span>
+        <input type="email" name="email" value="{{ email or '' }}" required autocomplete="email">
+      </label>
+
+      <label class="field">
+        <span class="label">Mot de passe</span>
+        <input type="password" name="password" required minlength="8" autocomplete="new-password">
+        <span class="hint">8 caracteres minimum.</span>
+      </label>
+
+      <button type="submit" class="btn btn-primary btn-block">Rejoindre</button>
+    </form>
+  </section>
+</main>
+
+{% endblock %}

@@ -1,0 +1,28 @@
+{% extends '_base.html' %}
+{% block title %}Notre Histoire — Notre compte{% endblock %}
+{% block content %}
+
+<main class="auth-wrap">
+  <section class="auth-card">
+    <p class="kicker">Bienvenue {{ user.display_name }}</p>
+    <h1 class="display"><em>Comment veux-tu<br>l'appeler ?</em></h1>
+    <p class="lead">
+      Tu peux donner un nom au compte que vous allez partager.
+      C'est totalement optionnel — vous pourrez le changer plus tard.
+    </p>
+
+    <form method="POST" action="{{ url_for('onboarding_couple') }}" class="form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+
+      <label class="field">
+        <span class="label">Nom du compte</span>
+        <input type="text" name="name" placeholder="ex. Arthur &amp; Laurie" maxlength="80" autofocus>
+        <span class="hint">Optionnel.</span>
+      </label>
+
+      <button type="submit" class="btn btn-primary btn-block">Creer notre compte</button>
+    </form>
+  </section>
+</main>
+
+{% endblock %}

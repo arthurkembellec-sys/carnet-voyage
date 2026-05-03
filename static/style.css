@@ -13,9 +13,19 @@
   --accent:       #A8503D;
   --border:       rgba(28, 26, 23, 0.06);
   --border-strong:rgba(28, 26, 23, 0.12);
+  --error-bg:     #FBEBE6;
+  --error-ink:    #7E2A1A;
+  --ok-bg:        #E8EFE3;
+  --ok-ink:       #2F5A2A;
 
   --font-display: 'Fraunces', 'Times New Roman', serif;
   --font-ui:      'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  --r-xs: 6px;
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 20px;
+  --r-xl: 28px;
 }
 
 * { box-sizing: border-box; }
@@ -31,6 +41,11 @@ html, body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+input, button, select, textarea { font-family: inherit; }
+
+a { color: var(--ink); text-decoration: none; }
+a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
 
 /* ── Typo systeme ─────────────────────────────────────────────────── */
 .display {
@@ -63,7 +78,7 @@ html, body {
   max-width: 56ch;
 }
 
-/* ── Composants de base ───────────────────────────────────────────── */
+/* ── Boutons ──────────────────────────────────────────────────────── */
 .btn {
   display: inline-flex; align-items: center; justify-content: center;
   gap: 8px;
@@ -78,6 +93,7 @@ html, body {
   text-decoration: none;
   transition: transform .12s ease, background .2s ease, color .2s ease;
 }
+.btn:hover { text-decoration: none; }
 .btn:active { transform: scale(.98); }
 
 .btn-primary { background: var(--ink); color: var(--bg); }
@@ -96,13 +112,52 @@ html, body {
 }
 .btn-ghost:hover { color: var(--ink); }
 
+.btn-block { width: 100%; }
+
+/* ── Cards & layouts ──────────────────────────────────────────────── */
 .card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: var(--r-lg);
   padding: 32px;
   box-shadow: 0 1px 2px rgba(28,26,23,0.02);
 }
+
+.page { padding: 32px 20px; max-width: 720px; margin: 0 auto; }
+
+.hero { padding: 32px 0; }
+
+/* ── Top bar ──────────────────────────────────────────────────────── */
+.topbar {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  position: sticky; top: 0; z-index: 10;
+  backdrop-filter: saturate(120%) blur(8px);
+}
+.topbar-inner {
+  max-width: 720px; margin: 0 auto;
+  padding: 16px 20px;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px;
+}
+.brand {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+.topbar-nav { display: flex; gap: 18px; }
+.topbar-nav .link {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.topbar-nav .link:hover { color: var(--ink); text-decoration: none; }
+
+.cta-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
 
 /* ── Hello (Etape 0) ──────────────────────────────────────────────── */
 .hello-wrap {
@@ -110,36 +165,140 @@ html, body {
   display: flex; align-items: center; justify-content: center;
   padding: 32px 20px;
 }
-
-.hello-card {
-  max-width: 640px;
-  text-align: left;
-}
-
+.hello-card { max-width: 640px; text-align: left; }
 .hello-status {
   display: inline-flex; align-items: center; gap: 10px;
   margin-top: 16px;
-  font-family: var(--font-ui);
-  font-weight: 500;
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-weight: 500; font-size: 11px;
+  letter-spacing: 0.18em; text-transform: uppercase;
   color: var(--whisper);
 }
-
 .hello-status .dot {
   width: 8px; height: 8px; border-radius: 50%;
   background: var(--accent);
   animation: pulse 1.6s ease-in-out infinite;
 }
-
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50%      { opacity: .4; transform: scale(0.8); }
 }
 
+/* ── Auth (login / onboarding / invite) ───────────────────────────── */
+.auth-wrap {
+  min-height: 100vh; min-height: 100dvh;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px 20px 60px;
+}
+.auth-card {
+  width: 100%; max-width: 480px;
+}
+.auth-tabs {
+  display: flex; gap: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px;
+  margin: 0 0 24px;
+  width: max-content;
+}
+.auth-tab {
+  border: 0; background: transparent;
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 13px; font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background .2s, color .2s;
+}
+.auth-tab.active { background: var(--ink); color: var(--bg); }
+.auth-tab:hover:not(.active) { color: var(--ink); }
+
+.form { display: flex; flex-direction: column; gap: 16px; margin-top: 8px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field .label {
+  font-size: 11px; font-weight: 500;
+  letter-spacing: 0.24em; text-transform: uppercase;
+  color: var(--muted);
+}
+.field input {
+  padding: 14px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--bg-card);
+  color: var(--ink);
+  font-size: 15px;
+  transition: border .2s, box-shadow .2s;
+}
+.field input:focus {
+  outline: none;
+  border-color: var(--ink);
+  box-shadow: 0 0 0 4px rgba(28,26,23,0.06);
+}
+.field .hint {
+  font-size: 12px; color: var(--whisper);
+}
+
+.auth-after { margin-top: 20px; text-align: center; }
+
+/* ── Invite share ─────────────────────────────────────────────────── */
+.invite-card {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 24px;
+  margin-top: 8px;
+}
+.invite-qr {
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg);
+  border-radius: var(--r-md);
+  padding: 18px;
+}
+.invite-qr svg {
+  width: 200px; height: 200px;
+  display: block;
+}
+.invite-link { display: flex; flex-direction: column; gap: 8px; }
+.link-readonly {
+  padding: 12px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  width: 100%;
+}
+.link-readonly:focus { outline: none; border-color: var(--ink); }
+
+@media (min-width: 560px) {
+  .invite-card { grid-template-columns: auto 1fr; align-items: center; }
+}
+
+/* ── Flash messages ───────────────────────────────────────────────── */
+.flash-zone {
+  position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+  z-index: 100; width: max-content; max-width: 92vw;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.flash {
+  padding: 10px 16px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  box-shadow: 0 4px 16px rgba(28,26,23,0.08);
+  animation: fadeIn .2s ease;
+}
+.flash-err { background: var(--error-bg); color: var(--error-ink); }
+.flash-ok  { background: var(--ok-bg);    color: var(--ok-ink); }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+
 /* ── Mobile ───────────────────────────────────────────────────────── */
 @media (max-width: 480px) {
-  .hello-card { text-align: left; }
-  .card { padding: 24px; border-radius: 14px; }
+  .card { padding: 24px; border-radius: var(--r-md); }
+  .auth-card { max-width: 100%; }
+  .topbar-inner { padding: 12px 16px; }
+  .topbar-nav { gap: 14px; }
 }

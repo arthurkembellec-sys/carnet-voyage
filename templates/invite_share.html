@@ -1,0 +1,45 @@
+{% extends '_base.html' %}
+{% block title %}Notre Histoire — Inviter{% endblock %}
+{% block content %}
+
+<main class="auth-wrap">
+  <section class="auth-card">
+    <p class="kicker">{{ couple.name or 'Notre compte' }}</p>
+    <h1 class="display"><em>Invite l'autre.</em></h1>
+    <p class="lead">
+      Envoie ce lien a la personne avec qui tu vas partager ce compte.
+      Le lien expire dans 14 jours.
+    </p>
+
+    <div class="invite-card">
+      <div class="invite-qr">
+        {{ qr|safe }}
+      </div>
+      <div class="invite-link">
+        <span class="label">Lien d'invitation</span>
+        <input type="text" value="{{ invite_url }}" readonly id="invite-input" class="link-readonly">
+        <button type="button" class="btn btn-secondary btn-block" id="copy-btn">Copier le lien</button>
+      </div>
+    </div>
+
+    <div class="auth-after">
+      <a href="{{ url_for('home') }}" class="btn btn-ghost">Continuer sans inviter</a>
+    </div>
+  </section>
+</main>
+
+<script>
+  document.getElementById('copy-btn').addEventListener('click', function(){
+    var inp = document.getElementById('invite-input');
+    inp.select();
+    inp.setSelectionRange(0, 99999);
+    try {
+      navigator.clipboard.writeText(inp.value);
+      this.textContent = 'Copie !';
+      var self = this;
+      setTimeout(function(){ self.textContent = 'Copier le lien'; }, 1500);
+    } catch(e) { document.execCommand('copy'); }
+  });
+</script>
+
+{% endblock %}

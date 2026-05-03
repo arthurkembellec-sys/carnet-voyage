@@ -1,0 +1,17 @@
+{% extends '_base.html' %}
+{% block title %}Notre Histoire — Lien expire{% endblock %}
+{% block content %}
+
+<main class="auth-wrap">
+  <section class="auth-card">
+    <p class="kicker">Invitation</p>
+    <h1 class="display"><em>Ce lien<br>n'est plus valide.</em></h1>
+    <p class="lead">
+      Le lien d'invitation a expire ou a deja ete utilise.
+      Demande un nouveau lien a la personne qui t'a invite.
+    </p>
+    <a href="{{ url_for('login') }}" class="btn btn-secondary">Aller a l'accueil</a>
+  </section>
+</main>
+
+{% endblock %}

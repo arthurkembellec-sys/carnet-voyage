@@ -1,0 +1,71 @@
+{% extends '_base.html' %}
+{% block title %}Notre Histoire — Connexion{% endblock %}
+{% block content %}
+
+<main class="auth-wrap">
+  <section class="auth-card">
+    <p class="kicker">Notre histoire</p>
+    <h1 class="display"><em>On commence ici.</em></h1>
+
+    <div class="auth-tabs" role="tablist">
+      <button type="button" class="auth-tab active" data-mode="login">Se connecter</button>
+      <button type="button" class="auth-tab" data-mode="signup">Creer un compte</button>
+    </div>
+
+    <form method="POST" action="{{ url_for('login') }}" class="form" id="auth-form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="mode" value="login" id="form-mode">
+      <input type="hidden" name="next" value="{{ next_url }}">
+
+      <label class="field" id="field-name" style="display:none">
+        <span class="label">Prenom</span>
+        <input type="text" name="display_name" value="{{ display_name or '' }}" autocomplete="given-name">
+      </label>
+
+      <label class="field">
+        <span class="label">Email</span>
+        <input type="email" name="email" value="{{ email or '' }}" required autocomplete="email" autofocus>
+      </label>
+
+      <label class="field">
+        <span class="label">Mot de passe</span>
+        <input type="password" name="password" required minlength="8" autocomplete="current-password" id="password">
+        <span class="hint" id="pw-hint" style="display:none">8 caracteres minimum.</span>
+      </label>
+
+      <button type="submit" class="btn btn-primary btn-block" id="submit-btn">Se connecter</button>
+    </form>
+  </section>
+</main>
+
+<script>
+  (function(){
+    var tabs = document.querySelectorAll('.auth-tab');
+    var modeInput = document.getElementById('form-mode');
+    var fieldName = document.getElementById('field-name');
+    var submit = document.getElementById('submit-btn');
+    var pwInput = document.getElementById('password');
+    var pwHint = document.getElementById('pw-hint');
+    tabs.forEach(function(t){
+      t.addEventListener('click', function(){
+        tabs.forEach(function(x){x.classList.remove('active');});
+        t.classList.add('active');
+        var mode = t.dataset.mode;
+        modeInput.value = mode;
+        if (mode === 'signup') {
+          fieldName.style.display = '';
+          submit.textContent = 'Creer mon compte';
+          pwInput.setAttribute('autocomplete', 'new-password');
+          pwHint.style.display = '';
+        } else {
+          fieldName.style.display = 'none';
+          submit.textContent = 'Se connecter';
+          pwInput.setAttribute('autocomplete', 'current-password');
+          pwHint.style.display = 'none';
+        }
+      });
+    });
+  })();
+</script>
+
+{% endblock %}
