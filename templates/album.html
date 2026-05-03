@@ -267,7 +267,10 @@
     li.dataset.type = 'photo';
     li.dataset.takenAt = p.taken_at || '';
     li.dataset.isMargin = p.is_margin ? '1' : '0';
-    var dateHtml = p.taken_at ? '<div class="page-date">' + fmtDate(p.taken_at) + '</div>' : '';
+    var nowFallback = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    var dateHtml = p.taken_at
+      ? '<div class="page-date" title="Date de prise (EXIF)">' + fmtDate(p.taken_at) + '</div>'
+      : '<div class="page-date page-date-fallback" title="EXIF non disponible">ajoutee ' + nowFallback + '</div>';
     var gpsHtml = '';
     if (p.gps_lat != null && p.gps_lng != null) {
       var ll = p.gps_lat.toFixed(5) + ',' + p.gps_lng.toFixed(5);

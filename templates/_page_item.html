@@ -11,7 +11,13 @@
            loading="lazy" alt="">
     </a>
     <div class="page-meta">
-      {% if p.photo_taken_at %}<div class="page-date">{{ p.photo_taken_at|replace('T',' ') }}</div>{% endif %}
+      {% if p.photo_taken_at %}
+        <div class="page-date" title="Date de prise (EXIF)">{{ p.photo_taken_at|replace('T',' ') }}</div>
+      {% else %}
+        <div class="page-date page-date-fallback" title="Date d'ajout dans l'album (EXIF non disponible)">
+          ajoutee {{ (p.created_at or '')|replace('T',' ') }}
+        </div>
+      {% endif %}
       {% if p.photo_gps_lat is not none and p.photo_gps_lng is not none %}
         <a class="page-gps" target="_blank" rel="noopener"
            href="https://www.google.com/maps?q={{ p.photo_gps_lat }},{{ p.photo_gps_lng }}">
