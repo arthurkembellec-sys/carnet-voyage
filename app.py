@@ -16,19 +16,26 @@ import os
 import io
 import sqlite3
 import secrets
+import logging
+import traceback
 from functools import wraps
 from datetime import datetime, timedelta
 
 import bcrypt
 import qrcode
 import qrcode.image.svg as qrsvg
+from PIL import Image, ExifTags
 from flask import (
     Flask, render_template, request, redirect, url_for, session,
-    jsonify, abort, flash
+    jsonify, abort, flash, send_from_directory
 )
 
+logging.basicConfig(level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s %(name)s: %(message)s')
+log = logging.getLogger('histoire')
+
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "1.2.0-album"
+APP_VERSION = "1.2.1-album-timeline"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 SECRET_KEY = os.environ.get('SECRET_KEY') or secrets.token_urlsafe(32)
@@ -378,22 +385,26 @@ def carnet_supprimer(cid_carnet):
 #                         v1.2 — ALBUM
 # ══════════════════════════════════════════════════════════════════════
 
-from flask import send_from_directory
-from PIL import Image, ExifTags
-
-
 def _carnet_pages(carnet_id):
-    """Retourne les pages d'un carnet, ordonnees, avec infos photo jointes."""
+    """
+    Retourne les pages d'un carnet ordonnees en TIMELINE chronologique :
+    - Photos triees par date EXIF (taken_at) si dispo, sinon date d'ajout
+    - Blocs texte intercales par date d'ajout (created_at)
+    L'ordre manuel (position) sert uniquement de tie-breaker.
+    """
     rows = query("""
         SELECT ap.*,
                p.file_path AS photo_path, p.thumb_path AS photo_thumb,
                p.width AS photo_width, p.height AS photo_height,
+               p.taken_at AS photo_taken_at,
                u.display_name AS added_by_name
         FROM album_pages ap
         LEFT JOIN photos p ON p.id = ap.photo_id
         LEFT JOIN users u ON u.id = ap.added_by
         WHERE ap.carnet_id = ?
-        ORDER BY ap.position ASC, ap.id ASC
+        ORDER BY
+            COALESCE(p.taken_at, ap.created_at) ASC,
+            ap.position ASC, ap.id ASC
     """, (carnet_id,))
     return [dict(r) for r in rows]
 
@@ -488,19 +499,23 @@ def carnet_upload_photos(cid_carnet):
     """Upload multi-photos. Renvoie JSON pour optimistic UI."""
     c = _get_carnet_or_404(cid_carnet)
     if not csrf_check():
-        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+        return jsonify({'ok': False, 'error': 'Session expiree (CSRF)'}), 403
     files = request.files.getlist('photos')
+    log.info("upload carnet=%s : %d fichier(s) recu(s)", cid_carnet, len(files))
     if not files:
-        return jsonify({'ok': False, 'error': 'Aucun fichier'}), 400
+        return jsonify({'ok': False, 'error': 'Aucun fichier recu'}), 400
     created = []
     errors = []
-    for f in files:
+    for idx, f in enumerate(files):
         if not f or not f.filename:
+            errors.append(f"#{idx+1}: fichier vide")
             continue
         try:
             data = _save_uploaded_photo(f, c['couple_id'])
         except Exception as e:
-            errors.append(str(e))
+            tb = traceback.format_exc()
+            log.error("upload #%d (%s) ECHEC: %s\n%s", idx + 1, f.filename, e, tb)
+            errors.append(f"{f.filename}: {type(e).__name__}: {e}")
             continue
         photo_id = execute(
             "INSERT INTO photos (couple_id, file_path, thumb_path, width, height, "
@@ -519,8 +534,10 @@ def carnet_upload_photos(cid_carnet):
             'photo_id': photo_id,
             'thumb_url': url_for('serve_upload', filename=data['thumb_path']),
             'full_url': url_for('serve_upload', filename=data['file_path']),
+            'taken_at': data['taken_at'],
             'width': data['width'], 'height': data['height'],
         })
+    log.info("upload carnet=%s : %d cree(s), %d erreur(s)", cid_carnet, len(created), len(errors))
     return jsonify({'ok': True, 'created': created, 'errors': errors})
 
 

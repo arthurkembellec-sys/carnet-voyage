@@ -33,6 +33,9 @@
                data-page-id="{{ p.id }}"
                loading="lazy" alt="">
         </a>
+        {% if p.photo_taken_at %}
+        <div class="page-date">{{ p.photo_taken_at|replace('T',' ') }}</div>
+        {% endif %}
         <div class="page-caption-wrap">
           <textarea class="page-caption" placeholder="Une legende..." rows="1"
                     data-page-id="{{ p.id }}">{{ p.caption or '' }}</textarea>
@@ -140,25 +143,51 @@
     });
   }
 
+  function fmtDate(iso) {
+    if (!iso) return '';
+    var s = String(iso).replace('T', ' ');
+    if (s.length >= 16) return s.substring(0, 16);
+    return s;
+  }
+
   async function uploadFiles(files) {
     if (!files || !files.length) return;
+    var total = files.length;
     setSaving();
+    saveStatus.textContent = 'Compression 0 / ' + total + '...';
+    saveStatus.className = 'save-indicator saving';
+
     const empty = document.getElementById('empty-album');
     if (empty) empty.style.display = 'none';
     const list = document.getElementById('pages-list');
 
     // Compression sequentielle (plus stable mobile que parallele)
     const compressed = [];
-    for (const f of files) {
+    const compressErrors = [];
+    var i = 0;
+    for (const f of Array.from(files)) {
+      i++;
+      saveStatus.textContent = 'Compression ' + i + ' / ' + total + '...';
+      if (!f || !f.type || !f.type.startsWith('image/')) {
+        compressErrors.push((f && f.name || '?') + ' : pas une image');
+        continue;
+      }
       try {
-        if (f.type && f.type.startsWith('image/')) {
-          compressed.push(await compressImage(f));
-        }
-      } catch (e) { console.warn('compress', e); }
+        const blob = await compressImage(f);
+        compressed.push(blob);
+      } catch (e) {
+        console.error('compress fail', f.name, e);
+        compressErrors.push((f.name || '?') + ' : compression');
+      }
     }
-    if (!compressed.length) { setError('Aucune image valide'); return; }
+    console.log('compresses:', compressed.length, '/', total, 'erreurs:', compressErrors);
+    if (!compressed.length) {
+      setError('Aucune image valide : ' + (compressErrors.join(', ') || 'inconnu'));
+      return;
+    }
 
     // Upload (multipart, multi-fichier)
+    saveStatus.textContent = 'Envoi ' + compressed.length + ' photo(s)...';
     const fd = new FormData();
     fd.append('_csrf', CSRF);
     compressed.forEach(function(f){ fd.append('photos', f, f.name); });
@@ -166,16 +195,25 @@
     try {
       const r = await fetch(URL_UPLOAD_PHOTOS, { method: 'POST', body: fd });
       const data = await r.json();
-      if (!data.ok) { setError('Upload echoue'); return; }
+      console.log('upload response:', data);
+      if (!data.ok) {
+        setError('Echec : ' + (data.error || 'inconnu'));
+        return;
+      }
+      if (data.errors && data.errors.length) {
+        console.warn('upload server errors:', data.errors);
+      }
       data.created.forEach(function(p){
         const li = document.createElement('li');
         li.className = 'page-item';
         li.dataset.pageId = p.page_id;
         li.dataset.type = 'photo';
+        var dateHtml = p.taken_at ? '<div class="page-date">' + fmtDate(p.taken_at) + '</div>' : '';
         li.innerHTML = `
           <a class="page-photo" href="javascript:void(0)" onclick="openViewer(${p.page_id})">
             <img src="${p.thumb_url}" data-full="${p.full_url}" data-page-id="${p.page_id}" loading="lazy" alt="">
           </a>
+          ${dateHtml}
           <div class="page-caption-wrap">
             <textarea class="page-caption" placeholder="Une legende..." rows="1" data-page-id="${p.page_id}"></textarea>
           </div>
@@ -187,8 +225,20 @@
         autoresize(ta);
       });
       updateCount();
-      setSaved();
-    } catch (e) { setError('Reseau'); console.error(e); }
+      var msg = data.created.length + ' ajoute(s)';
+      if (data.errors && data.errors.length) {
+        msg += ' · ' + data.errors.length + ' erreur(s)';
+        setError(msg);
+        console.warn('Erreurs serveur :', data.errors);
+      } else {
+        saveStatus.textContent = msg;
+        saveStatus.className = 'save-indicator saved';
+        setTimeout(setSaved, 1500);
+      }
+    } catch (e) {
+      console.error(e);
+      setError('Reseau : ' + e.message);
+    }
   }
 
   document.getElementById('file-photos').addEventListener('change', function(e){

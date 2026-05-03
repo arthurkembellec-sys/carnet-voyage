@@ -503,7 +503,19 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
   background: #f0eee9;
 }
 
-.page-caption-wrap { padding: 10px 4px 2px; }
+.page-date {
+  margin-top: 8px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--whisper);
+  font-family: var(--font-ui);
+  font-variant-numeric: tabular-nums;
+}
+
+.page-caption-wrap { padding: 6px 4px 2px; }
 .page-caption {
   width: 100%;
   border: 0;
