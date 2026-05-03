@@ -1,0 +1,56 @@
+{% extends '_base.html' %}
+{% block title %}Notre Histoire — Membres{% endblock %}
+{% block content %}
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <a href="{{ url_for('home') }}" class="brand">← Notre Histoire</a>
+  </div>
+</header>
+
+<main class="page">
+  <section class="hero">
+    <p class="kicker">{{ current_espace.name or 'Cet espace' }}</p>
+    <h1 class="display"><em>Membres.</em></h1>
+  </section>
+
+  <ul class="member-list">
+    {% for m in members %}
+    <li class="member-item">
+      <div class="member-avatar">{{ (m.display_name or m.email)[0]|upper }}</div>
+      <div class="member-info">
+        <div class="member-name">{{ m.display_name or m.email }}</div>
+        <div class="member-meta">
+          {{ m.email }}
+          {% if m.role == 'owner' %} · <span class="member-role">Createur</span>{% endif %}
+        </div>
+      </div>
+      <div class="member-since">depuis {{ (m.joined_at or '')|replace('T',' ')|truncate(10, true, '') }}</div>
+    </li>
+    {% endfor %}
+  </ul>
+
+  <div class="cta-row">
+    <a href="{{ url_for('invite_share') }}" class="btn btn-primary">Inviter quelqu'un</a>
+  </div>
+
+  {% if invitations %}
+  <section style="margin-top: 32px">
+    <h2 class="section-title">Invitations actives</h2>
+    <ul class="member-list">
+      {% for inv in invitations %}
+      <li class="member-item">
+        <div class="member-avatar" style="background:#F5F0E6">⏳</div>
+        <div class="member-info">
+          <div class="member-name">Lien d'invitation</div>
+          <div class="member-meta">expire {{ inv.expires_at|truncate(10, true, '') }}</div>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+</main>
+
+{% endblock %}

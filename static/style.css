@@ -147,6 +147,110 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
   font-size: 18px;
   letter-spacing: -0.01em;
 }
+/* ── Selecteur d'espace ──────────────────────────────────────────── */
+.espace-switcher {
+  position: relative;
+  margin-right: auto;
+  margin-left: 16px;
+}
+.espace-btn {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex; align-items: center; gap: 8px;
+  transition: background .2s;
+}
+.espace-btn:hover { background: rgba(28,26,23,0.04); }
+.espace-arrow { font-size: 10px; opacity: 0.5; }
+.espace-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 240px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: 0 12px 32px rgba(28,26,23,0.12);
+  z-index: 50;
+  padding: 6px;
+  display: flex; flex-direction: column;
+}
+.espace-menu[hidden] { display: none !important; }
+.espace-menu-item, .espace-menu-item-form { display: block; width: 100%; }
+.espace-menu-item-form { margin: 0; padding: 0; border: 0; background: transparent; }
+.espace-menu-item-form button.espace-menu-item { width: 100%; }
+.espace-menu-item {
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--ink);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: space-between;
+  text-decoration: none;
+  transition: background .15s;
+}
+.espace-menu-item:hover { background: rgba(28,26,23,0.04); text-decoration: none; }
+.espace-menu-item-active { background: rgba(28,26,23,0.06); font-weight: 600; }
+.espace-menu-kind {
+  font-size: 10px;
+  color: var(--whisper);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.espace-menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 6px 4px;
+}
+
+/* ── Liste membres ───────────────────────────────────────────────── */
+.member-list {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.member-item {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.member-avatar {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 600;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+.member-info { flex: 1; min-width: 0; }
+.member-name { font-weight: 500; font-size: 15px; color: var(--ink); }
+.member-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.member-role { color: var(--accent); font-weight: 500; }
+.member-since {
+  font-size: 11px; color: var(--whisper);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+@media (max-width: 480px) {
+  .espace-switcher { margin: 0; }
+  .espace-btn { font-size: 12px; padding: 6px 10px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .espace-menu { min-width: 220px; }
+}
+
 .topbar-nav { display: flex; gap: 18px; }
 .topbar-nav .link {
   font-size: 12px;

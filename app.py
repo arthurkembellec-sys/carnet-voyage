@@ -35,7 +35,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "1.2.2-album-exif-gps-marge"
+APP_VERSION = "1.3.0-multi-espaces"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 SECRET_KEY = os.environ.get('SECRET_KEY') or secrets.token_urlsafe(32)
@@ -146,6 +146,24 @@ def init_db():
         "ALTER TABLE photos ADD COLUMN gps_lng REAL",
         "ALTER TABLE album_pages ADD COLUMN is_margin INTEGER DEFAULT 0",
         "CREATE INDEX IF NOT EXISTS idx_photos_gps ON photos(couple_id, gps_lat, gps_lng)",
+        # ── v1.3 — multi-espaces (renommage logique : couple = espace) ─
+        "ALTER TABLE couples ADD COLUMN kind TEXT DEFAULT 'couple'",
+        """CREATE TABLE IF NOT EXISTS espace_members (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            espace_id   INTEGER NOT NULL REFERENCES couples(id) ON DELETE CASCADE,
+            user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role        TEXT DEFAULT 'member',
+            joined_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(espace_id, user_id)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_em_user ON espace_members(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_em_espace ON espace_members(espace_id)",
+        # Backfill : chaque user avec couple_id devient membre de cet espace
+        """INSERT OR IGNORE INTO espace_members (espace_id, user_id, role)
+           SELECT u.couple_id, u.id,
+                  CASE WHEN c.created_by = u.id THEN 'owner' ELSE 'member' END
+           FROM users u JOIN couples c ON c.id = u.couple_id
+           WHERE u.couple_id IS NOT NULL""",
     ]
     for sql in migrations:
         try:
@@ -202,15 +220,70 @@ def login_required(view):
     return wrapper
 
 
+def user_espaces(uid):
+    """Liste tous les espaces dont l'user est membre."""
+    if not uid:
+        return []
+    rows = query("""
+        SELECT c.*, em.role, em.joined_at
+        FROM couples c JOIN espace_members em ON em.espace_id = c.id
+        WHERE em.user_id = ?
+        ORDER BY em.joined_at ASC
+    """, (uid,))
+    return [dict(r) for r in rows]
+
+
+def is_member(uid, eid):
+    if not uid or not eid: return False
+    r = query(
+        "SELECT 1 FROM espace_members WHERE user_id=? AND espace_id=?",
+        (uid, eid), one=True
+    )
+    return bool(r)
+
+
+def current_espace_id():
+    """Retourne l'espace courant. Migration douce : fallback sur couple_id legacy."""
+    eid = session.get('espace_id')
+    if eid: return eid
+    # Fallback : si user a un couple_id (ancien modele), l'utilise comme espace
+    leg = session.get('couple_id')
+    if leg:
+        session['espace_id'] = leg
+        return leg
+    return None
+
+
+def current_espace():
+    eid = current_espace_id()
+    if not eid: return None
+    r = query("SELECT * FROM couples WHERE id=?", (eid,), one=True)
+    return dict(r) if r else None
+
+
+def set_current_espace(eid):
+    """Set l'espace courant si l'user est bien membre."""
+    uid = session.get('uid')
+    if not uid or not is_member(uid, eid):
+        return False
+    session['espace_id'] = int(eid)
+    session['couple_id'] = int(eid)  # rétro-compat
+    return True
+
+
 def couple_required(view):
+    """Decorator : require login + au moins un espace courant."""
     @wraps(view)
     def wrapper(*a, **kw):
         if not session.get('uid'):
             return redirect(url_for('login', next=request.path))
-        if not session.get('couple_id'):
+        if not current_espace_id():
             return redirect(url_for('onboarding_couple'))
         return view(*a, **kw)
     return wrapper
+
+# Alias pour clarté
+espace_required = couple_required
 
 
 def csrf_token():
@@ -229,8 +302,12 @@ def csrf_check():
 @app.context_processor
 def inject_globals():
     """Variables disponibles dans tous les templates."""
+    u = current_user()
+    espaces = user_espaces(u['id']) if u else []
     return {
-        'current_user': current_user(),
+        'current_user': u,
+        'current_espace': current_espace(),
+        'user_espaces': espaces,
         'csrf_token': csrf_token,
         'app_version': APP_VERSION,
     }
@@ -260,12 +337,12 @@ CARNET_TYPES = [
 
 @app.route('/')
 def home():
-    """Accueil : liste verticale des carnets du couple, avec filtre par type."""
+    """Accueil : liste verticale des carnets de l'espace courant, filtre par type."""
     if not session.get('uid'):
         return redirect(url_for('login'))
-    if not session.get('couple_id'):
+    cid = current_espace_id()
+    if not cid:
         return redirect(url_for('onboarding_couple'))
-    cid = session['couple_id']
     type_filter = request.args.get('type') or ''
     if type_filter and type_filter not in dict(CARNET_TYPES):
         type_filter = ''
@@ -291,9 +368,9 @@ def home():
 
 # ── Routes : carnets ─────────────────────────────────────────────────
 def _get_carnet_or_404(cid_carnet):
-    """Recupere un carnet en verifiant qu'il appartient au couple courant."""
+    """Recupere un carnet en verifiant qu'il appartient a l'espace courant."""
     c = query("SELECT * FROM carnets WHERE id=? AND deleted_at IS NULL", (cid_carnet,), one=True)
-    if not c or c['couple_id'] != session.get('couple_id'):
+    if not c or c['couple_id'] != current_espace_id():
         abort(404)
     return dict(c)
 
@@ -335,7 +412,7 @@ def carnet_nouveau():
         cid = execute(
             "INSERT INTO carnets (couple_id, title, type, location, date_start, date_end, "
             "status, created_by) VALUES (?,?,?,?,?,?,?,?)",
-            (session['couple_id'], data['title'], data['type'], data['location'],
+            (current_espace_id(), data['title'], data['type'], data['location'],
              data['date_start'], data['date_end'], 'active', session['uid'])
         )
         return redirect(url_for('carnet_view', cid_carnet=cid))
@@ -597,7 +674,7 @@ def page_attach_photo(page_id):
     page = query("SELECT ap.*, c.couple_id FROM album_pages ap "
                  "JOIN carnets c ON c.id=ap.carnet_id WHERE ap.id=?",
                  (page_id,), one=True)
-    if not page or page['couple_id'] != session['couple_id']:
+    if not page or page['couple_id'] != current_espace_id():
         return jsonify({'ok': False, 'error': '404'}), 404
     f = request.files.get('photo')
     if not f or not f.filename:
@@ -642,7 +719,7 @@ def page_detach_photo(page_id):
     page = query("SELECT ap.*, c.couple_id FROM album_pages ap "
                  "JOIN carnets c ON c.id=ap.carnet_id WHERE ap.id=?",
                  (page_id,), one=True)
-    if not page or page['couple_id'] != session['couple_id']:
+    if not page or page['couple_id'] != current_espace_id():
         return jsonify({'ok': False, 'error': '404'}), 404
     execute(
         "UPDATE album_pages SET photo_id=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -660,7 +737,7 @@ def page_toggle_margin(page_id):
     page = query("SELECT ap.*, c.couple_id FROM album_pages ap "
                  "JOIN carnets c ON c.id=ap.carnet_id WHERE ap.id=?",
                  (page_id,), one=True)
-    if not page or page['couple_id'] != session['couple_id']:
+    if not page or page['couple_id'] != current_espace_id():
         return jsonify({'ok': False, 'error': '404'}), 404
     new_val = 0 if page['is_margin'] else 1
     execute(
@@ -678,7 +755,7 @@ def page_update_caption(page_id):
     page = query("SELECT ap.*, c.couple_id FROM album_pages ap "
                  "JOIN carnets c ON c.id=ap.carnet_id WHERE ap.id=?",
                  (page_id,), one=True)
-    if not page or page['couple_id'] != session['couple_id']:
+    if not page or page['couple_id'] != current_espace_id():
         return jsonify({'ok': False, 'error': '404'}), 404
     caption = (request.form.get('caption') or '').strip()
     execute(
@@ -696,7 +773,7 @@ def page_update_text(page_id):
     page = query("SELECT ap.*, c.couple_id FROM album_pages ap "
                  "JOIN carnets c ON c.id=ap.carnet_id WHERE ap.id=?",
                  (page_id,), one=True)
-    if not page or page['couple_id'] != session['couple_id']:
+    if not page or page['couple_id'] != current_espace_id():
         return jsonify({'ok': False, 'error': '404'}), 404
     text = (request.form.get('text_content') or '').strip()
     execute(
@@ -730,7 +807,7 @@ def page_supprimer(page_id):
     page = query("SELECT ap.*, c.couple_id FROM album_pages ap "
                  "JOIN carnets c ON c.id=ap.carnet_id WHERE ap.id=?",
                  (page_id,), one=True)
-    if not page or page['couple_id'] != session['couple_id']:
+    if not page or page['couple_id'] != current_espace_id():
         return jsonify({'ok': False, 'error': '404'}), 404
     # On supprime la page (la photo reste en BDD : pourra etre reutilisee plus tard)
     execute("DELETE FROM album_pages WHERE id=?", (page_id,))
@@ -749,7 +826,7 @@ def serve_upload(filename):
         owner_couple = int(parts[0])
     except ValueError:
         abort(404)
-    if owner_couple != session.get('couple_id'):
+    if owner_couple != current_espace_id():
         abort(403)
     return send_from_directory(UPLOAD_DIR, filename, max_age=31536000)
 
@@ -783,14 +860,20 @@ def login():
                 (email, display_name or email.split('@')[0], hash_pw(password))
             )
             session['uid'] = uid
-            session['couple_id'] = None
+            session.pop('couple_id', None); session.pop('espace_id', None)
             return redirect(next_url if next_url.startswith('/') else '/')
         else:  # login
             if not existing or not check_pw(password, existing['password_hash']):
                 flash("Email ou mot de passe incorrect.", "err")
                 return render_template('login.html', email=email, next_url=next_url)
             session['uid'] = existing['id']
-            session['couple_id'] = existing['couple_id']
+            # Espace par defaut : 1er espace dont l'user est membre
+            esps = user_espaces(existing['id'])
+            if esps:
+                session['espace_id'] = esps[0]['id']
+                session['couple_id'] = esps[0]['id']  # rétro-compat
+            else:
+                session.pop('espace_id', None); session.pop('couple_id', None)
             return redirect(next_url if next_url.startswith('/') else '/')
     return render_template('login.html', next_url=next_url)
 
@@ -802,33 +885,111 @@ def logout():
 
 
 # ── Routes : onboarding couple ────────────────────────────────────────
+ESPACE_KINDS = [
+    ('couple', 'Couple'),
+    ('amis',   'Amis'),
+    ('famille','Famille'),
+    ('solo',   'Solo'),
+]
+
+
 @app.route('/onboarding/couple', methods=['GET', 'POST'])
 @login_required
 def onboarding_couple():
-    """Creation du couple par le 1er user. Redirige si deja dans un couple."""
+    """Creation du 1er espace par l'user. Redirige si deja dans un espace."""
     user = current_user()
-    if user.get('couple_id'):
+    if current_espace_id():
         return redirect(url_for('home'))
     if request.method == 'POST':
         if not csrf_check():
             flash("Session expiree.", "err")
             return redirect(url_for('onboarding_couple'))
         name = (request.form.get('name') or '').strip()
+        kind = (request.form.get('kind') or 'couple').strip()
+        if kind not in dict(ESPACE_KINDS):
+            kind = 'couple'
         cid = execute(
-            "INSERT INTO couples (name, created_by) VALUES (?,?)",
-            (name, user['id'])
+            "INSERT INTO couples (name, kind, created_by) VALUES (?,?,?)",
+            (name, kind, user['id'])
         )
+        execute("INSERT INTO espace_members (espace_id, user_id, role) VALUES (?,?,?)",
+                (cid, user['id'], 'owner'))
         execute("UPDATE users SET couple_id=? WHERE id=?", (cid, user['id']))
+        session['espace_id'] = cid
         session['couple_id'] = cid
         return redirect(url_for('invite_share'))
-    return render_template('onboarding.html', user=user)
+    return render_template('onboarding.html', user=user, kinds=ESPACE_KINDS)
+
+
+@app.route('/espace/nouveau', methods=['GET', 'POST'])
+@login_required
+def espace_nouveau():
+    """Creer un nouvel espace pour l'user (en plus de ses espaces existants)."""
+    user = current_user()
+    if request.method == 'POST':
+        if not csrf_check():
+            flash("Session expiree.", "err")
+            return redirect(url_for('espace_nouveau'))
+        name = (request.form.get('name') or '').strip()
+        kind = (request.form.get('kind') or 'couple').strip()
+        if kind not in dict(ESPACE_KINDS):
+            kind = 'couple'
+        cid = execute(
+            "INSERT INTO couples (name, kind, created_by) VALUES (?,?,?)",
+            (name, kind, user['id'])
+        )
+        execute("INSERT INTO espace_members (espace_id, user_id, role) VALUES (?,?,?)",
+                (cid, user['id'], 'owner'))
+        session['espace_id'] = cid
+        session['couple_id'] = cid
+        return redirect(url_for('invite_share'))
+    return render_template('espace_nouveau.html', user=user, kinds=ESPACE_KINDS)
+
+
+@app.route('/espace/switch', methods=['POST'])
+@login_required
+def espace_switch():
+    """Bascule sur un autre espace dont l'user est membre."""
+    if not csrf_check():
+        return redirect(url_for('home'))
+    eid = request.form.get('espace_id')
+    try:
+        eid = int(eid)
+    except (TypeError, ValueError):
+        return redirect(url_for('home'))
+    if set_current_espace(eid):
+        return redirect(url_for('home'))
+    flash("Espace inaccessible.", "err")
+    return redirect(url_for('home'))
+
+
+@app.route('/espace/membres')
+@couple_required
+def espace_membres():
+    """Liste les membres de l'espace courant + invitations actives."""
+    eid = current_espace_id()
+    members = query("""
+        SELECT u.id, u.email, u.display_name, em.role, em.joined_at
+        FROM espace_members em JOIN users u ON u.id = em.user_id
+        WHERE em.espace_id = ?
+        ORDER BY em.joined_at ASC
+    """, (eid,))
+    invitations = query("""
+        SELECT * FROM invitations
+        WHERE couple_id=? AND utilise=0 AND expires_at > ?
+        ORDER BY created_at DESC
+    """, (eid, datetime.utcnow().isoformat()))
+    return render_template('espace_membres.html',
+        members=[dict(m) for m in members],
+        invitations=[dict(i) for i in invitations],
+    )
 
 
 @app.route('/invite/share')
 @couple_required
 def invite_share():
-    """Genere (si besoin) un lien d'invitation actif et affiche QR + URL."""
-    cid = session['couple_id']
+    """Genere (si besoin) un lien d'invitation pour l'espace courant."""
+    cid = current_espace_id()
     inv = query(
         "SELECT * FROM invitations WHERE couple_id=? AND utilise=0 AND expires_at > ? "
         "ORDER BY created_at DESC LIMIT 1",
@@ -855,7 +1016,11 @@ def invite_share():
 
 @app.route('/invite/<token>', methods=['GET', 'POST'])
 def invite_accept(token):
-    """Landing 2e partenaire : signup + auto-rattachement au couple."""
+    """
+    Landing pour rejoindre un espace via lien d'invitation.
+    Multi-espaces : un user peut etre membre de plusieurs espaces, donc
+    on l'AJOUTE comme membre (pas de blocage si deja dans un autre).
+    """
     inv = query(
         "SELECT * FROM invitations WHERE token=? AND utilise=0 AND expires_at > ?",
         (token, datetime.utcnow().isoformat()),
@@ -868,12 +1033,22 @@ def invite_accept(token):
     if not couple:
         return render_template('invite_invalid.html'), 410
 
-    # Si deja connecte avec un autre couple → bloque
+    eid = inv['couple_id']
     user = current_user()
-    if user and user.get('couple_id') and user['couple_id'] != inv['couple_id']:
-        flash("Vous etes deja dans un autre couple.", "err")
+
+    # Cas 1 : user deja connecte → on l'ajoute simplement comme membre
+    if user:
+        if is_member(user['id'], eid):
+            flash("Vous etes deja membre de cet espace.", "ok")
+        else:
+            execute("INSERT OR IGNORE INTO espace_members (espace_id, user_id, role) VALUES (?,?,?)",
+                    (eid, user['id'], 'member'))
+            execute("UPDATE invitations SET utilise=1 WHERE id=?", (inv['id'],))
+        session['espace_id'] = eid
+        session['couple_id'] = eid
         return redirect(url_for('home'))
 
+    # Cas 2 : user non connecte → signup ou login
     if request.method == 'POST':
         if not csrf_check():
             flash("Session expiree.", "err")
@@ -887,25 +1062,23 @@ def invite_accept(token):
         if len(password) < 8:
             flash("Mot de passe : 8 caracteres minimum.", "err")
             return render_template('invite_accept.html', couple=couple, token=token, email=email, display_name=display_name)
-        # Si user existant non rattache → on rattache, sinon nouveau user
         existing = query("SELECT * FROM users WHERE email=?", (email,), one=True)
         if existing:
             if not check_pw(password, existing['password_hash']):
                 flash("Cet email existe deja. Le mot de passe ne correspond pas.", "err")
                 return render_template('invite_accept.html', couple=couple, token=token, email=email)
-            if existing['couple_id'] and existing['couple_id'] != inv['couple_id']:
-                flash("Cet email est deja rattache a un autre couple.", "err")
-                return render_template('invite_accept.html', couple=couple, token=token)
-            execute("UPDATE users SET couple_id=? WHERE id=?", (inv['couple_id'], existing['id']))
             uid = existing['id']
         else:
             uid = execute(
                 "INSERT INTO users (email, display_name, password_hash, couple_id) VALUES (?,?,?,?)",
-                (email, display_name or email.split('@')[0], hash_pw(password), inv['couple_id'])
+                (email, display_name or email.split('@')[0], hash_pw(password), eid)
             )
+        execute("INSERT OR IGNORE INTO espace_members (espace_id, user_id, role) VALUES (?,?,?)",
+                (eid, uid, 'member'))
         execute("UPDATE invitations SET utilise=1 WHERE id=?", (inv['id'],))
         session['uid'] = uid
-        session['couple_id'] = inv['couple_id']
+        session['espace_id'] = eid
+        session['couple_id'] = eid
         return redirect(url_for('home'))
 
     return render_template('invite_accept.html', couple=couple, token=token)

@@ -1,28 +1,51 @@
 {% extends '_base.html' %}
-{% block title %}Notre Histoire — Notre compte{% endblock %}
+{% block title %}Notre Histoire — Notre espace{% endblock %}
 {% block content %}
 
 <main class="auth-wrap">
   <section class="auth-card">
     <p class="kicker">Bienvenue {{ user.display_name }}</p>
-    <h1 class="display"><em>Comment veux-tu<br>l'appeler ?</em></h1>
+    <h1 class="display"><em>Avec qui vas-tu<br>partager ?</em></h1>
     <p class="lead">
-      Tu peux donner un nom au compte que vous allez partager.
-      C'est totalement optionnel — vous pourrez le changer plus tard.
+      Cree ton premier espace partage. Tu pourras en avoir plusieurs :
+      un avec ta partenaire, un avec un ami pour un voyage, un avec ta famille.
     </p>
 
     <form method="POST" action="{{ url_for('onboarding_couple') }}" class="form">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
 
+      <div class="field">
+        <span class="label">Type d'espace</span>
+        <div class="segmented">
+          {% for key, label in kinds %}
+          <label class="seg {% if loop.first %}seg-active{% endif %}">
+            <input type="radio" name="kind" value="{{ key }}" {% if loop.first %}checked{% endif %} hidden>
+            <span>{{ label }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
       <label class="field">
-        <span class="label">Nom du compte</span>
-        <input type="text" name="name" placeholder="ex. Arthur &amp; Laurie" maxlength="80" autofocus>
+        <span class="label">Nom de l'espace</span>
+        <input type="text" name="name" placeholder="ex. Arthur &amp; Laurie · Famille Kembellec · Rando avec Theo" maxlength="80" autofocus>
         <span class="hint">Optionnel.</span>
       </label>
 
-      <button type="submit" class="btn btn-primary btn-block">Creer notre compte</button>
+      <button type="submit" class="btn btn-primary btn-block">Creer cet espace</button>
     </form>
   </section>
 </main>
+
+<script>
+  document.querySelectorAll('.segmented .seg').forEach(function(seg){
+    seg.addEventListener('click', function(){
+      document.querySelectorAll('.segmented .seg').forEach(function(s){ s.classList.remove('seg-active'); });
+      seg.classList.add('seg-active');
+      var input = seg.querySelector('input[type=radio]');
+      if (input) input.checked = true;
+    });
+  });
+</script>
 
 {% endblock %}
