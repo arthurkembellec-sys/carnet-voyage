@@ -42,10 +42,12 @@
   {% if p.type == 'photo' %}
     <div class="page-meta">
       {% if p.photo_taken_at %}
-        <div class="page-date" title="Date de prise (EXIF)">{{ p.photo_taken_at|replace('T',' ') }}</div>
+        <div class="page-date" title="Date de prise (EXIF)" data-iso="{{ p.photo_taken_at }}" data-fmt="datetime">
+          {{ p.photo_taken_at|replace('T',' ') }}
+        </div>
       {% else %}
         <div class="page-date page-date-fallback" title="Date d'ajout">
-          ajoutee {{ (p.created_at or '')|replace('T',' ') }}
+          ajoutée <span data-iso="{{ p.created_at }}" data-fmt="datetime">{{ (p.created_at or '')|replace('T',' ') }}</span>
         </div>
       {% endif %}
       {% if p.photo_gps_lat is not none and p.photo_gps_lng is not none %}

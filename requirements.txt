@@ -7,3 +7,4 @@ Pillow>=10.0.0
 python-dotenv>=1.0.0
 piexif>=1.1.3
 json5>=0.9.14
+pywebpush>=2.0.0

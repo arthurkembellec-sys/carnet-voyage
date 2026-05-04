@@ -11,6 +11,10 @@
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT@0,9..144,300..900,0..100;1,9..144,300..900,0..100&family=Geist:wght@300..700&display=swap" rel="stylesheet">
 
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Notre Histoire">
   {% block extra_head %}{% endblock %}
 </head>
 <body data-space-accent="{{ current_accent or 'terracotta' }}">
@@ -27,6 +31,42 @@
 
 {% block content %}{% endblock %}
 
+<script>
+  // ── Heure locale : convertit tous les [data-iso] en heure du navigateur ──
+  (function(){
+    function fmt(iso, fmt) {
+      var d = new Date(iso.endsWith('Z') ? iso : iso + 'Z');
+      if (isNaN(d.getTime())) return null;
+      if (fmt === 'time')      return d.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
+      if (fmt === 'date')      return d.toLocaleDateString('fr-FR');
+      if (fmt === 'datetime')  return d.toLocaleString('fr-FR', {dateStyle:'short', timeStyle:'short'});
+      if (fmt === 'day')       return d.toLocaleDateString('fr-FR', {weekday:'long', day:'numeric', month:'long'});
+      if (fmt === 'daynum')    return d.toLocaleDateString('fr-FR', {day:'numeric', month:'short', year:'numeric'});
+      return d.toLocaleString('fr-FR');
+    }
+    function paint() {
+      document.querySelectorAll('[data-iso]').forEach(function(el){
+        var iso = el.dataset.iso;
+        if (!iso || el.dataset.painted) return;
+        var f = el.dataset.fmt || 'datetime';
+        var v = fmt(iso, f);
+        if (v) { el.textContent = v; el.dataset.painted = '1'; }
+      });
+    }
+    if (document.readyState !== 'loading') paint();
+    else document.addEventListener('DOMContentLoaded', paint);
+    // Repaint apres ajouts dynamiques (MutationObserver simple)
+    new MutationObserver(paint).observe(document.body, {childList:true, subtree:true});
+  })();
+
+  // ── Service Worker (PWA + Push) ──────────────────────────────────
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function(){
+      navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}", { scope: '/' })
+        .catch(function(e){ console.warn('SW register fail:', e); });
+    });
+  }
+</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

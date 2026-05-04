@@ -11,6 +11,7 @@
       <a href="{{ url_for('histoire') }}" class="tab-link tab-link-active">Histoire</a>
     </nav>
     <nav class="topbar-nav">
+      <button type="button" class="link link-btn" id="btn-notifs" title="Activer les notifications">🔔 Notifs</button>
       <a href="{{ url_for('histoire_import') }}" class="link" title="Importer une archive de conversation">📥 Importer</a>
     </nav>
   </div>
@@ -71,7 +72,7 @@
       {% set day = (m.sent_at or '')[:10] %}
       {% if day != ns.prev_day %}
         {% set ns.prev_day = day %}
-        <div class="day-separator">{{ day }}</div>
+        <div class="day-separator" data-iso="{{ m.sent_at }}" data-fmt="day">{{ day }}</div>
       {% endif %}
 
       {# Bulle message #}
@@ -90,7 +91,7 @@
           </a>
         {% endif %}
         <div class="message-meta">
-          <span class="message-time">{{ (m.sent_at or '')[11:16] }}</span>
+          <span class="message-time" data-iso="{{ m.sent_at }}" data-fmt="time">{{ (m.sent_at or '')[11:16] }}</span>
           {% if m.edited_at %}<span class="message-edited">modifié</span>{% endif %}
           {% if is_self and m.kind == 'live' %}
             <button type="button" class="message-action" onclick="editMessage({{ m.id }}, this)">✎</button>
@@ -268,6 +269,79 @@
       window.scrollTo(0, document.body.scrollHeight);
     }
   });
+
+  // ── Notifications push ─────────────────────────────────────────
+  function urlBase64ToUint8Array(b64) {
+    const padding = '='.repeat((4 - b64.length % 4) % 4);
+    const base64 = (b64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const raw = window.atob(base64);
+    const arr = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+    return arr;
+  }
+
+  async function setupPushUI() {
+    var btn = document.getElementById('btn-notifs');
+    if (!btn) return;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      btn.style.display = 'none';
+      return;
+    }
+    // Recupere cle VAPID
+    var keyResp = await fetch('/push/vapid-key');
+    var keyData = await keyResp.json();
+    if (!keyData.public_key) {
+      btn.title = 'Notifications non configurees (admin)';
+      btn.style.opacity = 0.4;
+      return;
+    }
+    // Etat actuel
+    var reg = await navigator.serviceWorker.ready;
+    var sub = await reg.pushManager.getSubscription();
+    if (sub && Notification.permission === 'granted') {
+      btn.textContent = '🔔 Activées';
+      btn.classList.add('link-active');
+    }
+
+    btn.addEventListener('click', async function(){
+      try {
+        var reg = await navigator.serviceWorker.ready;
+        var sub = await reg.pushManager.getSubscription();
+        if (sub) {
+          // Desabonnement
+          await fetch('/push/unsubscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+            body: JSON.stringify({ endpoint: sub.endpoint }),
+          });
+          await sub.unsubscribe();
+          btn.textContent = '🔔 Notifs';
+          btn.classList.remove('link-active');
+          return;
+        }
+        // Abonnement
+        if (Notification.permission !== 'granted') {
+          var perm = await Notification.requestPermission();
+          if (perm !== 'granted') return;
+        }
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(keyData.public_key),
+        });
+        await fetch('/push/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+          body: JSON.stringify(sub.toJSON()),
+        });
+        btn.textContent = '🔔 Activées';
+        btn.classList.add('link-active');
+      } catch (e) {
+        console.error('push fail', e);
+        alert('Impossible d\'activer les notifications : ' + e.message);
+      }
+    });
+  }
+  setupPushUI();
 </script>
 
 {% endblock %}

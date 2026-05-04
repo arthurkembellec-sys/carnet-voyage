@@ -110,7 +110,11 @@
 
 html, body {
   margin: 0; padding: 0;
-  background: var(--bg);
+  /* Demande Arthur : teinte legere du fond avec l'accent (~4%) pour
+     personnaliser l'univers de chaque espace tout en restant lisible.
+     Fallback : --bg-primary si color-mix() non supporte. */
+  background: var(--bg-primary);
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg-primary));
   color: var(--ink);
   font-family: var(--font-ui);
   font-weight: 400;
@@ -375,8 +379,15 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  padding: 0;
 }
 .topbar-nav .link:hover { color: var(--ink); text-decoration: none; }
+.topbar-nav .link.link-active { color: var(--accent); }
+.link-btn { display: inline-flex; align-items: center; }
 
 .cta-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
 

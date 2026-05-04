@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "2.1.1-import-jsx"
+APP_VERSION = "2.2.0-pwa-push-localtime"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
@@ -58,6 +58,11 @@ SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
 SMTP_USER = os.environ.get('SMTP_USER', '')
 SMTP_PASS = os.environ.get('SMTP_PASS', '')
 SMTP_FROM = os.environ.get('SMTP_FROM', SMTP_USER)
+
+# Web Push (PWA notifications)
+VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')
+VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')
+VAPID_SUBJECT = os.environ.get('VAPID_SUBJECT', 'mailto:arthur.kembellec@gmail.com')
 
 os.makedirs(os.path.dirname(DB_PATH) or '.', exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -267,6 +272,20 @@ def init_db():
         "ALTER TABLE carnets ADD COLUMN pdf_margin_position TEXT DEFAULT 'right'",
         # ── v2.1 — charte : couleur d'accent par espace ───────────────
         "ALTER TABLE couples ADD COLUMN accent TEXT DEFAULT 'terracotta'",
+        # ── v2.2 — Web Push : abonnements aux notifications PWA ──────
+        """CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            espace_id INTEGER REFERENCES couples(id) ON DELETE CASCADE,
+            endpoint TEXT NOT NULL,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            user_agent TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, endpoint)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_push_espace ON push_subscriptions(espace_id)",
         # ── v2.0 — Histoire & Conversations ────────────────────────────
         """CREATE TABLE IF NOT EXISTS conversations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2568,12 +2587,23 @@ def histoire_post_message():
         return jsonify({'ok': False, 'error': 'Message vide'}), 400
 
     sent_at = datetime.utcnow().isoformat()
+    user = current_user()
     mid = execute(
         "INSERT INTO messages (conversation_id, kind, sender_type, sender_id, sender_label, "
         "body, attachment_type, attachment_ref, sent_at) VALUES (?,?,?,?,?,?,?,?,?)",
-        (conv['id'], 'live', 'member', session['uid'], current_user()['display_name'],
+        (conv['id'], 'live', 'member', session['uid'], user['display_name'],
          body, attachment_type, attachment_ref, sent_at)
     )
+    # Notif push aux autres membres de l'espace
+    try:
+        preview = (body[:80] + '...') if len(body) > 80 else (body or '📷 Photo')
+        _notify_espace(eid, session['uid'], {
+            'title': f"{user['display_name']} — Notre Histoire",
+            'body': preview,
+            'url': url_for('histoire'),
+        })
+    except Exception as e:
+        log.warning("notify push echec: %s", e)
     return jsonify({'ok': True, 'message_id': mid, 'sent_at': sent_at})
 
 
@@ -2615,6 +2645,112 @@ def histoire_message_supprimer(msg_id):
         return jsonify({'ok': False, 'error': "Auteur seulement"}), 403
     execute("UPDATE messages SET deleted_at=CURRENT_TIMESTAMP WHERE id=?", (msg_id,))
     return jsonify({'ok': True})
+
+
+# ══════════════════════════════════════════════════════════════════════
+#                v2.2 — WEB PUSH NOTIFICATIONS (PWA)
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route('/push/vapid-key')
+def push_vapid_key():
+    """Retourne la cle publique VAPID (utilisee par le client pour s'abonner)."""
+    return jsonify({'public_key': VAPID_PUBLIC_KEY})
+
+
+@app.route('/push/subscribe', methods=['POST'])
+@login_required
+def push_subscribe():
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    import json as _json
+    raw = request.get_data(as_text=True) or '{}'
+    try:
+        data = _json.loads(raw)
+    except Exception:
+        return jsonify({'ok': False, 'error': 'JSON invalide'}), 400
+    endpoint = data.get('endpoint')
+    keys = data.get('keys') or {}
+    p256dh = keys.get('p256dh')
+    auth = keys.get('auth')
+    if not endpoint or not p256dh or not auth:
+        return jsonify({'ok': False, 'error': 'Donnees manquantes'}), 400
+    ua = request.headers.get('User-Agent', '')[:200]
+    eid = current_espace_id()
+    # ON CONFLICT : update si endpoint deja la
+    try:
+        execute("INSERT INTO push_subscriptions (user_id, espace_id, endpoint, "
+                "p256dh, auth, user_agent) VALUES (?,?,?,?,?,?)",
+                (session['uid'], eid, endpoint, p256dh, auth, ua))
+    except sqlite3.IntegrityError:
+        execute("UPDATE push_subscriptions SET p256dh=?, auth=?, espace_id=?, "
+                "user_agent=? WHERE user_id=? AND endpoint=?",
+                (p256dh, auth, eid, ua, session['uid'], endpoint))
+    return jsonify({'ok': True})
+
+
+@app.route('/push/unsubscribe', methods=['POST'])
+@login_required
+def push_unsubscribe():
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    import json as _json
+    raw = request.get_data(as_text=True) or '{}'
+    try:
+        data = _json.loads(raw)
+    except Exception:
+        return jsonify({'ok': False, 'error': 'JSON invalide'}), 400
+    endpoint = data.get('endpoint')
+    if not endpoint:
+        return jsonify({'ok': False, 'error': 'endpoint requis'}), 400
+    execute("DELETE FROM push_subscriptions WHERE user_id=? AND endpoint=?",
+            (session['uid'], endpoint))
+    return jsonify({'ok': True})
+
+
+def _send_push(subscription_row, payload_dict):
+    """Envoi un push WebPush. Silencieux en cas d'erreur, supprime si 410/404."""
+    if not VAPID_PRIVATE_KEY:
+        return False
+    try:
+        from pywebpush import webpush, WebPushException
+        import json as _json
+        webpush(
+            subscription_info={
+                'endpoint': subscription_row['endpoint'],
+                'keys': {'p256dh': subscription_row['p256dh'], 'auth': subscription_row['auth']},
+            },
+            data=_json.dumps(payload_dict),
+            vapid_private_key=VAPID_PRIVATE_KEY,
+            vapid_claims={'sub': VAPID_SUBJECT},
+            ttl=86400,
+        )
+        return True
+    except Exception as e:
+        msg = str(e)
+        log.info("push send fail: %s", msg[:200])
+        # 410 Gone / 404 Not Found -> abonnement expire, on supprime
+        if '410' in msg or '404' in msg or 'expired' in msg.lower():
+            try:
+                execute("DELETE FROM push_subscriptions WHERE id=?", (subscription_row['id'],))
+            except Exception:
+                pass
+        return False
+
+
+def _notify_espace(espace_id, exclude_user_id, payload):
+    """Envoi notif a tous les membres de l'espace (sauf l'expediteur)."""
+    if not VAPID_PRIVATE_KEY:
+        return
+    subs = query("""
+        SELECT ps.* FROM push_subscriptions ps
+        JOIN espace_members em ON em.user_id = ps.user_id AND em.espace_id = ps.espace_id
+        WHERE ps.espace_id = ? AND ps.user_id != ?
+    """, (espace_id, exclude_user_id))
+    for s in subs:
+        try:
+            _send_push(dict(s), payload)
+        except Exception as e:
+            log.warning("notify echec sub=%s: %s", s.get('id'), e)
 
 
 def _parse_jsx_chapters(src):
