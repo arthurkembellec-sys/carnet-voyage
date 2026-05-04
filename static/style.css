@@ -1092,6 +1092,124 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
 .backup-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
 .backup-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
+/* ── Profil (v1.6) ────────────────────────────────────────────────── */
+.profil-section {
+  margin-top: 40px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+.profil-section:first-of-type { border-top: 0; padding-top: 0; }
+
+.profil-avatar-row {
+  display: flex; gap: 24px; align-items: flex-start;
+  flex-wrap: wrap;
+}
+.profil-avatar-wrap {
+  display: flex; flex-direction: column;
+  align-items: center; gap: 12px;
+  flex-shrink: 0;
+}
+.profil-avatar {
+  width: 96px; height: 96px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+}
+.profil-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.profil-avatar-initial {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 42px;
+}
+.profil-avatar-actions {
+  display: flex; gap: 6px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+}
+.stat-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 18px;
+  text-align: center;
+}
+.stat-num {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 36px;
+  line-height: 1;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.stat-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--whisper);
+  margin-top: 8px;
+}
+
+.espace-membership-list {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.espace-membership-item {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.espace-membership-info { flex: 1; min-width: 0; }
+.espace-membership-name {
+  font-weight: 500;
+  font-size: 15px;
+}
+.espace-membership-meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.espace-kind-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(28,26,23,0.06);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+/* Danger zone (compte) */
+.profil-danger { border-top-color: var(--error-ink); }
+.danger-details {
+  margin-top: 16px;
+}
+.danger-details summary {
+  cursor: pointer;
+  list-style: none;
+}
+.danger-details summary::-webkit-details-marker { display: none; }
+.danger-details summary::marker { content: ''; }
+.danger-body {
+  margin-top: 16px;
+  padding: 18px;
+  background: var(--error-bg);
+  border-radius: var(--r-md);
+}
+
 /* ══════════════════════════════════════════════════════════════════
    v1.4 — CARNETS DE SOUHAIT
    ══════════════════════════════════════════════════════════════════ */

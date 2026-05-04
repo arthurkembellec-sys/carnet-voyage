@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "1.5.0-pdf-reveries"
+APP_VERSION = "1.6.0-profil"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
@@ -260,6 +260,8 @@ def init_db():
         "ALTER TABLE carnets ADD COLUMN souhait_kind TEXT DEFAULT 'voyage'",
         # ── v1.2.5 — drag & drop : sort_mode 'chrono' (default) ou 'manual'
         "ALTER TABLE carnets ADD COLUMN sort_mode TEXT DEFAULT 'chrono'",
+        # ── v1.6 — soft delete utilisateurs (fenetre 30j de recuperation)
+        "ALTER TABLE users ADD COLUMN deleted_at TIMESTAMP DEFAULT NULL",
         # ── v1.4 — items des carnets de souhait (link/photo/note/lieu/budget)
         """CREATE TABLE IF NOT EXISTS carnet_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1808,6 +1810,9 @@ def login():
             if not existing or not check_pw(password, existing['password_hash']):
                 flash("Email ou mot de passe incorrect.", "err")
                 return render_template('login.html', email=email, next_url=next_url)
+            if existing['deleted_at']:
+                flash("Compte supprime. Contactez le support pour restaurer (30j max).", "err")
+                return render_template('login.html', email=email, next_url=next_url)
             session['uid'] = existing['id']
             # Espace par defaut : 1er espace dont l'user est membre
             esps = user_espaces(existing['id'])
@@ -2024,6 +2029,141 @@ def invite_accept(token):
         return redirect(url_for('home'))
 
     return render_template('invite_accept.html', couple=couple, token=token)
+
+
+# ══════════════════════════════════════════════════════════════════════
+#                       v1.6 — PROFIL UTILISATEUR
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route('/profil')
+@login_required
+def profil():
+    user = current_user()
+    espaces = user_espaces(user['id'])
+    # Stats : carnets de l'espace courant + photos uploadees par l'user
+    eid = current_espace_id()
+    stats = {'carnets': 0, 'photos': 0, 'reveries': 0, 'videos': 0}
+    if eid:
+        r = query("SELECT COUNT(*) AS n FROM carnets WHERE couple_id=? "
+                  "AND deleted_at IS NULL AND type != 'souhait'", (eid,), one=True)
+        stats['carnets'] = r['n'] if r else 0
+        r = query("SELECT COUNT(*) AS n FROM carnets WHERE couple_id=? "
+                  "AND deleted_at IS NULL AND type = 'souhait'", (eid,), one=True)
+        stats['reveries'] = r['n'] if r else 0
+    r = query("SELECT COUNT(*) AS n FROM photos WHERE added_by=?", (user['id'],), one=True)
+    stats['photos'] = r['n'] if r else 0
+    r = query("SELECT COUNT(*) AS n FROM videos WHERE added_by=?", (user['id'],), one=True)
+    stats['videos'] = r['n'] if r else 0
+    return render_template('profil.html', user=user, espaces=espaces, stats=stats)
+
+
+@app.route('/profil/displayname', methods=['POST'])
+@login_required
+def profil_displayname():
+    if not csrf_check():
+        flash("Session expiree.", "err")
+        return redirect(url_for('profil'))
+    name = (request.form.get('display_name') or '').strip()
+    if not name:
+        flash("Prenom requis.", "err")
+        return redirect(url_for('profil'))
+    if len(name) > 60:
+        flash("Prenom trop long (max 60).", "err")
+        return redirect(url_for('profil'))
+    execute("UPDATE users SET display_name=? WHERE id=?", (name, session['uid']))
+    flash("Prenom mis a jour.", "ok")
+    return redirect(url_for('profil'))
+
+
+@app.route('/profil/avatar', methods=['POST'])
+@login_required
+def profil_avatar():
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    f = request.files.get('avatar')
+    if not f or not f.filename:
+        return jsonify({'ok': False, 'error': 'Aucun fichier'}), 400
+    try:
+        img = Image.open(f.stream)
+        if img.mode in ('RGBA', 'LA', 'P'):
+            bg = Image.new('RGB', img.size, (255, 255, 255))
+            bg.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
+            img = bg
+        elif img.mode != 'RGB':
+            img = img.convert('RGB')
+        # Crop carre central
+        w, h = img.size
+        side = min(w, h)
+        left = (w - side) // 2
+        top = (h - side) // 2
+        img = img.crop((left, top, left + side, top + side))
+        img.thumbnail((200, 200), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, 'JPEG', quality=82, optimize=True)
+        b64 = "data:image/jpeg;base64," + __import__('base64').b64encode(buf.getvalue()).decode()
+        execute("UPDATE users SET avatar_b64=? WHERE id=?", (b64, session['uid']))
+        return jsonify({'ok': True, 'avatar_url': b64})
+    except Exception as e:
+        log.error("avatar fail: %s", e)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/profil/avatar/supprimer', methods=['POST'])
+@login_required
+def profil_avatar_supprimer():
+    if not csrf_check():
+        flash("Session expiree.", "err")
+        return redirect(url_for('profil'))
+    execute("UPDATE users SET avatar_b64='' WHERE id=?", (session['uid'],))
+    flash("Avatar retire.", "ok")
+    return redirect(url_for('profil'))
+
+
+@app.route('/profil/quitter/<int:eid>', methods=['POST'])
+@login_required
+def profil_quitter_espace(eid):
+    if not csrf_check():
+        flash("Session expiree.", "err")
+        return redirect(url_for('profil'))
+    uid = session['uid']
+    if not is_member(uid, eid):
+        abort(404)
+    # Compte les autres membres
+    others = query("SELECT COUNT(*) AS n FROM espace_members WHERE espace_id=? AND user_id != ?",
+                   (eid, uid), one=True)
+    nb_others = others['n'] if others else 0
+    execute("DELETE FROM espace_members WHERE espace_id=? AND user_id=?", (eid, uid))
+    if session.get('espace_id') == eid:
+        # Bascule sur un autre espace si dispo
+        esps = user_espaces(uid)
+        if esps:
+            session['espace_id'] = esps[0]['id']
+            session['couple_id'] = esps[0]['id']
+        else:
+            session.pop('espace_id', None)
+            session.pop('couple_id', None)
+    if nb_others == 0:
+        flash("Tu as quitte cet espace. Personne d'autre n'y restait — les contenus sont conserves.", "ok")
+    else:
+        flash("Tu as quitte cet espace.", "ok")
+    return redirect(url_for('profil'))
+
+
+@app.route('/profil/supprimer', methods=['POST'])
+@login_required
+def profil_supprimer():
+    if not csrf_check():
+        flash("Session expiree.", "err")
+        return redirect(url_for('profil'))
+    confirm = request.form.get('confirm') or ''
+    if confirm != 'SUPPRIMER':
+        flash("Tape SUPPRIMER pour confirmer.", "err")
+        return redirect(url_for('profil'))
+    uid = session['uid']
+    execute("UPDATE users SET deleted_at=CURRENT_TIMESTAMP WHERE id=?", (uid,))
+    session.clear()
+    flash("Compte supprime. Tu as 30 jours pour le recuperer (contact support).", "ok")
+    return redirect(url_for('login'))
 
 
 # ══════════════════════════════════════════════════════════════════════

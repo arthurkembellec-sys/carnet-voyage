@@ -1,0 +1,156 @@
+{% extends '_base.html' %}
+{% block title %}Profil — Notre Histoire{% endblock %}
+{% block content %}
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <a href="{{ url_for('home') }}" class="brand">← Notre Histoire</a>
+    <nav class="topbar-nav">
+      <a href="{{ url_for('logout') }}" class="link">Déconnexion</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+
+  <section class="hero">
+    <p class="kicker">Profil</p>
+    <h1 class="display"><em>{{ user.display_name }}</em></h1>
+    <p class="lead">{{ user.email }}</p>
+  </section>
+
+  {# ───── Avatar + nom ───── #}
+  <section class="profil-section">
+    <h2 class="section-title">Identité</h2>
+    <div class="profil-avatar-row">
+      <div class="profil-avatar-wrap">
+        <div class="profil-avatar" id="avatar-display">
+          {% if user.avatar_b64 %}
+          <img src="{{ user.avatar_b64 }}" alt="">
+          {% else %}
+          <span class="profil-avatar-initial">{{ (user.display_name or user.email)[0]|upper }}</span>
+          {% endif %}
+        </div>
+        <input type="file" id="avatar-input" accept="image/*"
+               style="position:absolute;left:-9999px;width:1px;height:1px">
+        <div class="profil-avatar-actions">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('avatar-input').click()">
+            Changer
+          </button>
+          {% if user.avatar_b64 %}
+          <form method="POST" action="{{ url_for('profil_avatar_supprimer') }}" style="display:inline">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-ghost btn-sm">Retirer</button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+
+      <form method="POST" action="{{ url_for('profil_displayname') }}" class="form" style="flex:1">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <label class="field">
+          <span class="label">Prénom affiché</span>
+          <input type="text" name="display_name" value="{{ user.display_name }}" maxlength="60" required>
+        </label>
+        <button type="submit" class="btn btn-primary">Enregistrer</button>
+      </form>
+    </div>
+  </section>
+
+  {# ───── Stats ───── #}
+  <section class="profil-section">
+    <h2 class="section-title">Quelques chiffres</h2>
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-num">{{ stats.carnets }}</div>
+        <div class="stat-label">Carnets</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">{{ stats.reveries }}</div>
+        <div class="stat-label">Rêveries</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">{{ stats.photos }}</div>
+        <div class="stat-label">Photos ajoutées</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">{{ stats.videos }}</div>
+        <div class="stat-label">Vidéos ajoutées</div>
+      </div>
+    </div>
+  </section>
+
+  {# ───── Mes espaces ───── #}
+  <section class="profil-section">
+    <h2 class="section-title">Mes espaces</h2>
+    <ul class="espace-membership-list">
+      {% for e in espaces %}
+      <li class="espace-membership-item">
+        <div class="espace-membership-info">
+          <div class="espace-membership-name">{{ e.name or 'Sans nom' }}</div>
+          <div class="espace-membership-meta">
+            <span class="espace-kind-pill">{{ e.kind or 'couple' }}</span>
+            {% if e.role == 'owner' %} · <span class="member-role">Créateur</span>{% endif %}
+            {% if current_espace and current_espace.id == e.id %} · <span style="color:var(--accent)">espace courant</span>{% endif %}
+          </div>
+        </div>
+        <form method="POST" action="{{ url_for('profil_quitter_espace', eid=e.id) }}"
+              onsubmit="return confirm('Quitter {{ e.name or \"cet espace\" }} ? Tes contributions restent visibles aux autres membres.');">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-secondary btn-sm">Quitter</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    <div class="cta-row" style="margin-top:16px">
+      <a href="{{ url_for('espace_nouveau') }}" class="btn btn-primary">+ Nouvel espace</a>
+    </div>
+  </section>
+
+  {# ───── Danger zone ───── #}
+  <section class="profil-section profil-danger">
+    <h2 class="section-title">Zone sensible</h2>
+    <details class="danger-details">
+      <summary class="btn btn-secondary" style="color:var(--error-ink);border-color:var(--error-ink)">
+        Supprimer mon compte
+      </summary>
+      <div class="danger-body">
+        <p class="lead" style="font-size:14px">
+          Ton compte sera supprimé. Tu as 30 jours pour le récupérer en
+          contactant le support. Tes contributions dans les espaces partagés
+          restent visibles aux autres membres.
+        </p>
+        <form method="POST" action="{{ url_for('profil_supprimer') }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <label class="field">
+            <span class="label">Tape SUPPRIMER pour confirmer</span>
+            <input type="text" name="confirm" required pattern="SUPPRIMER" placeholder="SUPPRIMER">
+          </label>
+          <button type="submit" class="btn btn-danger">Supprimer définitivement</button>
+        </form>
+      </div>
+    </details>
+  </section>
+
+</main>
+
+<script>
+  document.getElementById('avatar-input').addEventListener('change', async function(e){
+    var f = e.target.files && e.target.files[0];
+    if (!f) return;
+    var fd = new FormData();
+    fd.append('_csrf', "{{ csrf_token() }}");
+    fd.append('avatar', f, f.name);
+    try {
+      var r = await fetch("{{ url_for('profil_avatar') }}", { method:'POST', body: fd });
+      var d = await r.json();
+      if (!d.ok) { alert('Erreur : ' + (d.error || '')); return; }
+      var disp = document.getElementById('avatar-display');
+      disp.innerHTML = '<img src="' + d.avatar_url + '" alt="">';
+      // Force reload pour voir le bouton Retirer
+      setTimeout(function(){ location.reload(); }, 600);
+    } catch (e) { alert('Réseau : ' + e.message); }
+  });
+</script>
+
+{% endblock %}
