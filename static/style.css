@@ -3,29 +3,107 @@
    Charte issue du brief §6 (Fraunces + Geist + creme chaud)
    ──────────────────────────────────────────────────────────────────── */
 
+/* ════════════════════════════════════════════════════════════════════
+   CHARTE GRAPHIQUE — tokens (cf. Brief 04 §10.1)
+   Cf. /Brief/04/charte_graphique.md
+   ════════════════════════════════════════════════════════════════════ */
 :root {
-  --bg:           #FAF8F4;
+  /* Backgrounds */
+  --bg-primary:   #FAF8F4;
   --bg-card:      #FFFFFF;
-  --ink:          #1C1A17;
-  --ink-soft:     #3D3A35;
-  --muted:        #6B6963;
-  --whisper:      #A39C92;
-  --accent:       #A8503D;
-  --border:       rgba(28, 26, 23, 0.06);
-  --border-strong:rgba(28, 26, 23, 0.12);
+  --bg-subtle:    #F4F1EB;
+  --bg-overlay:   rgba(28, 26, 23, 0.45);
+
+  /* Inks */
+  --ink-primary:   #1C1A17;
+  --ink-secondary: #3D3A35;
+  --ink-muted:     #6B6963;
+  --ink-whisper:   #A39C92;
+
+  /* Borders */
+  --border-subtle:  rgba(28, 26, 23, 0.06);
+  --border-default: rgba(28, 26, 23, 0.12);
+  --border-strong:  rgba(28, 26, 23, 0.24);
+
+  /* Semantic — a utiliser avec parcimonie */
+  --color-success: #5C7A5A;
+  --color-warning: #B8864B;
+  --color-danger:  #A8503D;
+  --color-info:    #6B7A8C;
+
+  /* Accent par defaut (overridable par espace via [data-space-accent]) */
+  --accent:      #A8503D;
+  --accent-soft: rgba(168, 80, 61, 0.12);
+
+  /* Spacing */
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px;
+  --space-4: 16px; --space-5: 20px; --space-6: 24px;
+  --space-8: 32px; --space-10: 40px; --space-15: 60px;
+  --space-20: 80px; --space-30: 120px;
+
+  /* Typo */
+  --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
+  --font-ui:      'Geist', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  /* Motion */
+  --motion-fast:    150ms;
+  --motion-default: 250ms;
+  --motion-slow:    400ms;
+  --motion-slowest: 600ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out:      cubic-bezier(0, 0, 0.2, 1);
+  --ease-in:       cubic-bezier(0.4, 0, 1, 1);
+
+  /* Layout */
+  --content-max-width: 720px;
+  --radius-default: 4px;
+  --radius-modal:   12px;
+  --radius-pill:    999px;
+
+  /* ── Aliases retro-compat (anciens noms) ───────────────────────── */
+  --bg:           var(--bg-primary);
+  --ink:          var(--ink-primary);
+  --ink-soft:     var(--ink-secondary);
+  --muted:        var(--ink-muted);
+  --whisper:      var(--ink-whisper);
+  --border:       var(--border-subtle);
   --error-bg:     #FBEBE6;
-  --error-ink:    #7E2A1A;
+  --error-ink:    var(--color-danger);
   --ok-bg:        #E8EFE3;
-  --ok-ink:       #2F5A2A;
+  --ok-ink:       var(--color-success);
+  --r-xs: var(--radius-default);
+  --r-sm: var(--radius-default);
+  --r-md: var(--radius-default);
+  --r-lg: var(--radius-modal);
+  --r-xl: var(--radius-modal);
+}
 
-  --font-display: 'Fraunces', 'Times New Roman', serif;
-  --font-ui:      'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+/* ── 12 accents (Brief 04 §1.2) ──────────────────────────────────── */
+[data-space-accent="terracotta"] { --accent: #A8503D; --accent-soft: rgba(168, 80, 61, 0.12); }
+[data-space-accent="olive"]      { --accent: #7A7A4F; --accent-soft: rgba(122, 122, 79, 0.12); }
+[data-space-accent="clay"]       { --accent: #9E6B4A; --accent-soft: rgba(158, 107, 74, 0.12); }
+[data-space-accent="sage"]       { --accent: #7B8C7A; --accent-soft: rgba(123, 140, 122, 0.12); }
+[data-space-accent="dusk"]       { --accent: #6B7A8C; --accent-soft: rgba(107, 122, 140, 0.12); }
+[data-space-accent="plum"]       { --accent: #8C6B7A; --accent-soft: rgba(140, 107, 122, 0.12); }
+[data-space-accent="sand"]       { --accent: #B8A073; --accent-soft: rgba(184, 160, 115, 0.14); }
+[data-space-accent="moss"]       { --accent: #5C7A5A; --accent-soft: rgba(92, 122, 90, 0.12); }
+[data-space-accent="ink"]        { --accent: #3D4A5C; --accent-soft: rgba(61, 74, 92, 0.12); }
+[data-space-accent="rose"]       { --accent: #B58373; --accent-soft: rgba(181, 131, 115, 0.14); }
+[data-space-accent="mustard"]    { --accent: #B8864B; --accent-soft: rgba(184, 134, 75, 0.14); }
+[data-space-accent="stone"]      { --accent: #7A7A7A; --accent-soft: rgba(122, 122, 122, 0.12); }
 
-  --r-xs: 6px;
-  --r-sm: 10px;
-  --r-md: 14px;
-  --r-lg: 20px;
-  --r-xl: 28px;
+/* ── prefers-reduced-motion ──────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0ms !important;
+    transition-duration: 0ms !important;
+  }
+}
+
+/* ── Focus visible standard ──────────────────────────────────────── */
+*:focus-visible {
+  outline: 2px solid var(--ink-primary);
+  outline-offset: 2px;
 }
 
 * { box-sizing: border-box; }
@@ -1608,6 +1686,141 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
   cursor: pointer;
   font-size: 12px;
 }
+
+/* ── Search bar (Histoire) ───────────────────────────────────────── */
+.search-bar {
+  position: relative;
+  margin-top: var(--space-4);
+  max-width: 480px;
+}
+.search-bar input {
+  width: 100%;
+  padding: 10px 36px 10px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-default);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  color: var(--ink-primary);
+  transition: border-color var(--motion-fast) var(--ease-standard);
+}
+.search-bar input:focus {
+  outline: none;
+  border-color: var(--ink-primary);
+}
+.search-clear {
+  position: absolute;
+  right: 8px; top: 50%;
+  transform: translateY(-50%);
+  width: 24px; height: 24px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(28,26,23,0.06);
+  color: var(--ink-muted);
+  border-radius: 50%;
+  text-decoration: none;
+  font-size: 11px;
+}
+.search-clear:hover { background: rgba(28,26,23,0.12); color: var(--ink-primary); text-decoration: none; }
+.search-hint {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-top: var(--space-3);
+}
+
+/* ── Composer mention @carnet ────────────────────────────────────── */
+.composer-mention {
+  max-width: 680px;
+  margin: var(--space-2) auto 0;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-default);
+}
+.composer-mention[hidden] { display: none !important; }
+.composer-mention-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--ink-whisper);
+  margin-bottom: 6px;
+}
+.composer-mention-list {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.composer-mention-item {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  color: var(--ink-primary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: background var(--motion-fast);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.composer-mention-item:hover { background: var(--accent-soft); border-color: var(--accent); }
+.mention-type {
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+/* ── Accent picker (personnaliser espace) ────────────────────────── */
+.accent-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
+}
+@media (max-width: 480px) {
+  .accent-grid { grid-template-columns: repeat(4, 1fr); }
+}
+.accent-swatch {
+  display: flex; flex-direction: column;
+  align-items: center; gap: 6px;
+  padding: 8px 4px;
+  border: 2px solid transparent;
+  border-radius: var(--radius-default);
+  cursor: pointer;
+  transition: border-color var(--motion-fast), background var(--motion-fast);
+}
+.accent-swatch:hover { background: var(--bg-subtle); }
+.accent-swatch-active { border-color: var(--ink-primary); background: var(--bg-subtle); }
+.accent-dot {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: block;
+}
+.accent-name {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+}
+
+/* ── Application accent sur l'app (Brief 04 §1.2) ────────────────── */
+.kicker, .label, .stat-label, .section-hint, .map-count,
+.member-meta .member-role, .save-indicator.saved {
+  /* labels en majuscules espacees prennent l'accent quand applicable */
+}
+a:not(.btn):not(.tab-link):not(.chip):not(.link):not(.brand):not(.espace-menu-item):not(.espace-btn):not(.composer-attach):not(.composer-send):not(.composer-mention-item):not(.search-clear):not(.accent-swatch) {
+  color: var(--accent);
+}
+.tab-link-active { background: var(--accent); }
+.chip-active { background: var(--accent); border-color: var(--accent); }
+.btn-primary { background: var(--ink-primary); color: var(--bg-primary); }
+.btn-primary:hover { opacity: 0.9; background: var(--ink-primary); }
+.tab-badge { background: var(--accent); }
 
 /* Danger zone (compte) */
 .profil-danger { border-top-color: var(--error-ink); }

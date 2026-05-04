@@ -1,0 +1,64 @@
+{% extends '_base.html' %}
+{% block title %}Personnaliser — Notre Histoire{% endblock %}
+{% block content %}
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <a href="{{ url_for('home') }}" class="brand">← Notre Histoire</a>
+  </div>
+</header>
+
+<main class="page">
+
+  <section class="hero">
+    <p class="kicker">Personnaliser cet espace</p>
+    <h1 class="display"><em>{{ espace.name or 'Sans nom' }}</em></h1>
+    <p class="lead">
+      Deux paramètres seulement. Le reste est verrouillé pour préserver la cohérence visuelle.
+    </p>
+  </section>
+
+  <form method="POST" action="{{ url_for('espace_personnaliser') }}" class="form form-wide">
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+
+    <label class="field">
+      <span class="label">Nom</span>
+      <input type="text" name="name" value="{{ espace.name or '' }}" maxlength="80" placeholder="ex. Arthur &amp; Laurie · Lune de miel · Famille">
+    </label>
+
+    <div class="field">
+      <span class="label">Couleur d'accent</span>
+      <div class="accent-grid">
+        {% for key, label in accents %}
+        <label class="accent-swatch {% if (espace.accent or 'terracotta') == key %}accent-swatch-active{% endif %}"
+               data-space-accent="{{ key }}" title="{{ label }}">
+          <input type="radio" name="accent" value="{{ key }}"
+                 {% if (espace.accent or 'terracotta') == key %}checked{% endif %} hidden>
+          <span class="accent-dot"></span>
+          <span class="accent-name">{{ label }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <a href="{{ url_for('home') }}" class="btn btn-ghost">Annuler</a>
+      <button type="submit" class="btn btn-primary">Valider</button>
+    </div>
+  </form>
+</main>
+
+<script>
+  document.querySelectorAll('.accent-swatch').forEach(function(sw){
+    sw.addEventListener('click', function(){
+      document.querySelectorAll('.accent-swatch').forEach(function(s){ s.classList.remove('accent-swatch-active'); });
+      sw.classList.add('accent-swatch-active');
+      var input = sw.querySelector('input[type=radio]');
+      if (input) input.checked = true;
+      // Preview live : applique au body
+      document.body.setAttribute('data-space-accent', sw.dataset.spaceAccent);
+    });
+  });
+</script>
+
+{% endblock %}

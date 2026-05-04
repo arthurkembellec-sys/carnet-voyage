@@ -24,6 +24,17 @@
     <p class="lead">
       Un espace lent. Des photos qu'on garde, des mots qu'on écrit pour rester.
     </p>
+
+    <form method="GET" action="{{ url_for('histoire') }}" class="search-bar">
+      <input type="search" name="q" value="{{ query or '' }}"
+             placeholder="Rechercher dans le fil..." aria-label="Rechercher">
+      {% if query %}
+      <a href="{{ url_for('histoire') }}" class="search-clear" aria-label="Effacer">✕</a>
+      {% endif %}
+    </form>
+    {% if query %}
+    <p class="search-hint">{{ messages|length }} résultat(s) pour « {{ query }} »</p>
+    {% endif %}
   </section>
 
   {# ─── Fil chronologique ───────────────────────────────────── #}
@@ -109,12 +120,32 @@
       <textarea name="body" id="composer-body" placeholder="Écrire..." rows="1"></textarea>
       <input type="file" id="composer-photo" name="photo" accept="image/*"
              style="position:absolute;left:-9999px;width:1px;height:1px">
-      <button type="button" class="composer-attach" onclick="document.getElementById('composer-photo').click()" title="Joindre une photo">📷</button>
-      <button type="submit" class="composer-send" id="composer-send" title="Envoyer">→</button>
+      {% if carnets_ref %}
+      <button type="button" class="composer-attach" onclick="toggleCarnetMenu()" title="Mentionner un carnet" aria-label="Mentionner">@</button>
+      {% endif %}
+      <button type="button" class="composer-attach" onclick="document.getElementById('composer-photo').click()" title="Joindre une photo" aria-label="Photo">📷</button>
+      <button type="submit" class="composer-send" id="composer-send" title="Envoyer" aria-label="Envoyer">→</button>
     </div>
+
+    {% if carnets_ref %}
+    <div class="composer-mention" id="composer-mention" hidden>
+      <span class="composer-mention-label">Mentionner un carnet</span>
+      <div class="composer-mention-list">
+        {% for c in carnets_ref %}
+        <button type="button" class="composer-mention-item"
+                data-mention="@{{ c.title }}"
+                onclick="insertMention(this.dataset.mention)">
+          {{ c.title }}
+          <span class="mention-type">{{ c.type }}</span>
+        </button>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
     <div class="composer-preview" id="composer-preview" hidden>
       <img id="composer-preview-img" src="" alt="">
-      <button type="button" class="composer-preview-clear" onclick="clearComposerPhoto()">✕</button>
+      <button type="button" class="composer-preview-clear" onclick="clearComposerPhoto()" aria-label="Retirer">✕</button>
     </div>
   </form>
 
@@ -209,9 +240,33 @@
   window.editMessage = editMessage;
   window.deleteMessage = deleteMessage;
 
-  // Scroll auto en bas au load
+  // Mention @carnet
+  function toggleCarnetMenu() {
+    var m = document.getElementById('composer-mention');
+    if (m) m.hidden = !m.hidden;
+  }
+  function insertMention(text) {
+    var ta = document.getElementById('composer-body');
+    var pos = ta.selectionStart || ta.value.length;
+    var before = ta.value.substring(0, pos);
+    var after = ta.value.substring(pos);
+    var spacer = (before && !before.endsWith(' ')) ? ' ' : '';
+    ta.value = before + spacer + text + ' ' + after;
+    ta.focus();
+    var newPos = (before + spacer + text + ' ').length;
+    ta.setSelectionRange(newPos, newPos);
+    document.getElementById('composer-mention').hidden = true;
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
+  }
+  window.toggleCarnetMenu = toggleCarnetMenu;
+  window.insertMention = insertMention;
+
+  // Scroll auto en bas au load (sauf si recherche active)
   window.addEventListener('load', function(){
-    window.scrollTo(0, document.body.scrollHeight);
+    if (!"{{ query }}") {
+      window.scrollTo(0, document.body.scrollHeight);
+    }
   });
 </script>
 

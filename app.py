@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "2.0.1-pdf-layouts"
+APP_VERSION = "2.1.0-charte-polish"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
@@ -265,6 +265,8 @@ def init_db():
         # ── v2.0.1 — config PDF par carnet (layout + position marge)
         "ALTER TABLE carnets ADD COLUMN pdf_layout TEXT DEFAULT '1'",
         "ALTER TABLE carnets ADD COLUMN pdf_margin_position TEXT DEFAULT 'right'",
+        # ── v2.1 — charte : couleur d'accent par espace ───────────────
+        "ALTER TABLE couples ADD COLUMN accent TEXT DEFAULT 'terracotta'",
         # ── v2.0 — Histoire & Conversations ────────────────────────────
         """CREATE TABLE IF NOT EXISTS conversations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -464,12 +466,15 @@ def inject_globals():
     """Variables disponibles dans tous les templates."""
     u = current_user()
     espaces = user_espaces(u['id']) if u else []
+    esp = current_espace()
     return {
         'current_user': u,
-        'current_espace': current_espace(),
+        'current_espace': esp,
+        'current_accent': (esp.get('accent') if esp else 'terracotta') or 'terracotta',
         'user_espaces': espaces,
         'csrf_token': csrf_token,
         'app_version': APP_VERSION,
+        'accents': ACCENTS,
     }
 
 
@@ -2205,6 +2210,22 @@ ESPACE_KINDS = [
     ('solo',   'Solo'),
 ]
 
+# Charte §1.2 — 12 accents pre-selectionnes, desatures et harmoniques
+ACCENTS = [
+    ('terracotta', 'Terracotta'),
+    ('olive',      'Olive'),
+    ('clay',       'Argile'),
+    ('sage',       'Sauge'),
+    ('dusk',       'Crepuscule'),
+    ('plum',       'Prune'),
+    ('sand',       'Sable'),
+    ('moss',       'Mousse'),
+    ('ink',        'Encre'),
+    ('rose',       'Rose'),
+    ('mustard',    'Moutarde'),
+    ('stone',      'Pierre'),
+]
+
 
 @app.route('/onboarding/couple', methods=['GET', 'POST'])
 @login_required
@@ -2274,6 +2295,26 @@ def espace_switch():
         return redirect(url_for('home'))
     flash("Espace inaccessible.", "err")
     return redirect(url_for('home'))
+
+
+@app.route('/espace/personnaliser', methods=['GET', 'POST'])
+@couple_required
+def espace_personnaliser():
+    """Personnalisation de l'espace courant : nom + couleur d'accent."""
+    eid = current_espace_id()
+    esp = query("SELECT * FROM couples WHERE id=?", (eid,), one=True)
+    if request.method == 'POST':
+        if not csrf_check():
+            flash("Session expiree.", "err")
+            return redirect(url_for('espace_personnaliser'))
+        name = (request.form.get('name') or '').strip()[:80]
+        accent = (request.form.get('accent') or 'terracotta').strip()
+        if accent not in dict(ACCENTS):
+            accent = 'terracotta'
+        execute("UPDATE couples SET name=?, accent=? WHERE id=?", (name, accent, eid))
+        flash("Espace personnalise.", "ok")
+        return redirect(url_for('espace_personnaliser'))
+    return render_template('espace_personnaliser.html', espace=dict(esp) if esp else None)
 
 
 @app.route('/espace/membres')
@@ -2436,11 +2477,33 @@ def _conversation_messages(conv_id):
 @app.route('/histoire')
 @couple_required
 def histoire():
-    """Fil unifie : archive (immuable) + conversation continue (live)."""
+    """Fil unifie : archive (immuable) + conversation continue (live).
+    Supporte ?q=texte pour filtrer les messages."""
     eid = current_espace_id()
     conv = _get_conversation(eid)
-    msgs = _conversation_messages(conv['id'])
-    # Determine la couleur de chaque user du couple (1er user = ink, 2e = accent)
+    q = (request.args.get('q') or '').strip()
+    if q:
+        like = f"%{q}%"
+        rows = query("""
+            SELECT m.*,
+                   c.title AS chapter_title, c.headline AS chapter_headline,
+                   c.date_label AS chapter_date_label, c.weekday_label AS chapter_weekday,
+                   c.featured_image_url AS chapter_image, c.image_caption AS chapter_caption,
+                   c.position AS chapter_position,
+                   u.display_name AS sender_name, u.avatar_b64 AS sender_avatar,
+                   p.thumb_path AS attached_photo_thumb,
+                   p.file_path  AS attached_photo_full
+            FROM messages m
+            LEFT JOIN chapters c ON c.id = m.chapter_id
+            LEFT JOIN users u ON u.id = m.sender_id
+            LEFT JOIN photos p ON (m.attachment_type='photo' AND CAST(m.attachment_ref AS INTEGER) = p.id)
+            WHERE m.conversation_id = ? AND m.deleted_at IS NULL
+              AND (m.body LIKE ? OR m.sender_label LIKE ? OR u.display_name LIKE ?)
+            ORDER BY m.sent_at ASC, m.id ASC
+        """, (conv['id'], like, like, like))
+        msgs = [dict(r) for r in rows]
+    else:
+        msgs = _conversation_messages(conv['id'])
     members = query("""
         SELECT u.id, u.display_name FROM espace_members em
         JOIN users u ON u.id = em.user_id
@@ -2450,9 +2513,15 @@ def histoire():
     bubble_color = {}
     for i, mid in enumerate(member_ids):
         bubble_color[mid] = 'A' if i == 0 else ('B' if i == 1 else 'C')
+    # Liste des carnets de l'espace pour la mention @carnet (datalist)
+    carnets_ref = query(
+        "SELECT id, title, type FROM carnets WHERE couple_id=? AND deleted_at IS NULL "
+        "ORDER BY title", (eid,)
+    )
     return render_template('histoire.html',
         conv=conv, messages=msgs, members=[dict(m) for m in members],
-        bubble_color=bubble_color
+        bubble_color=bubble_color, query=q,
+        carnets_ref=[dict(c) for c in carnets_ref]
     )
 
 

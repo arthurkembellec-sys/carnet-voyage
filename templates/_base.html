@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   {% block extra_head %}{% endblock %}
 </head>
-<body>
+<body data-space-accent="{{ current_accent or 'terracotta' }}">
 
 {% with messages = get_flashed_messages(with_categories=true) %}
   {% if messages %}
