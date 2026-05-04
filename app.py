@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "2.0.0-conversations"
+APP_VERSION = "2.0.1-pdf-layouts"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
@@ -262,6 +262,9 @@ def init_db():
         "ALTER TABLE carnets ADD COLUMN sort_mode TEXT DEFAULT 'chrono'",
         # ── v1.6 — soft delete utilisateurs (fenetre 30j de recuperation)
         "ALTER TABLE users ADD COLUMN deleted_at TIMESTAMP DEFAULT NULL",
+        # ── v2.0.1 — config PDF par carnet (layout + position marge)
+        "ALTER TABLE carnets ADD COLUMN pdf_layout TEXT DEFAULT '1'",
+        "ALTER TABLE carnets ADD COLUMN pdf_margin_position TEXT DEFAULT 'right'",
         # ── v2.0 — Histoire & Conversations ────────────────────────────
         """CREATE TABLE IF NOT EXISTS conversations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -890,6 +893,20 @@ PDF_FORMATS = {
     'portrait_a5':   ('A5 portrait',      148, 210),
 }
 
+PDF_LAYOUTS = [
+    ('1', '1 photo / page'),
+    ('2', '2 photos / page'),
+    ('3', '3 photos / page'),
+    ('4', '4 photos / page'),
+]
+
+PDF_MARGIN_POSITIONS = [
+    ('right',  'Notes a droite'),
+    ('left',   'Notes a gauche'),
+    ('bottom', 'Notes en bas'),
+    ('end',    'Notes en fin de livre'),
+]
+
 
 @app.route('/carnet/<int:cid_carnet>/apercu')
 @couple_required
@@ -901,23 +918,55 @@ def carnet_apercu(cid_carnet):
     fmt = request.args.get('format', 'square_20')
     if fmt not in PDF_FORMATS:
         fmt = 'square_20'
+    layout = request.args.get('layout', c.get('pdf_layout') or '1')
+    if layout not in dict(PDF_LAYOUTS):
+        layout = '1'
+    margin_pos = request.args.get('margin', c.get('pdf_margin_position') or 'right')
+    if margin_pos not in dict(PDF_MARGIN_POSITIONS):
+        margin_pos = 'right'
     return render_template('apercu.html',
         carnet=c,
         main_pages=pages_data['main'],
         margin_pages=pages_data['margin'],
-        format=fmt,
-        formats=PDF_FORMATS,
+        format=fmt, layout=layout, margin_pos=margin_pos,
+        formats=PDF_FORMATS, layouts=PDF_LAYOUTS, margin_positions=PDF_MARGIN_POSITIONS,
     )
+
+
+@app.route('/carnet/<int:cid_carnet>/pdf/settings', methods=['POST'])
+@couple_required
+def carnet_pdf_settings(cid_carnet):
+    """Sauve les reglages PDF (layout + margin_position) sur le carnet."""
+    c = _get_carnet_or_404(cid_carnet)
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    layout = request.form.get('layout', '1')
+    if layout not in dict(PDF_LAYOUTS):
+        layout = '1'
+    margin_pos = request.form.get('margin', 'right')
+    if margin_pos not in dict(PDF_MARGIN_POSITIONS):
+        margin_pos = 'right'
+    execute("UPDATE carnets SET pdf_layout=?, pdf_margin_position=?, "
+            "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (layout, margin_pos, cid_carnet))
+    return jsonify({'ok': True, 'layout': layout, 'margin_position': margin_pos})
 
 
 @app.route('/carnet/<int:cid_carnet>/pdf')
 @couple_required
 def carnet_pdf(cid_carnet):
-    """Genere le PDF du livre photo a la volee."""
+    """Genere le PDF du livre photo a la volee, avec layout et position marge."""
     c = _get_carnet_or_404(cid_carnet)
     fmt = request.args.get('format', 'square_20')
     if fmt not in PDF_FORMATS:
         fmt = 'square_20'
+    layout = request.args.get('layout', c.get('pdf_layout') or '1')
+    if layout not in dict(PDF_LAYOUTS):
+        layout = '1'
+    n_per_page = int(layout)
+    margin_pos = request.args.get('margin', c.get('pdf_margin_position') or 'right')
+    if margin_pos not in dict(PDF_MARGIN_POSITIONS):
+        margin_pos = 'right'
     sort_mode = c.get('sort_mode') or 'chrono'
     pages_data = _carnet_pages(cid_carnet, sort_mode=sort_mode)
 
@@ -1073,16 +1122,252 @@ def carnet_pdf(cid_carnet):
                        max_width=page_w - 2*margin, line_height=12)
         pdf.showPage()
 
-    for item in pages_data['main']:
-        if item.get('video_path'):
-            _draw_video_page(item)
-        elif item.get('photo_path'):
-            _draw_photo_page(item)
-        elif item['type'] == 'text':
-            _draw_text_page(item)
+    # ─ Helpers nouveau layout ──────────────────────────────────────
+    def _draw_image_in_box(item, x, y, w, h):
+        """Dessine une photo (avec caption optionnelle) dans une boite."""
+        if not item.get('photo_path'):
+            return
+        try:
+            img = ImageReader(os.path.join(UPLOAD_DIR, item['photo_path']))
+            iw, ih = img.getSize()
+            cap_h = 6 * mm if item.get('caption') else 0
+            avail_h = h - cap_h
+            ratio = min(w / iw, avail_h / ih)
+            dw, dh = iw * ratio, ih * ratio
+            cx = x + (w - dw) / 2
+            cy = y + cap_h + (avail_h - dh)
+            pdf.drawImage(img, cx, cy, width=dw, height=dh, mask='auto')
+            if item.get('caption'):
+                pdf.setFont('Times-Italic', 8.5)
+                pdf.setFillColorRGB(0.24, 0.227, 0.207)
+                _wrap_text(pdf, item['caption'], x + w/2, y + 2*mm,
+                           max_width=w, line_height=10, max_lines=2)
+        except Exception as e:
+            log.warning("PDF image fail: %s", e)
 
-    # ─ Section : Notes en marge (mosaique 2x2) ─────────────────────
-    if pages_data['margin']:
+    def _draw_video_in_box(item, x, y, w, h):
+        """Dessine un poster video + petit play overlay + QR plus petit."""
+        if not item.get('video_poster'):
+            return
+        try:
+            img = ImageReader(os.path.join(UPLOAD_DIR, item['video_poster']))
+            iw, ih = img.getSize()
+            qr_size = min(w, h) * 0.22
+            cap_h = 6 * mm if item.get('caption') else 0
+            avail_h = h - cap_h - qr_size - 2*mm
+            ratio = min(w / iw, avail_h / ih)
+            dw, dh = iw * ratio, ih * ratio
+            cx = x + (w - dw) / 2
+            cy = y + cap_h + qr_size + 2*mm + (avail_h - dh)
+            pdf.drawImage(img, cx, cy, width=dw, height=dh, mask='auto')
+            # Play overlay
+            ccx, ccy = cx + dw/2, cy + dh/2
+            r = min(dw, dh) * 0.07
+            pdf.setFillColorRGB(0, 0, 0, alpha=0.5)
+            pdf.circle(ccx, ccy, r, stroke=0, fill=1)
+            pdf.setFillColorRGB(1, 1, 1)
+            p = pdf.beginPath()
+            p.moveTo(ccx - r*0.4, ccy - r*0.6)
+            p.lineTo(ccx - r*0.4, ccy + r*0.6)
+            p.lineTo(ccx + r*0.6, ccy)
+            p.close()
+            pdf.drawPath(p, stroke=0, fill=1)
+            # QR
+            if item.get('video_token'):
+                video_url = url_for('video_public', token=item['video_token'], _external=True)
+                qr_img = qrcode.make(video_url)
+                qr_buf = io.BytesIO(); qr_img.save(qr_buf, 'PNG'); qr_buf.seek(0)
+                qr_x = x + (w - qr_size) / 2
+                qr_y = y + cap_h
+                pdf.drawImage(ImageReader(qr_buf), qr_x, qr_y,
+                              width=qr_size, height=qr_size, mask='auto')
+            if item.get('caption'):
+                pdf.setFont('Times-Italic', 8.5)
+                pdf.setFillColorRGB(0.24, 0.227, 0.207)
+                _wrap_text(pdf, item['caption'], x + w/2, y + 2*mm,
+                           max_width=w, line_height=10, max_lines=1)
+        except Exception as e:
+            log.warning("PDF video box fail: %s", e)
+
+    def _draw_text_in_box(item, x, y, w, h):
+        """Dessine un bloc texte centre dans une boite."""
+        text = item.get('text_content') or ''
+        if not text:
+            return
+        font_size = 11 if (w < 100*mm) else 16
+        pdf.setFont('Times-Italic', font_size)
+        pdf.setFillColorRGB(0.110, 0.102, 0.090)
+        _wrap_text(pdf, text, x + w/2, y + h/2,
+                   max_width=w - 4*mm, line_height=font_size*1.3, max_lines=10)
+
+    def _draw_in_box(item, x, y, w, h):
+        if item.get('video_path'):
+            _draw_video_in_box(item, x, y, w, h)
+        elif item.get('photo_path'):
+            _draw_image_in_box(item, x, y, w, h)
+        elif item.get('type') == 'text':
+            _draw_text_in_box(item, x, y, w, h)
+
+    def _grid_layout(n, area_x, area_y, area_w, area_h, gap=3*mm):
+        """Retourne une liste de boites (x,y,w,h) pour disposer n photos."""
+        boxes = []
+        if n == 1:
+            boxes.append((area_x, area_y, area_w, area_h))
+        elif n == 2:
+            # 2 photos : empile verticalement si zone plus haute que large
+            if area_h > area_w:
+                h = (area_h - gap) / 2
+                boxes.append((area_x, area_y + h + gap, area_w, h))
+                boxes.append((area_x, area_y, area_w, h))
+            else:
+                w = (area_w - gap) / 2
+                boxes.append((area_x, area_y, w, area_h))
+                boxes.append((area_x + w + gap, area_y, w, area_h))
+        elif n == 3:
+            # 1 grosse en haut + 2 dessous
+            top_h = area_h * 0.55
+            bot_h = area_h - top_h - gap
+            half_w = (area_w - gap) / 2
+            boxes.append((area_x, area_y + bot_h + gap, area_w, top_h))
+            boxes.append((area_x, area_y, half_w, bot_h))
+            boxes.append((area_x + half_w + gap, area_y, half_w, bot_h))
+        else:  # n == 4
+            half_w = (area_w - gap) / 2
+            half_h = (area_h - gap) / 2
+            boxes.append((area_x, area_y + half_h + gap, half_w, half_h))
+            boxes.append((area_x + half_w + gap, area_y + half_h + gap, half_w, half_h))
+            boxes.append((area_x, area_y, half_w, half_h))
+            boxes.append((area_x + half_w + gap, area_y, half_w, half_h))
+        return boxes
+
+    def _draw_margin_zone(items, x, y, w, h, label_text):
+        """Dessine une zone marge (mini photos + captions) dans un cadre."""
+        if not items:
+            return
+        # Etiquette discrete
+        pdf.setFont('Helvetica', 7)
+        pdf.setFillColorRGB(0.64, 0.611, 0.572)
+        if w > h:  # bandeau horizontal
+            pdf.drawString(x, y + h - 3*mm, label_text)
+        else:
+            pdf.saveState()
+            pdf.translate(x + 2*mm, y)
+            pdf.rotate(90)
+            pdf.drawString(0, -2*mm, label_text)
+            pdf.restoreState()
+
+        # Disposition des items
+        n = len(items)
+        if w > h:
+            # Horizontal : aligner sur la largeur
+            cell_w = (w - (n - 1) * 3*mm) / n if n > 0 else w
+            for i, m in enumerate(items):
+                cx = x + i * (cell_w + 3*mm)
+                _draw_in_box(m, cx, y + 4*mm, cell_w, h - 6*mm)
+        else:
+            # Vertical : empiler
+            cell_h = (h - (n - 1) * 3*mm) / n if n > 0 else h
+            for i, m in enumerate(items):
+                cy = y + (n - 1 - i) * (cell_h + 3*mm)
+                _draw_in_box(m, x + 5*mm, cy, w - 7*mm, cell_h)
+
+    # ─ Calcul : combien de notes en marge par page ────────────────
+    main_filtered = [p for p in pages_data['main']]
+    margin_items = pages_data['margin'][:] if margin_pos != 'end' else []
+
+    # Distribuer les marges sur les pages photos
+    nb_main_pages = max(1, (len(main_filtered) + n_per_page - 1) // n_per_page)
+    margin_per_page = max(1, (len(margin_items) + nb_main_pages - 1) // nb_main_pages) if margin_items else 0
+
+    margin_idx = 0
+
+    def _take_margins(k):
+        nonlocal margin_idx
+        out = margin_items[margin_idx:margin_idx + k]
+        margin_idx += len(out)
+        return out
+
+    # ─ Layout d'une page composite ────────────────────────────────
+    def _draw_composite_page(items_chunk):
+        pdf.setFillColorRGB(0.98, 0.972, 0.957)
+        pdf.rect(0, 0, page_w, page_h, fill=1, stroke=0)
+
+        if margin_pos == 'right':
+            # Album : 70% gauche, marge : 28% droite
+            album_w = (page_w - 2*margin) * 0.68
+            margin_w = (page_w - 2*margin) - album_w - 4*mm
+            album_x = margin
+            album_y = margin
+            album_h = page_h - 2*margin
+            mzone_x = margin + album_w + 4*mm
+            mzone_y = margin
+            mzone_w = margin_w
+            mzone_h = page_h - 2*margin
+        elif margin_pos == 'left':
+            margin_w = (page_w - 2*margin) * 0.30 - 2*mm
+            album_w = (page_w - 2*margin) - margin_w - 4*mm
+            mzone_x = margin
+            mzone_y = margin
+            mzone_w = margin_w
+            mzone_h = page_h - 2*margin
+            album_x = margin + margin_w + 4*mm
+            album_y = margin
+            album_h = page_h - 2*margin
+        elif margin_pos == 'bottom':
+            margin_h = (page_h - 2*margin) * 0.22
+            album_h = (page_h - 2*margin) - margin_h - 4*mm
+            album_x = margin
+            album_y = margin + margin_h + 4*mm
+            album_w = page_w - 2*margin
+            mzone_x = margin
+            mzone_y = margin
+            mzone_w = page_w - 2*margin
+            mzone_h = margin_h
+        else:  # 'end' : pas de zone marge sur la page
+            album_x = margin
+            album_y = margin
+            album_w = page_w - 2*margin
+            album_h = page_h - 2*margin
+            mzone_x = mzone_y = mzone_w = mzone_h = 0
+
+        # Dessine les photos principales
+        boxes = _grid_layout(len(items_chunk), album_x, album_y, album_w, album_h)
+        for box, item in zip(boxes, items_chunk):
+            _draw_in_box(item, *box)
+
+        # Dessine la zone marge si applicable
+        if margin_pos != 'end' and mzone_w > 0:
+            margins_for_this_page = _take_margins(margin_per_page)
+            if margins_for_this_page:
+                # Petit liseré pour démarquer
+                pdf.setStrokeColorRGB(0.88, 0.85, 0.80)
+                pdf.setDash(2, 2)
+                pdf.setLineWidth(0.4)
+                if margin_pos == 'right':
+                    pdf.line(mzone_x - 2*mm, mzone_y, mzone_x - 2*mm, mzone_y + mzone_h)
+                elif margin_pos == 'left':
+                    pdf.line(mzone_x + mzone_w + 2*mm, mzone_y,
+                             mzone_x + mzone_w + 2*mm, mzone_y + mzone_h)
+                else:
+                    pdf.line(mzone_x, mzone_y + mzone_h + 2*mm,
+                             mzone_x + mzone_w, mzone_y + mzone_h + 2*mm)
+                pdf.setDash()
+                _draw_margin_zone(margins_for_this_page,
+                                  mzone_x, mzone_y, mzone_w, mzone_h,
+                                  "NOTES EN MARGE")
+
+        pdf.showPage()
+
+    # ─ Itere sur les pages principales par chunks de n_per_page ────
+    chunks = [main_filtered[i:i + n_per_page]
+              for i in range(0, len(main_filtered), n_per_page)] or [[]]
+    for chunk in chunks:
+        if chunk:
+            _draw_composite_page(chunk)
+
+    # Marges restantes : si margin_pos='end' OU s'il reste des marges non placees
+    remaining_margins = margin_items[margin_idx:] if margin_pos != 'end' else pages_data['margin']
+    if remaining_margins:
         # Page de garde
         pdf.setFillColorRGB(0.98, 0.972, 0.957)
         pdf.rect(0, 0, page_w, page_h, fill=1, stroke=0)
@@ -1096,8 +1381,8 @@ def carnet_pdf(cid_carnet):
         pdf.showPage()
 
         per_page = 4
-        for chunk_start in range(0, len(pages_data['margin']), per_page):
-            chunk = pages_data['margin'][chunk_start:chunk_start + per_page]
+        for chunk_start in range(0, len(remaining_margins), per_page):
+            chunk = remaining_margins[chunk_start:chunk_start + per_page]
             pdf.setFillColorRGB(0.98, 0.972, 0.957)
             pdf.rect(0, 0, page_w, page_h, fill=1, stroke=0)
             cell_w = (page_w - 3 * margin) / 2

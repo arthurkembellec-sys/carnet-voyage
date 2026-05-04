@@ -899,6 +899,155 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
   text-align: center;
   color: var(--ink);
 }
+/* ── Apercu : controles de layout PDF ─────────────────────────────── */
+.apercu-controls {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 16px 18px;
+  margin-bottom: 24px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.apercu-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.apercu-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  min-width: 130px;
+}
+.apercu-row-actions {
+  border-top: 1px dashed var(--border);
+  padding-top: 12px;
+  justify-content: flex-end;
+}
+
+/* ── Pages composites apercu (multi-photos + marge) ──────────────── */
+.book-composite { padding: 16px !important; }
+
+.book-album-zone { flex: 1; width: 100%; min-height: 0; }
+.book-grid-1 { display: flex; align-items: center; justify-content: center; }
+.book-grid-1 .book-photo-cell { width: 100%; height: 100%; }
+.book-grid-2 { display: grid; grid-template-rows: 1fr 1fr; gap: 8px; height: 100%; }
+.book-grid-3 { display: grid; grid-template-rows: 1.2fr 1fr; grid-template-columns: 1fr 1fr; gap: 8px; height: 100%; }
+.book-grid-3 .book-photo-cell:first-child { grid-column: 1 / -1; }
+.book-grid-4 { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 8px; height: 100%; }
+
+.book-photo-cell {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  overflow: hidden;
+  min-height: 0;
+}
+.book-photo-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 2px;
+}
+.book-video-mini {
+  position: relative;
+  max-width: 100%; max-height: 100%;
+  display: flex; align-items: center; justify-content: center;
+}
+.book-video-mini img {
+  max-width: 100%; max-height: 100%;
+  object-fit: contain;
+}
+.book-video-mini .book-play-overlay {
+  width: 36px; height: 36px;
+  font-size: 14px;
+}
+.book-caption-mini {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 10px;
+  color: var(--ink-soft);
+  text-align: center;
+  margin-top: 4px;
+  max-height: 24px;
+  overflow: hidden;
+}
+
+/* Layouts margin (right / left / bottom / end) */
+.book-margin-right { display: flex !important; flex-direction: row; gap: 10px; }
+.book-margin-right .book-album-zone { flex: 0 0 68%; }
+.book-margin-right .book-margin-zone {
+  flex: 1; border-left: 1px dashed var(--border-strong);
+  padding-left: 10px;
+  display: flex; flex-direction: column;
+}
+
+.book-margin-left { display: flex !important; flex-direction: row-reverse; gap: 10px; }
+.book-margin-left .book-album-zone { flex: 0 0 68%; }
+.book-margin-left .book-margin-zone {
+  flex: 1; border-right: 1px dashed var(--border-strong);
+  padding-right: 10px;
+  display: flex; flex-direction: column;
+}
+
+.book-margin-bottom { display: flex !important; flex-direction: column; gap: 10px; }
+.book-margin-bottom .book-album-zone { flex: 1; }
+.book-margin-bottom .book-margin-zone {
+  flex: 0 0 22%;
+  border-top: 1px dashed var(--border-strong);
+  padding-top: 8px;
+}
+.book-margin-bottom .book-margin-list {
+  display: flex; flex-direction: row;
+  gap: 6px;
+}
+.book-margin-bottom .book-margin-item { flex: 1; }
+
+.book-margin-end .book-album-zone { flex: 1; }
+.book-margin-end .book-margin-zone { display: none; }
+
+.book-margin-zone { min-height: 0; }
+.book-margin-label {
+  font-size: 8px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--whisper);
+  display: block;
+  margin-bottom: 6px;
+}
+.book-margin-list {
+  display: flex; flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  overflow: hidden;
+}
+.book-margin-item {
+  background: rgba(245, 240, 230, 0.6);
+  border-radius: 3px;
+  padding: 4px;
+  display: flex; flex-direction: column;
+  align-items: center;
+  font-size: 9px;
+  overflow: hidden;
+  min-height: 0;
+}
+.book-margin-item img {
+  max-width: 100%; max-height: 50px;
+  object-fit: cover;
+  border-radius: 2px;
+}
+.book-margin-text {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 9px;
+  color: var(--ink-soft);
+  line-height: 1.3;
+}
+.book-margin-caption {
+  font-size: 8px;
+  color: var(--muted);
+  font-style: italic;
+  margin-top: 2px;
+  text-align: center;
+}
+
 .book-page-end .book-end-text {
   font-family: var(--font-display);
   font-style: italic;
