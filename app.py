@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "1.6.0-profil"
+APP_VERSION = "2.0.0-conversations"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
@@ -262,6 +262,44 @@ def init_db():
         "ALTER TABLE carnets ADD COLUMN sort_mode TEXT DEFAULT 'chrono'",
         # ── v1.6 — soft delete utilisateurs (fenetre 30j de recuperation)
         "ALTER TABLE users ADD COLUMN deleted_at TIMESTAMP DEFAULT NULL",
+        # ── v2.0 — Histoire & Conversations ────────────────────────────
+        """CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            espace_id INTEGER NOT NULL UNIQUE REFERENCES couples(id) ON DELETE CASCADE,
+            archive_imported_at TIMESTAMP,
+            archive_source TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS chapters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+            position INTEGER NOT NULL DEFAULT 0,
+            title TEXT NOT NULL DEFAULT '',
+            headline TEXT DEFAULT '',
+            date_label TEXT DEFAULT '',
+            weekday_label TEXT DEFAULT '',
+            featured_image_url TEXT DEFAULT '',
+            image_caption TEXT DEFAULT ''
+        )""",
+        """CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL CHECK(kind IN ('archived','live')),
+            chapter_id INTEGER REFERENCES chapters(id) ON DELETE SET NULL,
+            sender_type TEXT CHECK(sender_type IN ('userA','userB','system','member') OR sender_type IS NULL),
+            sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            sender_label TEXT DEFAULT '',
+            body TEXT NOT NULL DEFAULT '',
+            attachment_type TEXT,
+            attachment_ref TEXT,
+            sent_at TIMESTAMP NOT NULL,
+            edited_at TIMESTAMP,
+            deleted_at TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_msg_conv_sent ON messages(conversation_id, sent_at)",
+        "CREATE INDEX IF NOT EXISTS idx_msg_chapter ON messages(chapter_id, sent_at)",
+        # Backfill : 1 conversation par espace existant
+        "INSERT OR IGNORE INTO conversations (espace_id) SELECT id FROM couples",
         # ── v1.4 — items des carnets de souhait (link/photo/note/lieu/budget)
         """CREATE TABLE IF NOT EXISTS carnet_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1180,35 +1218,70 @@ def _next_page_position(carnet_id):
     return r['next'] if r else 0
 
 
+def _gps_dms_to_dd(dms, ref):
+    """Convertit DMS rationals + ref ('N','S','E','W') en degres decimaux."""
+    try:
+        if not dms or len(dms) < 3:
+            return None
+        def _r(v):
+            if hasattr(v, 'numerator'): return v.numerator / max(v.denominator, 1)
+            if isinstance(v, tuple) and len(v) == 2: return v[0] / max(v[1], 1)
+            return float(v)
+        d, m, s = _r(dms[0]), _r(dms[1]), _r(dms[2])
+        dd = d + m / 60.0 + s / 3600.0
+        if ref in ('S', 'W', b'S', b'W'):
+            dd = -dd
+        return round(dd, 7)
+    except Exception:
+        return None
+
+
 def _save_uploaded_photo(file, couple_id):
     """
     Sauvegarde une photo uploadee :
-    - Decode + corrige EXIF orientation
+    - Lit EXIF AVANT compression : DateTimeOriginal + GPS + Orientation
     - Resize a 2000px max (cote long), qualite 85
     - Genere un thumbnail 400px (qualite 70)
     - Renomme en token random pour eviter collision
-    Retourne dict {file_path, thumb_path, width, height, taken_at}.
+    Retourne dict {file_path, thumb_path, width, height, taken_at, gps_lat, gps_lng}.
     """
     img = Image.open(file.stream)
 
-    # EXIF : orientation + date prise
     taken_at = None
+    gps_lat = None
+    gps_lng = None
     try:
         exif = img._getexif() or {}
+
+        # Orientation
         orient_key = next((k for k, v in ExifTags.TAGS.items() if v == 'Orientation'), None)
         if orient_key and orient_key in exif:
             o = exif[orient_key]
             if o == 3: img = img.rotate(180, expand=True)
             elif o == 6: img = img.rotate(270, expand=True)
             elif o == 8: img = img.rotate(90, expand=True)
-        date_key = next((k for k, v in ExifTags.TAGS.items() if v == 'DateTimeOriginal'), None)
-        if date_key and date_key in exif:
-            try:
-                taken_at = datetime.strptime(exif[date_key], '%Y:%m:%d %H:%M:%S').isoformat()
-            except Exception:
-                taken_at = None
-    except Exception:
-        pass
+
+        # Date prise (plusieurs cles selon source)
+        for key_name in ('DateTimeOriginal', 'CreateDate', 'DateTime'):
+            key = next((k for k, v in ExifTags.TAGS.items() if v == key_name), None)
+            if key and key in exif and not taken_at:
+                try:
+                    taken_at = datetime.strptime(exif[key], '%Y:%m:%d %H:%M:%S').isoformat()
+                except Exception:
+                    pass
+
+        # GPS (tag 34853 = GPSInfo)
+        gps_info = exif.get(34853)
+        if gps_info:
+            lat_ref = gps_info.get(1)
+            lat_dms = gps_info.get(2)
+            lng_ref = gps_info.get(3)
+            lng_dms = gps_info.get(4)
+            if lat_dms and lng_dms:
+                gps_lat = _gps_dms_to_dd(lat_dms, lat_ref)
+                gps_lng = _gps_dms_to_dd(lng_dms, lng_ref)
+    except Exception as e:
+        log.debug("EXIF read fail: %s", e)
 
     # Convert RGBA / P -> RGB pour JPEG
     if img.mode in ('RGBA', 'LA', 'P'):
@@ -1244,6 +1317,8 @@ def _save_uploaded_photo(file, couple_id):
         'thumb_path': rel_thumb,
         'width': w, 'height': h,
         'taken_at': taken_at,
+        'gps_lat': gps_lat,
+        'gps_lng': gps_lng,
     }
 
 
@@ -1363,12 +1438,18 @@ def carnet_upload_photos(cid_carnet):
             log.error("upload #%d (%s) ECHEC: %s\n%s", idx + 1, f.filename, e, tb)
             errors.append(f"{f.filename}: {type(e).__name__}: {e}")
             continue
-        # Override avec metadata client si dispos (Canvas perd les EXIF)
+        # Source de verite : EXIF cote serveur (data) > client > rien
+        # Le client envoie ses lectures exifr ; le serveur lit aussi via Pillow
+        # quand l'original arrive non compresse cote client. On combine.
         ct = client_taken[idx] if idx < len(client_taken) else ''
-        if ct and ct != 'null':
+        if ct and ct != 'null' and not data.get('taken_at'):
             data['taken_at'] = ct
-        gps_lat = _safe_float(client_lat[idx]) if idx < len(client_lat) else None
-        gps_lng = _safe_float(client_lng[idx]) if idx < len(client_lng) else None
+        gps_lat = data.get('gps_lat')
+        gps_lng = data.get('gps_lng')
+        if gps_lat is None:
+            gps_lat = _safe_float(client_lat[idx]) if idx < len(client_lat) else None
+        if gps_lng is None:
+            gps_lng = _safe_float(client_lng[idx]) if idx < len(client_lng) else None
         is_margin = (client_margin[idx] == '1') if idx < len(client_margin) else False
         # v1.2.4 — Reinjecte les EXIF dans le fichier final + thumbnail
         _inject_exif_to_jpeg(os.path.join(UPLOAD_DIR, data['file_path']),
@@ -2029,6 +2110,217 @@ def invite_accept(token):
         return redirect(url_for('home'))
 
     return render_template('invite_accept.html', couple=couple, token=token)
+
+
+# ══════════════════════════════════════════════════════════════════════
+#                v2.0 — HISTOIRE & CONVERSATIONS
+# ══════════════════════════════════════════════════════════════════════
+
+def _get_conversation(espace_id):
+    """Retourne la conversation de l'espace, la cree si manquante."""
+    r = query("SELECT * FROM conversations WHERE espace_id=?", (espace_id,), one=True)
+    if r:
+        return dict(r)
+    cid = execute("INSERT INTO conversations (espace_id) VALUES (?)", (espace_id,))
+    return {'id': cid, 'espace_id': espace_id, 'archive_imported_at': None,
+            'archive_source': '', 'created_at': datetime.utcnow().isoformat()}
+
+
+def _conversation_messages(conv_id):
+    """Retourne tous les messages (archived + live) ordonnes par sent_at,
+    avec infos chapitre + sender + thumb_path photo jointe, hors deleted_at."""
+    rows = query("""
+        SELECT m.*,
+               c.title AS chapter_title, c.headline AS chapter_headline,
+               c.date_label AS chapter_date_label, c.weekday_label AS chapter_weekday,
+               c.featured_image_url AS chapter_image, c.image_caption AS chapter_caption,
+               c.position AS chapter_position,
+               u.display_name AS sender_name, u.avatar_b64 AS sender_avatar,
+               p.thumb_path AS attached_photo_thumb,
+               p.file_path  AS attached_photo_full
+        FROM messages m
+        LEFT JOIN chapters c ON c.id = m.chapter_id
+        LEFT JOIN users u ON u.id = m.sender_id
+        LEFT JOIN photos p ON (m.attachment_type='photo' AND CAST(m.attachment_ref AS INTEGER) = p.id)
+        WHERE m.conversation_id = ? AND m.deleted_at IS NULL
+        ORDER BY m.sent_at ASC, m.id ASC
+    """, (conv_id,))
+    return [dict(r) for r in rows]
+
+
+@app.route('/histoire')
+@couple_required
+def histoire():
+    """Fil unifie : archive (immuable) + conversation continue (live)."""
+    eid = current_espace_id()
+    conv = _get_conversation(eid)
+    msgs = _conversation_messages(conv['id'])
+    # Determine la couleur de chaque user du couple (1er user = ink, 2e = accent)
+    members = query("""
+        SELECT u.id, u.display_name FROM espace_members em
+        JOIN users u ON u.id = em.user_id
+        WHERE em.espace_id = ? ORDER BY em.joined_at ASC
+    """, (eid,))
+    member_ids = [m['id'] for m in members]
+    bubble_color = {}
+    for i, mid in enumerate(member_ids):
+        bubble_color[mid] = 'A' if i == 0 else ('B' if i == 1 else 'C')
+    return render_template('histoire.html',
+        conv=conv, messages=msgs, members=[dict(m) for m in members],
+        bubble_color=bubble_color
+    )
+
+
+@app.route('/histoire/message', methods=['POST'])
+@couple_required
+def histoire_post_message():
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    eid = current_espace_id()
+    conv = _get_conversation(eid)
+    body = (request.form.get('body') or '').strip()
+    photo_file = request.files.get('photo')
+    photo_path = None
+    photo_thumb = None
+    attachment_type = None
+    attachment_ref = None
+
+    if photo_file and photo_file.filename:
+        try:
+            data = _save_uploaded_photo(photo_file, eid)
+            ct = request.form.get('photo_taken_at') or ''
+            if ct and ct != 'null' and not data.get('taken_at'):
+                data['taken_at'] = ct
+            gps_lat = data.get('gps_lat') or _safe_float(request.form.get('photo_gps_lat'))
+            gps_lng = data.get('gps_lng') or _safe_float(request.form.get('photo_gps_lng'))
+            _inject_exif_to_jpeg(os.path.join(UPLOAD_DIR, data['file_path']),
+                                 data.get('taken_at'), gps_lat, gps_lng)
+            _inject_exif_to_jpeg(os.path.join(UPLOAD_DIR, data['thumb_path']),
+                                 data.get('taken_at'), gps_lat, gps_lng)
+            photo_id = execute(
+                "INSERT INTO photos (couple_id, file_path, thumb_path, width, height, "
+                "taken_at, gps_lat, gps_lng, added_by) VALUES (?,?,?,?,?,?,?,?,?)",
+                (eid, data['file_path'], data['thumb_path'],
+                 data['width'], data['height'], data['taken_at'],
+                 gps_lat, gps_lng, session['uid'])
+            )
+            attachment_type = 'photo'
+            attachment_ref = str(photo_id)
+        except Exception as e:
+            log.error("histoire photo upload: %s", e)
+            return jsonify({'ok': False, 'error': 'Photo : ' + str(e)}), 500
+
+    if not body and not attachment_type:
+        return jsonify({'ok': False, 'error': 'Message vide'}), 400
+
+    sent_at = datetime.utcnow().isoformat()
+    mid = execute(
+        "INSERT INTO messages (conversation_id, kind, sender_type, sender_id, sender_label, "
+        "body, attachment_type, attachment_ref, sent_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (conv['id'], 'live', 'member', session['uid'], current_user()['display_name'],
+         body, attachment_type, attachment_ref, sent_at)
+    )
+    return jsonify({'ok': True, 'message_id': mid, 'sent_at': sent_at})
+
+
+@app.route('/histoire/message/<int:msg_id>/modifier', methods=['POST'])
+@couple_required
+def histoire_message_modifier(msg_id):
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    msg = query("SELECT m.*, c.espace_id FROM messages m "
+                "JOIN conversations c ON c.id=m.conversation_id WHERE m.id=?",
+                (msg_id,), one=True)
+    if not msg or msg['espace_id'] != current_espace_id():
+        return jsonify({'ok': False, 'error': '404'}), 404
+    if msg['kind'] == 'archived':
+        return jsonify({'ok': False, 'error': "L'archive est immuable"}), 403
+    if msg['sender_id'] != session['uid']:
+        return jsonify({'ok': False, 'error': "Auteur seulement"}), 403
+    body = (request.form.get('body') or '').strip()
+    if not body:
+        return jsonify({'ok': False, 'error': 'Vide'}), 400
+    execute("UPDATE messages SET body=?, edited_at=CURRENT_TIMESTAMP WHERE id=?",
+            (body, msg_id))
+    return jsonify({'ok': True})
+
+
+@app.route('/histoire/message/<int:msg_id>/supprimer', methods=['POST'])
+@couple_required
+def histoire_message_supprimer(msg_id):
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    msg = query("SELECT m.*, c.espace_id FROM messages m "
+                "JOIN conversations c ON c.id=m.conversation_id WHERE m.id=?",
+                (msg_id,), one=True)
+    if not msg or msg['espace_id'] != current_espace_id():
+        return jsonify({'ok': False, 'error': '404'}), 404
+    if msg['kind'] == 'archived':
+        return jsonify({'ok': False, 'error': "L'archive est immuable"}), 403
+    if msg['sender_id'] != session['uid']:
+        return jsonify({'ok': False, 'error': "Auteur seulement"}), 403
+    execute("UPDATE messages SET deleted_at=CURRENT_TIMESTAMP WHERE id=?", (msg_id,))
+    return jsonify({'ok': True})
+
+
+@app.route('/histoire/import', methods=['GET', 'POST'])
+@couple_required
+def histoire_import():
+    """Import d'une archive de conversation au format JSON (cf. brief V2 §22)."""
+    eid = current_espace_id()
+    conv = _get_conversation(eid)
+    if request.method == 'POST':
+        if not csrf_check():
+            flash("Session expiree.", "err")
+            return redirect(url_for('histoire_import'))
+        import json as _json
+        raw = request.form.get('archive_json') or ''
+        try:
+            data = _json.loads(raw)
+        except Exception as e:
+            flash(f"JSON invalide : {e}", "err")
+            return render_template('histoire_import.html', conv=conv, raw=raw)
+        # Validation minimale
+        if not isinstance(data, dict) or 'chapters' not in data:
+            flash("Format invalide : il manque la cle 'chapters'.", "err")
+            return render_template('histoire_import.html', conv=conv, raw=raw)
+        # Reset archive existante (chapitres + messages archived)
+        execute("DELETE FROM messages WHERE conversation_id=? AND kind='archived'", (conv['id'],))
+        execute("DELETE FROM chapters WHERE conversation_id=?", (conv['id'],))
+        # Import
+        nb_chapters = 0
+        nb_messages = 0
+        for chap in data.get('chapters', []):
+            cap_id = execute(
+                "INSERT INTO chapters (conversation_id, position, title, headline, "
+                "date_label, weekday_label, featured_image_url, image_caption) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (conv['id'], chap.get('position', nb_chapters),
+                 chap.get('title', ''), chap.get('headline', ''),
+                 chap.get('dateLabel', ''), chap.get('weekdayLabel', ''),
+                 chap.get('featuredImageUrl', ''), chap.get('imageCaption', ''))
+            )
+            nb_chapters += 1
+            for msg in chap.get('messages', []):
+                execute(
+                    "INSERT INTO messages (conversation_id, kind, chapter_id, "
+                    "sender_type, sender_label, body, sent_at) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (conv['id'], 'archived', cap_id,
+                     msg.get('senderType', 'system'),
+                     msg.get('senderLabel', ''),
+                     msg.get('body', ''),
+                     msg.get('sentAt', datetime.utcnow().isoformat()))
+                )
+                nb_messages += 1
+        execute(
+            "UPDATE conversations SET archive_imported_at=CURRENT_TIMESTAMP, "
+            "archive_source=? WHERE id=?",
+            (data.get('source', 'manual'), conv['id'])
+        )
+        flash(f"Archive importee : {nb_chapters} chapitre(s), {nb_messages} message(s).", "ok")
+        return redirect(url_for('histoire'))
+    return render_template('histoire_import.html', conv=conv)
 
 
 # ══════════════════════════════════════════════════════════════════════

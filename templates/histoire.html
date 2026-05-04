@@ -1,0 +1,218 @@
+{% extends '_base.html' %}
+{% block title %}Histoire — Notre Histoire{% endblock %}
+{% block content %}
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <span class="brand">Notre Histoire</span>
+    <nav class="topbar-tabs">
+      <a href="{{ url_for('home') }}" class="tab-link">Carnets</a>
+      <a href="{{ url_for('souhaits_index') }}" class="tab-link">Rêveries</a>
+      <a href="{{ url_for('histoire') }}" class="tab-link tab-link-active">Histoire</a>
+    </nav>
+    <nav class="topbar-nav">
+      <a href="{{ url_for('histoire_import') }}" class="link" title="Importer une archive de conversation">📥 Importer</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page histoire-page">
+
+  <section class="hero">
+    <p class="kicker">{% if current_espace %}{{ current_espace.name or 'Notre histoire' }}{% endif %}</p>
+    <h1 class="display"><em>Notre fil.</em></h1>
+    <p class="lead">
+      Un espace lent. Des photos qu'on garde, des mots qu'on écrit pour rester.
+    </p>
+  </section>
+
+  {# ─── Fil chronologique ───────────────────────────────────── #}
+  <div class="histoire-fil" id="histoire-fil">
+    {% set ns = namespace(prev_chapter=None, prev_day=None, prev_kind=None) %}
+    {% for m in messages %}
+
+      {# Saut entre chapitre archive #}
+      {% if m.kind == 'archived' and m.chapter_id and m.chapter_id != ns.prev_chapter %}
+        {% set ns.prev_chapter = m.chapter_id %}
+        <div class="chapter-divider">
+          {% if m.chapter_weekday %}<span class="chapter-weekday">{{ m.chapter_weekday }}</span>{% endif %}
+          {% if m.chapter_date_label %}<span class="chapter-date">{{ m.chapter_date_label }}</span>{% endif %}
+          {% if m.chapter_title %}<h2 class="chapter-title"><em>{{ m.chapter_title }}</em></h2>{% endif %}
+          {% if m.chapter_headline %}<p class="chapter-headline">{{ m.chapter_headline }}</p>{% endif %}
+          {% if m.chapter_image %}
+          <div class="chapter-image">
+            <img src="{{ m.chapter_image }}" alt="">
+            {% if m.chapter_caption %}<div class="chapter-caption">{{ m.chapter_caption }}</div>{% endif %}
+          </div>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      {# Saut archive -> live #}
+      {% if ns.prev_kind == 'archived' and m.kind == 'live' %}
+        <div class="kind-separator">
+          <span>ICI COMMENCE NOTRE APP</span>
+        </div>
+      {% endif %}
+      {% set ns.prev_kind = m.kind %}
+
+      {# Day separator (regroupement par jour) #}
+      {% set day = (m.sent_at or '')[:10] %}
+      {% if day != ns.prev_day %}
+        {% set ns.prev_day = day %}
+        <div class="day-separator">{{ day }}</div>
+      {% endif %}
+
+      {# Bulle message #}
+      {% set is_self = (m.sender_id and current_user and m.sender_id == current_user.id) %}
+      {% set color = bubble_color.get(m.sender_id, 'C') if m.sender_id else 'sys' %}
+      {% if m.sender_type == 'system' %}{% set color = 'sys' %}{% endif %}
+      <div class="message message-{{ m.kind }} message-color-{{ color }}{% if is_self %} message-self{% endif %}"
+           data-msg-id="{{ m.id }}">
+        {% if not is_self and (m.sender_label or m.sender_name) %}
+          <span class="message-sender">{{ m.sender_label or m.sender_name }}</span>
+        {% endif %}
+        {% if m.body %}<div class="message-body">{{ m.body }}</div>{% endif %}
+        {% if m.attachment_type == 'photo' and m.attached_photo_thumb %}
+          <a class="message-photo" href="{{ url_for('serve_upload', filename=m.attached_photo_full) }}" target="_blank">
+            <img src="{{ url_for('serve_upload', filename=m.attached_photo_thumb) }}" loading="lazy" alt="">
+          </a>
+        {% endif %}
+        <div class="message-meta">
+          <span class="message-time">{{ (m.sent_at or '')[11:16] }}</span>
+          {% if m.edited_at %}<span class="message-edited">modifié</span>{% endif %}
+          {% if is_self and m.kind == 'live' %}
+            <button type="button" class="message-action" onclick="editMessage({{ m.id }}, this)">✎</button>
+            <button type="button" class="message-action message-action-danger" onclick="deleteMessage({{ m.id }})">✕</button>
+          {% endif %}
+        </div>
+      </div>
+
+    {% endfor %}
+
+    {% if not messages %}
+    <div class="empty-state">
+      <p class="empty-display"><em>Le fil est vide.</em></p>
+      <p class="empty-lead">
+        Écris le premier message ci-dessous, ou
+        <a href="{{ url_for('histoire_import') }}" style="color:var(--accent)">importe une archive</a>.
+      </p>
+    </div>
+    {% endif %}
+
+  </div>
+
+  {# Composer (sticky bottom) #}
+  <form class="composer" id="composer" enctype="multipart/form-data">
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+    <div class="composer-row">
+      <textarea name="body" id="composer-body" placeholder="Écrire..." rows="1"></textarea>
+      <input type="file" id="composer-photo" name="photo" accept="image/*"
+             style="position:absolute;left:-9999px;width:1px;height:1px">
+      <button type="button" class="composer-attach" onclick="document.getElementById('composer-photo').click()" title="Joindre une photo">📷</button>
+      <button type="submit" class="composer-send" id="composer-send" title="Envoyer">→</button>
+    </div>
+    <div class="composer-preview" id="composer-preview" hidden>
+      <img id="composer-preview-img" src="" alt="">
+      <button type="button" class="composer-preview-clear" onclick="clearComposerPhoto()">✕</button>
+    </div>
+  </form>
+
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/exifr@7/dist/lite.umd.js"></script>
+<script>
+  const CSRF = "{{ csrf_token() }}";
+
+  // Auto-resize textarea
+  const ta = document.getElementById('composer-body');
+  ta.addEventListener('input', function(){
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
+  });
+
+  // Aperçu photo jointe
+  const previewBox = document.getElementById('composer-preview');
+  const previewImg = document.getElementById('composer-preview-img');
+  document.getElementById('composer-photo').addEventListener('change', function(e){
+    var f = e.target.files && e.target.files[0];
+    if (!f) { previewBox.hidden = true; return; }
+    var url = URL.createObjectURL(f);
+    previewImg.src = url;
+    previewBox.hidden = false;
+  });
+  function clearComposerPhoto() {
+    var inp = document.getElementById('composer-photo');
+    inp.value = '';
+    previewBox.hidden = true;
+  }
+  window.clearComposerPhoto = clearComposerPhoto;
+
+  // Submit message
+  document.getElementById('composer').addEventListener('submit', async function(e){
+    e.preventDefault();
+    var btn = document.getElementById('composer-send');
+    btn.disabled = true;
+    var fd = new FormData(e.target);
+    // Lire EXIF photo si presente
+    var f = document.getElementById('composer-photo').files[0];
+    if (f && window.exifr) {
+      try {
+        var meta = await exifr.parse(f, { gps: true, pick: ['DateTimeOriginal','GPSLatitude','GPSLongitude'] });
+        if (meta) {
+          if (meta.DateTimeOriginal) {
+            var dt = meta.DateTimeOriginal instanceof Date ? meta.DateTimeOriginal.toISOString() : meta.DateTimeOriginal;
+            fd.append('photo_taken_at', dt);
+          }
+          if (meta.latitude != null) fd.append('photo_gps_lat', String(meta.latitude));
+          if (meta.longitude != null) fd.append('photo_gps_lng', String(meta.longitude));
+        }
+      } catch(e) {}
+    }
+    try {
+      var r = await fetch("{{ url_for('histoire_post_message') }}", { method:'POST', body: fd });
+      var d = await r.json();
+      if (!d.ok) { alert('Erreur : ' + (d.error || '')); return; }
+      location.reload();
+    } catch (err) { alert('Réseau : ' + err.message); }
+    finally { btn.disabled = false; }
+  });
+
+  // Edit / Delete
+  async function editMessage(mid, btn) {
+    var bubble = document.querySelector('.message[data-msg-id="' + mid + '"]');
+    var body = bubble.querySelector('.message-body');
+    var current = body.textContent;
+    var nv = prompt('Modifier le message :', current);
+    if (nv === null || nv.trim() === '' || nv === current) return;
+    var fd = new FormData(); fd.append('_csrf', CSRF); fd.append('body', nv);
+    var r = await fetch('/histoire/message/' + mid + '/modifier', { method:'POST', body: fd });
+    var d = await r.json();
+    if (!d.ok) { alert('Erreur : ' + (d.error || '')); return; }
+    body.textContent = nv;
+    if (!bubble.querySelector('.message-edited')) {
+      var span = document.createElement('span');
+      span.className = 'message-edited';
+      span.textContent = 'modifié';
+      bubble.querySelector('.message-meta').appendChild(span);
+    }
+  }
+  async function deleteMessage(mid) {
+    if (!confirm('Supprimer ce message ?')) return;
+    var fd = new FormData(); fd.append('_csrf', CSRF);
+    var r = await fetch('/histoire/message/' + mid + '/supprimer', { method:'POST', body: fd });
+    var d = await r.json();
+    if (!d.ok) { alert('Erreur : ' + (d.error || '')); return; }
+    var bubble = document.querySelector('.message[data-msg-id="' + mid + '"]');
+    if (bubble) bubble.remove();
+  }
+  window.editMessage = editMessage;
+  window.deleteMessage = deleteMessage;
+
+  // Scroll auto en bas au load
+  window.addEventListener('load', function(){
+    window.scrollTo(0, document.body.scrollHeight);
+  });
+</script>
+
+{% endblock %}

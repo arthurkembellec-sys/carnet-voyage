@@ -1,0 +1,83 @@
+{% extends '_base.html' %}
+{% block title %}Importer une archive — Notre Histoire{% endblock %}
+{% block content %}
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <a href="{{ url_for('histoire') }}" class="brand">← Histoire</a>
+  </div>
+</header>
+
+<main class="page">
+
+  <section class="hero">
+    <p class="kicker">Archive</p>
+    <h1 class="display"><em>Importer<br>notre conversation.</em></h1>
+    <p class="lead">
+      Colle ici un JSON contenant l'archive de votre conversation d'origine
+      (Hinge, Tinder, ou autre source). Les messages seront en lecture seule,
+      groupés par chapitres, et précéderont la conversation continue.
+    </p>
+  </section>
+
+  {% if conv.archive_imported_at %}
+  <div class="config-line config-warn" style="margin-bottom:24px">
+    <span class="config-dot"></span>
+    Une archive est déjà importée ({{ conv.archive_source or 'manual' }} ·
+    {{ conv.archive_imported_at|truncate(19, true, '') }}).
+    Importer à nouveau remplacera l'archive existante.
+  </div>
+  {% endif %}
+
+  <details class="danger-details" style="margin-bottom:24px">
+    <summary class="btn btn-secondary">Voir le format JSON attendu</summary>
+    <div class="danger-body" style="background:rgba(28,26,23,0.04);color:var(--ink-soft)">
+      <pre style="font-size:12px;overflow-x:auto;line-height:1.5">{
+  "source": "hinge",
+  "chapters": [
+    {
+      "position": 1,
+      "title": "Le like",
+      "headline": "Une photo en Sicile. Un swipe à droite.",
+      "dateLabel": "31 août",
+      "weekdayLabel": "DIMANCHE",
+      "featuredImageUrl": "https://...",
+      "imageCaption": "Isola Bella, Taormina",
+      "messages": [
+        {
+          "senderType": "system",
+          "body": "Arthur a liké ta photo",
+          "sentAt": "2025-08-31T13:08:00Z"
+        },
+        {
+          "senderType": "userB",
+          "senderLabel": "Laurie",
+          "body": "Salut Arthur :) tu vas bien ?",
+          "sentAt": "2025-09-01T21:35:00Z"
+        }
+      ]
+    }
+  ]
+}</pre>
+    </div>
+  </details>
+
+  <form method="POST" action="{{ url_for('histoire_import') }}" class="form form-wide">
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+
+    <label class="field">
+      <span class="label">Archive JSON</span>
+      <textarea name="archive_json" rows="20" required
+                style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px"
+                placeholder='Colle ici un objet JSON valide (cf. format ci-dessus)'>{{ raw or '' }}</textarea>
+    </label>
+
+    <div class="form-actions">
+      <a href="{{ url_for('histoire') }}" class="btn btn-ghost">Annuler</a>
+      <button type="submit" class="btn btn-primary">Importer l'archive</button>
+    </div>
+  </form>
+
+</main>
+
+{% endblock %}

@@ -221,7 +221,10 @@
       }
       try {
         const exif = await readExif(f);
-        const blob = await compressImage(f);
+        // < 8 Mo : on envoie l'ORIGINAL pour preserver tous les EXIF cote serveur.
+        // >= 8 Mo : on compresse pour eviter timeout reseau (Pillow lira les EXIF de la version compressee).
+        const SKIP_COMPRESS = 8 * 1024 * 1024;
+        const blob = (f.size < SKIP_COMPRESS) ? f : await compressImage(f);
         compressed.push(blob);
         exifMeta.push(exif);
       } catch (e) {
