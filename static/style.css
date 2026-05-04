@@ -737,6 +737,176 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
   .drag-handle { width: 30px; height: 30px; top: 6px; left: 6px; font-size: 14px; }
 }
 
+/* ── Apercu livre photo (v1.5) ────────────────────────────────────── */
+.apercu-page { padding-bottom: 60px; }
+.book-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 32px;
+  padding: 24px 0;
+}
+.book-page {
+  background: #FAF8F4;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(28,26,23,0.10);
+  position: relative;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 24px;
+}
+/* Format proportions ratio */
+.book-format-square_20 .book-page  { width: min(440px, 90vw); aspect-ratio: 1/1; }
+.book-format-landscape_a4 .book-page { width: min(560px, 95vw); aspect-ratio: 297/210; }
+.book-format-portrait_a5 .book-page { width: min(360px, 80vw); aspect-ratio: 148/210; }
+
+.book-photo {
+  max-width: 100%;
+  max-height: 75%;
+  object-fit: contain;
+  border-radius: 2px;
+}
+.book-cover-img {
+  max-width: 90%;
+  max-height: 50%;
+  object-fit: contain;
+}
+.book-cover-title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: clamp(22px, 4vw, 36px);
+  margin: 16px 0 8px;
+  text-align: center;
+  color: var(--ink);
+  line-height: 1.1;
+}
+.book-cover-sub {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  margin: 0;
+}
+.book-caption {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 13px;
+  color: var(--ink-soft);
+  text-align: center;
+  margin-top: 14px;
+  max-width: 90%;
+  line-height: 1.4;
+}
+.book-text {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 18px;
+  text-align: center;
+  color: var(--ink);
+  line-height: 1.4;
+  max-width: 80%;
+}
+.book-page-num {
+  position: absolute;
+  bottom: 8px; right: 12px;
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--whisper);
+}
+.book-page-cover { background: linear-gradient(180deg, #FAF8F4 0%, #F0E6D2 100%); }
+.book-video { position: relative; max-width: 100%; max-height: 75%; }
+.book-play-overlay {
+  position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%,-50%);
+  width: 60px; height: 60px;
+  background: rgba(28,26,23,0.5);
+  color: white;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px;
+}
+.book-video-meta {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+}
+.qr-placeholder {
+  display: inline-block;
+  width: 30px; height: 30px;
+  background: #E5D7BB;
+  border: 1px dashed var(--border-strong);
+  border-radius: 4px;
+  vertical-align: middle;
+  font-size: 7px;
+  color: var(--muted);
+  text-align: center;
+  line-height: 30px;
+  margin-right: 6px;
+}
+.book-page-section {
+  background: linear-gradient(180deg, #F5F0E6 0%, #EFE7DD 100%);
+}
+.book-section-title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: clamp(22px, 4vw, 32px);
+  margin: 0 0 12px;
+}
+.book-section-sub {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+}
+.book-page-mosaic {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 12px;
+  padding: 14px;
+}
+.book-mosaic-cell {
+  background: white;
+  border-radius: 4px;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 8px;
+  overflow: hidden;
+}
+.book-mosaic-cell img {
+  max-width: 100%;
+  max-height: 70%;
+  object-fit: contain;
+}
+.book-mosaic-caption {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 10px;
+  text-align: center;
+  color: var(--ink-soft);
+  margin-top: 6px;
+}
+.book-mosaic-text {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 11px;
+  text-align: center;
+  color: var(--ink);
+}
+.book-page-end .book-end-text {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 28px;
+  color: var(--muted);
+  margin: 0;
+}
+
 /* Sort mode */
 .sort-mode-row {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;

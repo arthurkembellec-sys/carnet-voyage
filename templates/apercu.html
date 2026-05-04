@@ -1,0 +1,121 @@
+{% extends '_base.html' %}
+{% block title %}{{ carnet.title }} — Aperçu livre{% endblock %}
+{% block content %}
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <a href="{{ url_for('carnet_album', cid_carnet=carnet.id) }}" class="brand">← Album</a>
+    <nav class="topbar-nav">
+      <a href="{{ url_for('carnet_pdf', cid_carnet=carnet.id, format=format) }}" class="link">📄 Télécharger PDF</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page apercu-page">
+
+  <section class="hero">
+    <p class="kicker">Aperçu livre</p>
+    <h1 class="display"><em>{{ carnet.title }}</em></h1>
+  </section>
+
+  <div class="filter-row">
+    <div class="chips">
+      {% for key, info in formats.items() %}
+      <a href="{{ url_for('carnet_apercu', cid_carnet=carnet.id, format=key) }}"
+         class="chip {% if format == key %}chip-active{% endif %}">{{ info[0] }}</a>
+      {% endfor %}
+    </div>
+    <a href="{{ url_for('carnet_pdf', cid_carnet=carnet.id, format=format) }}" class="btn btn-primary">
+      📄 Télécharger le PDF
+    </a>
+  </div>
+
+  {% set fmt_info = formats[format] %}
+  <p class="lead" style="margin-bottom:24px">
+    Format : <strong>{{ fmt_info[0] }}</strong> ({{ fmt_info[1] }} × {{ fmt_info[2] }} mm)
+    · {{ main_pages|length }} pages album
+    {% if margin_pages %} · {{ margin_pages|length }} notes en marge{% endif %}
+  </p>
+
+  {# Apercu paginé : chaque page est un cadre proche du PDF final #}
+  <div class="book-pages book-format-{{ format }}">
+
+    {# Couverture #}
+    <div class="book-page book-page-cover">
+      {% set cover = main_pages|selectattr('photo_path')|first %}
+      {% if cover %}
+      <img class="book-cover-img" src="{{ url_for('serve_upload', filename=cover.photo_path) }}" alt="">
+      {% endif %}
+      <h2 class="book-cover-title">{{ carnet.title }}</h2>
+      {% if carnet.location or carnet.date_start %}
+      <p class="book-cover-sub">
+        {%- if carnet.location %}{{ carnet.location }}{% endif -%}
+        {%- if carnet.location and carnet.date_start %} · {% endif -%}
+        {%- if carnet.date_start and carnet.date_end and carnet.date_start != carnet.date_end -%}
+          {{ carnet.date_start }} → {{ carnet.date_end }}
+        {%- elif carnet.date_start -%}{{ carnet.date_start }}{%- endif -%}
+      </p>
+      {% endif %}
+      <span class="book-page-num">Couverture</span>
+    </div>
+
+    {# Album principal #}
+    {% for p in main_pages %}
+    <div class="book-page">
+      {% if p.video_path %}
+        <div class="book-video">
+          <img class="book-photo" src="{{ url_for('serve_upload', filename=p.video_poster) }}" alt="">
+          <div class="book-play-overlay">▶</div>
+        </div>
+        <div class="book-video-meta">
+          <span class="qr-placeholder">[QR scan]</span> Scanne pour voir la vidéo
+        </div>
+      {% elif p.photo_path %}
+        <img class="book-photo" src="{{ url_for('serve_upload', filename=p.photo_path) }}" alt="">
+      {% elif p.type == 'text' %}
+        <div class="book-text">{{ p.text_content }}</div>
+      {% endif %}
+      {% if p.caption %}<div class="book-caption">{{ p.caption }}</div>{% endif %}
+      <span class="book-page-num">{{ loop.index + 1 }}</span>
+    </div>
+    {% endfor %}
+
+    {# Notes en marge #}
+    {% if margin_pages %}
+    <div class="book-page book-page-section">
+      <h2 class="book-section-title"><em>Notes en marge</em></h2>
+      <p class="book-section-sub">PHOTOS DE CONTEXTE · LIEUX · BILLETS</p>
+    </div>
+
+    {% set chunks = [] %}
+    {% for m in margin_pages %}
+      {% if loop.index0 % 4 == 0 %}{% set _ = chunks.append([]) %}{% endif %}
+      {% set _ = chunks[-1].append(m) %}
+    {% endfor %}
+
+    {% for chunk in chunks %}
+    <div class="book-page book-page-mosaic">
+      {% for m in chunk %}
+      <div class="book-mosaic-cell">
+        {% if m.photo_path %}
+          <img src="{{ url_for('serve_upload', filename=m.photo_thumb) }}" alt="">
+        {% elif m.text_content %}
+          <div class="book-mosaic-text">{{ m.text_content[:120] }}</div>
+        {% endif %}
+        {% if m.caption %}<div class="book-mosaic-caption">{{ m.caption }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    {# Page de fin #}
+    <div class="book-page book-page-end">
+      <p class="book-end-text"><em>Fin</em></p>
+    </div>
+
+  </div>
+
+</main>
+
+{% endblock %}

@@ -1,5 +1,5 @@
 {% extends '_base.html' %}
-{% block title %}Notre Histoire — Souhaits{% endblock %}
+{% block title %}Notre Histoire — Rêveries{% endblock %}
 {% block content %}
 
 <header class="topbar">
@@ -7,10 +7,10 @@
     <span class="brand">Notre Histoire</span>
     <nav class="topbar-tabs">
       <a href="{{ url_for('home') }}" class="tab-link">Carnets</a>
-      <a href="{{ url_for('souhaits_index') }}" class="tab-link tab-link-active">Souhaits</a>
+      <a href="{{ url_for('souhaits_index') }}" class="tab-link tab-link-active">Rêveries</a>
     </nav>
     <nav class="topbar-nav">
-      <a href="{{ url_for('logout') }}" class="link">Deconnexion</a>
+      <a href="{{ url_for('logout') }}" class="link">Déconnexion</a>
     </nav>
   </div>
 </header>
@@ -19,21 +19,21 @@
 
   <section class="hero">
     <p class="kicker">{% if current_espace %}{{ current_espace.name or 'Cet espace' }}{% endif %}</p>
-    <h1 class="display"><em>Souhaits</em></h1>
+    <h1 class="display"><em>Rêveries</em></h1>
     <p class="lead">
-      Ce que vous reverez de faire. Une fois pret, transformez le souhait
+      Ce que vous rêvez de faire. Une fois prêt, transformez la rêverie
       en vrai carnet de voyage, restaurant ou sortie.
     </p>
   </section>
 
   <div class="filter-row">
     <div class="chips">
-      <a href="{{ url_for('souhaits_index') }}" class="chip {% if not kind_filter %}chip-active{% endif %}">Tous</a>
+      <a href="{{ url_for('souhaits_index') }}" class="chip {% if not kind_filter %}chip-active{% endif %}">Toutes</a>
       {% for key, label in kinds %}
       <a href="{{ url_for('souhaits_index', kind=key) }}" class="chip {% if kind_filter == key %}chip-active{% endif %}">{{ label }}</a>
       {% endfor %}
     </div>
-    <a href="{{ url_for('souhait_nouveau') }}" class="btn btn-primary">+ Nouveau souhait</a>
+    <a href="{{ url_for('souhait_nouveau') }}" class="btn btn-primary">+ Nouvelle rêverie</a>
   </div>
 
   {% if souhaits %}
@@ -48,7 +48,7 @@
           <h3 class="carnet-title">{{ s.title }}</h3>
           <p class="carnet-sub">
             {{ s.nb_items }} item{% if s.nb_items != 1 %}s{% endif %} ·
-            mis a jour {{ (s.updated_at or '')|truncate(10, true, '') }}
+            mise à jour {{ (s.updated_at or '')|truncate(10, true, '') }}
           </p>
         </div>
       </a>
@@ -57,16 +57,16 @@
   </ul>
   {% else %}
   <div class="empty-state">
-    <p class="empty-display"><em>Pas encore de souhait.</em></p>
+    <p class="empty-display"><em>Pas encore de rêverie.</em></p>
     <p class="empty-lead">
       {% if kind_filter %}
-      Aucun souhait dans cette categorie.
+      Aucune rêverie dans cette catégorie.
       {% else %}
-      Commencez votre premier souhait — ce voyage en Sicile, ce restau a tester,
+      Commencez votre première rêverie — ce voyage en Sicile, ce restau à tester,
       cette balade un dimanche.
       {% endif %}
     </p>
-    <a href="{{ url_for('souhait_nouveau') }}" class="btn btn-primary">Creer un souhait</a>
+    <a href="{{ url_for('souhait_nouveau') }}" class="btn btn-primary">Créer une rêverie</a>
   </div>
   {% endif %}
 

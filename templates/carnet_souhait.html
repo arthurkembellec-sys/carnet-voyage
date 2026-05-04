@@ -1,5 +1,5 @@
 {% extends '_base.html' %}
-{% block title %}{{ carnet.title }} — Souhait{% endblock %}
+{% block title %}{{ carnet.title }} — Rêverie{% endblock %}
 {% block content %}
 
 <header class="topbar">
@@ -14,7 +14,7 @@
 <main class="page souhait-page">
 
   <section class="hero souhait-hero">
-    <p class="kicker">Souhait</p>
+    <p class="kicker">Rêverie</p>
     <h1 class="display"><em>{{ carnet.title }}</em></h1>
     {% if carnet.location %}<p class="lead">{{ carnet.location }}</p>{% endif %}
     <div class="cta-row">
@@ -26,7 +26,7 @@
 
   {% if voyages %}
   <section class="voyages-issus">
-    <h2 class="section-title">Voyages issus de ce souhait</h2>
+    <h2 class="section-title">Voyages issus de cette rêverie</h2>
     <ul class="member-list">
       {% for v in voyages %}
       <li class="member-item">

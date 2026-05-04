@@ -14,8 +14,8 @@
     <p class="kicker">Transformation</p>
     <h1 class="display"><em>Du reve<br>au voyage.</em></h1>
     <p class="lead">
-      Quels items veux-tu emporter dans le voyage ? Les items emportes
-      disparaitront du souhait (sauf si tu coches "dupliquer").
+      Quels items veux-tu emporter dans le voyage ? Les items emportés
+      disparaîtront de la rêverie (sauf si tu coches « dupliquer »).
     </p>
   </section>
 
@@ -24,7 +24,7 @@
 
     {# Selection items #}
     <div class="field">
-      <span class="label">Items du souhait</span>
+      <span class="label">Items de la rêverie</span>
       {% if items %}
       <div class="transform-toggles">
         <button type="button" class="btn btn-secondary btn-sm" onclick="toggleAll(true)">Tout selectionner</button>
@@ -46,10 +46,10 @@
       </ul>
       <label class="transform-duplicate">
         <input type="checkbox" name="duplicate" value="1">
-        Dupliquer plutot que deplacer (les items restent aussi dans le souhait)
+        Dupliquer plutôt que déplacer (les items restent aussi dans la rêverie)
       </label>
       {% else %}
-      <p class="hint">Aucun item dans ce souhait. Le voyage sera cree vide.</p>
+      <p class="hint">Aucun item dans cette rêverie. Le voyage sera créé vide.</p>
       {% endif %}
     </div>
 

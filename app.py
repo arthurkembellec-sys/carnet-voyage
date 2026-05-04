@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "1.2.5-drag-drop"
+APP_VERSION = "1.5.0-pdf-reveries"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
@@ -838,6 +838,297 @@ def carnet_supprimer(cid_carnet):
         (cid_carnet,)
     )
     return redirect(url_for('home'))
+
+
+# ══════════════════════════════════════════════════════════════════════
+#                    v1.5 — APERCU LIVRE + EXPORT PDF
+# ══════════════════════════════════════════════════════════════════════
+
+PDF_FORMATS = {
+    'square_20':     ('Carre 20×20 cm',   200, 200),
+    'landscape_a4':  ('A4 paysage',       297, 210),
+    'portrait_a5':   ('A5 portrait',      148, 210),
+}
+
+
+@app.route('/carnet/<int:cid_carnet>/apercu')
+@couple_required
+def carnet_apercu(cid_carnet):
+    """Page apercu HTML paginée du livre photo."""
+    c = _get_carnet_or_404(cid_carnet)
+    sort_mode = c.get('sort_mode') or 'chrono'
+    pages_data = _carnet_pages(cid_carnet, sort_mode=sort_mode)
+    fmt = request.args.get('format', 'square_20')
+    if fmt not in PDF_FORMATS:
+        fmt = 'square_20'
+    return render_template('apercu.html',
+        carnet=c,
+        main_pages=pages_data['main'],
+        margin_pages=pages_data['margin'],
+        format=fmt,
+        formats=PDF_FORMATS,
+    )
+
+
+@app.route('/carnet/<int:cid_carnet>/pdf')
+@couple_required
+def carnet_pdf(cid_carnet):
+    """Genere le PDF du livre photo a la volee."""
+    c = _get_carnet_or_404(cid_carnet)
+    fmt = request.args.get('format', 'square_20')
+    if fmt not in PDF_FORMATS:
+        fmt = 'square_20'
+    sort_mode = c.get('sort_mode') or 'chrono'
+    pages_data = _carnet_pages(cid_carnet, sort_mode=sort_mode)
+
+    from reportlab.pdfgen import canvas as pdf_canvas
+    from reportlab.lib.units import mm
+    from reportlab.lib.utils import ImageReader
+
+    label, w_mm, h_mm = PDF_FORMATS[fmt]
+    page_w, page_h = w_mm * mm, h_mm * mm
+    margin = 10 * mm
+
+    buf = io.BytesIO()
+    pdf = pdf_canvas.Canvas(buf, pagesize=(page_w, page_h))
+    pdf.setTitle(c['title'])
+    pdf.setAuthor("Notre Histoire")
+
+    # ─ Page 1 : Couverture ─────────────────────────────────────────
+    pdf.setFillColorRGB(0.98, 0.972, 0.957)
+    pdf.rect(0, 0, page_w, page_h, fill=1, stroke=0)
+    pdf.setFillColorRGB(0.110, 0.102, 0.090)
+
+    # Trouver une photo de couverture (premiere photo principale)
+    cover = next((p for p in pages_data['main']
+                  if p.get('photo_path')), None)
+    if cover:
+        try:
+            cover_path = os.path.join(UPLOAD_DIR, cover['photo_path'])
+            img = ImageReader(cover_path)
+            iw, ih = img.getSize()
+            ratio = min((page_w - 2*margin) / iw, (page_h * 0.55) / ih)
+            dw, dh = iw * ratio, ih * ratio
+            pdf.drawImage(img, (page_w - dw) / 2, page_h * 0.40,
+                          width=dw, height=dh, mask='auto')
+        except Exception as e:
+            log.warning("PDF cover image fail: %s", e)
+
+    # Titre
+    pdf.setFont('Times-Italic', 36)
+    pdf.drawCentredString(page_w / 2, page_h * 0.30, c['title'])
+
+    # Sous-titre : lieu + dates
+    sub = []
+    if c.get('location'): sub.append(c['location'])
+    if c.get('date_start') and c.get('date_end') and c['date_start'] != c['date_end']:
+        sub.append(f"{c['date_start']} → {c['date_end']}")
+    elif c.get('date_start'):
+        sub.append(c['date_start'])
+    if sub:
+        pdf.setFont('Helvetica', 11)
+        pdf.setFillColorRGB(0.42, 0.41, 0.38)
+        pdf.drawCentredString(page_w / 2, page_h * 0.24, ' · '.join(sub))
+
+    pdf.setFont('Helvetica', 8)
+    pdf.setFillColorRGB(0.64, 0.611, 0.572)
+    pdf.drawCentredString(page_w / 2, margin, "NOTRE HISTOIRE")
+
+    pdf.showPage()
+
+    # ─ Pages : album principal ─────────────────────────────────────
+    def _draw_photo_page(item):
+        # Fond creme leger
+        pdf.setFillColorRGB(0.98, 0.972, 0.957)
+        pdf.rect(0, 0, page_w, page_h, fill=1, stroke=0)
+        try:
+            ph_path = os.path.join(UPLOAD_DIR, item['photo_path'])
+            img = ImageReader(ph_path)
+            iw, ih = img.getSize()
+            avail_w = page_w - 2*margin
+            avail_h = page_h * 0.78
+            ratio = min(avail_w / iw, avail_h / ih)
+            dw, dh = iw * ratio, ih * ratio
+            x = (page_w - dw) / 2
+            y = page_h - margin - dh
+            pdf.drawImage(img, x, y, width=dw, height=dh, mask='auto')
+        except Exception as e:
+            log.warning("PDF photo fail: %s", e)
+        # Caption
+        if item.get('caption'):
+            pdf.setFont('Times-Italic', 12)
+            pdf.setFillColorRGB(0.24, 0.227, 0.207)
+            _wrap_text(pdf, item['caption'], page_w / 2, page_h * 0.12,
+                       max_width=page_w - 2*margin, line_height=15)
+        # Date prise (discrete en bas)
+        if item.get('photo_taken_at'):
+            pdf.setFont('Helvetica', 7)
+            pdf.setFillColorRGB(0.64, 0.611, 0.572)
+            pdf.drawString(margin, margin / 2, str(item['photo_taken_at']).replace('T', ' ')[:16])
+        pdf.showPage()
+
+    def _draw_text_page(item):
+        pdf.setFillColorRGB(0.98, 0.972, 0.957)
+        pdf.rect(0, 0, page_w, page_h, fill=1, stroke=0)
+        text = item.get('text_content') or ''
+        if text:
+            pdf.setFont('Times-Italic', 18)
+            pdf.setFillColorRGB(0.110, 0.102, 0.090)
+            _wrap_text(pdf, text, page_w / 2, page_h / 2,
+                       max_width=page_w - 4*margin, line_height=24)
+        pdf.showPage()
+
+    def _draw_video_page(item):
+        # Page video : poster + QR vers /v/<token>
+        pdf.setFillColorRGB(0.98, 0.972, 0.957)
+        pdf.rect(0, 0, page_w, page_h, fill=1, stroke=0)
+        try:
+            poster_path = os.path.join(UPLOAD_DIR, item['video_poster'])
+            img = ImageReader(poster_path)
+            iw, ih = img.getSize()
+            avail_w = page_w - 2*margin
+            avail_h = page_h * 0.62
+            ratio = min(avail_w / iw, avail_h / ih)
+            dw, dh = iw * ratio, ih * ratio
+            x = (page_w - dw) / 2
+            y = page_h - margin - dh
+            pdf.drawImage(img, x, y, width=dw, height=dh, mask='auto')
+            # Petit play overlay au centre du poster
+            cx, cy = x + dw / 2, y + dh / 2
+            r = min(dw, dh) * 0.08
+            pdf.setFillColorRGB(0, 0, 0, alpha=0.5)
+            pdf.circle(cx, cy, r, stroke=0, fill=1)
+            pdf.setFillColorRGB(1, 1, 1)
+            tri = [(cx - r*0.4, cy - r*0.6),
+                   (cx - r*0.4, cy + r*0.6),
+                   (cx + r*0.6, cy)]
+            p = pdf.beginPath()
+            p.moveTo(*tri[0]); p.lineTo(*tri[1]); p.lineTo(*tri[2]); p.close()
+            pdf.drawPath(p, stroke=0, fill=1)
+        except Exception as e:
+            log.warning("PDF video poster fail: %s", e)
+        # QR code (vers la page publique)
+        if item.get('video_token'):
+            try:
+                video_url = url_for('video_public', token=item['video_token'], _external=True)
+                qr_img = qrcode.make(video_url)
+                qr_buf = io.BytesIO()
+                qr_img.save(qr_buf, 'PNG')
+                qr_buf.seek(0)
+                qr_size = 35 * mm
+                qr_x = (page_w - qr_size) / 2
+                qr_y = page_h * 0.13
+                pdf.drawImage(ImageReader(qr_buf), qr_x, qr_y,
+                              width=qr_size, height=qr_size, mask='auto')
+                pdf.setFont('Helvetica', 9)
+                pdf.setFillColorRGB(0.42, 0.41, 0.38)
+                pdf.drawCentredString(page_w / 2, qr_y - 4*mm,
+                                      "Scanne pour voir la video")
+            except Exception as e:
+                log.warning("PDF QR fail: %s", e)
+        if item.get('caption'):
+            pdf.setFont('Times-Italic', 10)
+            pdf.setFillColorRGB(0.24, 0.227, 0.207)
+            _wrap_text(pdf, item['caption'], page_w / 2, page_h * 0.06,
+                       max_width=page_w - 2*margin, line_height=12)
+        pdf.showPage()
+
+    for item in pages_data['main']:
+        if item.get('video_path'):
+            _draw_video_page(item)
+        elif item.get('photo_path'):
+            _draw_photo_page(item)
+        elif item['type'] == 'text':
+            _draw_text_page(item)
+
+    # ─ Section : Notes en marge (mosaique 2x2) ─────────────────────
+    if pages_data['margin']:
+        # Page de garde
+        pdf.setFillColorRGB(0.98, 0.972, 0.957)
+        pdf.rect(0, 0, page_w, page_h, fill=1, stroke=0)
+        pdf.setFont('Times-Italic', 28)
+        pdf.setFillColorRGB(0.110, 0.102, 0.090)
+        pdf.drawCentredString(page_w / 2, page_h / 2, "Notes en marge")
+        pdf.setFont('Helvetica', 9)
+        pdf.setFillColorRGB(0.64, 0.611, 0.572)
+        pdf.drawCentredString(page_w / 2, page_h / 2 - 30,
+                              "PHOTOS DE CONTEXTE · LIEUX · BILLETS")
+        pdf.showPage()
+
+        per_page = 4
+        for chunk_start in range(0, len(pages_data['margin']), per_page):
+            chunk = pages_data['margin'][chunk_start:chunk_start + per_page]
+            pdf.setFillColorRGB(0.98, 0.972, 0.957)
+            pdf.rect(0, 0, page_w, page_h, fill=1, stroke=0)
+            cell_w = (page_w - 3 * margin) / 2
+            cell_h = (page_h - 3 * margin) / 2
+            for i, m in enumerate(chunk):
+                col, row = i % 2, i // 2
+                cx = margin + col * (cell_w + margin)
+                cy = margin + (1 - row) * (cell_h + margin)
+                if m.get('photo_path'):
+                    try:
+                        ph = os.path.join(UPLOAD_DIR, m['photo_path'])
+                        img = ImageReader(ph)
+                        iw, ih = img.getSize()
+                        ratio = min(cell_w / iw, (cell_h - 8*mm) / ih)
+                        dw, dh = iw * ratio, ih * ratio
+                        pdf.drawImage(img, cx + (cell_w - dw)/2, cy + 8*mm,
+                                      width=dw, height=dh, mask='auto')
+                    except Exception:
+                        pass
+                if m.get('caption') or m.get('text_content'):
+                    pdf.setFont('Times-Italic', 9)
+                    pdf.setFillColorRGB(0.24, 0.227, 0.207)
+                    _wrap_text(pdf, m.get('caption') or m.get('text_content'),
+                               cx + cell_w/2, cy + 3*mm,
+                               max_width=cell_w, line_height=11, max_lines=3)
+            pdf.showPage()
+
+    # ─ Page de fin ─────────────────────────────────────────────────
+    pdf.setFillColorRGB(0.98, 0.972, 0.957)
+    pdf.rect(0, 0, page_w, page_h, fill=1, stroke=0)
+    pdf.setFont('Times-Italic', 14)
+    pdf.setFillColorRGB(0.42, 0.41, 0.38)
+    pdf.drawCentredString(page_w / 2, page_h / 2, "Fin")
+    pdf.setFont('Helvetica', 8)
+    pdf.setFillColorRGB(0.64, 0.611, 0.572)
+    pdf.drawCentredString(page_w / 2, margin, "NOTRE HISTOIRE · histoire.aqgk.fr")
+
+    pdf.showPage()
+    pdf.save()
+    buf.seek(0)
+
+    safe_title = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_'
+                         for ch in c['title'])[:40]
+    fname = f"{safe_title}_{fmt}.pdf"
+    from flask import Response
+    return Response(buf.getvalue(),
+        mimetype='application/pdf',
+        headers={'Content-Disposition': f'attachment; filename="{fname}"'})
+
+
+def _wrap_text(pdf, text, cx, cy, max_width, line_height=14, max_lines=99):
+    """Affichage centre multi-ligne texte (wrap basique sur largeur)."""
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    font_name = pdf._fontname
+    font_size = pdf._fontsize
+    words = (text or '').split()
+    lines, cur = [], []
+    for w in words:
+        test = ' '.join(cur + [w])
+        if stringWidth(test, font_name, font_size) <= max_width:
+            cur.append(w)
+        else:
+            if cur: lines.append(' '.join(cur))
+            cur = [w]
+    if cur: lines.append(' '.join(cur))
+    lines = lines[:max_lines]
+    total_h = len(lines) * line_height
+    y = cy + total_h / 2
+    for line in lines:
+        pdf.drawCentredString(cx, y, line)
+        y -= line_height
 
 
 # ══════════════════════════════════════════════════════════════════════

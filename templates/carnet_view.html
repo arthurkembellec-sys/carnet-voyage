@@ -31,6 +31,7 @@
     {% endif %}
     <div class="cta-row">
       <a href="{{ url_for('carnet_album', cid_carnet=carnet.id) }}" class="btn btn-primary">Ouvrir l'album</a>
+      <a href="{{ url_for('carnet_apercu', cid_carnet=carnet.id) }}" class="btn btn-secondary">📖 Aperçu livre</a>
     </div>
   </section>
 </main>

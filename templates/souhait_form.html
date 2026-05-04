@@ -1,20 +1,20 @@
 {% extends '_base.html' %}
-{% block title %}Nouveau souhait — Notre Histoire{% endblock %}
+{% block title %}Nouvelle rêverie — Notre Histoire{% endblock %}
 {% block content %}
 
 <header class="topbar">
   <div class="topbar-inner">
-    <a href="{{ url_for('souhaits_index') }}" class="brand">← Souhaits</a>
+    <a href="{{ url_for('souhaits_index') }}" class="brand">← Rêveries</a>
   </div>
 </header>
 
 <main class="page">
   <section class="hero">
-    <p class="kicker">Nouveau souhait</p>
+    <p class="kicker">Nouvelle rêverie</p>
     <h1 class="display"><em>Quelle envie ?</em></h1>
     <p class="lead">
-      Donne-lui un nom et choisis sa categorie. Tu pourras y ajouter
-      des liens, photos, lieux et un budget pour preparer.
+      Donne-lui un nom et choisis sa catégorie. Tu pourras y ajouter
+      des liens, photos, lieux et un budget pour préparer.
     </p>
   </section>
 
@@ -25,11 +25,11 @@
       <span class="label">Titre</span>
       <input type="text" name="title" required maxlength="80" autofocus
              value="{{ souhait.title if souhait else '' }}"
-             placeholder="ex. Sicile septembre · Restos a tester · Lune de miel">
+             placeholder="ex. Sicile septembre · Restos à tester · Lune de miel">
     </label>
 
     <div class="field">
-      <span class="label">Categorie</span>
+      <span class="label">Catégorie</span>
       <div class="segmented">
         {% set current = (souhait.souhait_kind if souhait else 'voyage') %}
         {% for key, label in kinds %}
@@ -44,7 +44,7 @@
 
     <div class="form-actions">
       <a href="{{ url_for('souhaits_index') }}" class="btn btn-ghost">Annuler</a>
-      <button type="submit" class="btn btn-primary">Creer le souhait</button>
+      <button type="submit" class="btn btn-primary">Créer la rêverie</button>
     </div>
   </form>
 </main>
