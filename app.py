@@ -312,6 +312,9 @@ def init_db():
         "ALTER TABLE album_pages ADD COLUMN photos_per_page_override INTEGER",
         "ALTER TABLE album_pages ADD COLUMN page_margin_override REAL",
         "ALTER TABLE album_pages ADD COLUMN full_bleed_override INTEGER",
+        # ── v2.4 — options carto PDF (Brief 06 §5.7)
+        "ALTER TABLE carnets ADD COLUMN pdf_show_overview_map INTEGER DEFAULT 1",
+        "ALTER TABLE carnets ADD COLUMN pdf_show_section_maps INTEGER DEFAULT 1",
         # ── v2.2 — Web Push : abonnements aux notifications PWA ──────
         """CREATE TABLE IF NOT EXISTS push_subscriptions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -984,6 +987,120 @@ PDF_FORMATS = {
     'portrait_a5':   ('A5 portrait',      148, 210),
 }
 
+
+# ══════════════════════════════════════════════════════════════════════
+#                v2.4 — CARTOGRAPHIE PDF (Brief 06 §5)
+# ══════════════════════════════════════════════════════════════════════
+import urllib.request
+import urllib.parse
+import hashlib
+
+MAPS_CACHE_DIR = os.path.join(os.path.dirname(DB_PATH), 'maps_cache')
+os.makedirs(MAPS_CACHE_DIR, exist_ok=True)
+MAP_CACHE_TTL_DAYS = 90
+
+
+def _staticmap_url(center_lat, center_lng, zoom, width, height, markers=None):
+    """URL staticmap.openstreetmap.de avec markers optionnels."""
+    base = "https://staticmap.openstreetmap.de/staticmap.php"
+    params = {
+        'center': f"{center_lat:.5f},{center_lng:.5f}",
+        'zoom': str(zoom),
+        'size': f"{width}x{height}",
+        'maptype': 'mapnik',
+    }
+    qs = urllib.parse.urlencode(params)
+    if markers:
+        marker_parts = []
+        for lat, lng in markers[:30]:
+            marker_parts.append(f"markers={lat:.5f},{lng:.5f},red-pushpin")
+        if marker_parts:
+            qs += '&' + '&'.join(marker_parts)
+    return base + '?' + qs
+
+
+def _fetch_staticmap_png(center_lat, center_lng, zoom, width, height, markers=None):
+    """Fetch (avec cache local 90j) une staticmap PNG. Retourne bytes ou None."""
+    if center_lat is None or center_lng is None:
+        return None
+    key = f"{center_lat:.5f}_{center_lng:.5f}_{zoom}_{width}_{height}"
+    if markers:
+        marker_str = '|'.join(f"{a:.5f},{b:.5f}" for a, b in markers[:30])
+        key += '_' + hashlib.md5(marker_str.encode()).hexdigest()[:8]
+    safe_key = hashlib.md5(key.encode()).hexdigest()
+    cache_path = os.path.join(MAPS_CACHE_DIR, f"{safe_key}.png")
+    if os.path.exists(cache_path):
+        try:
+            age_days = (datetime.utcnow().timestamp() - os.path.getmtime(cache_path)) / 86400
+            if age_days < MAP_CACHE_TTL_DAYS:
+                with open(cache_path, 'rb') as f:
+                    return f.read()
+        except Exception:
+            pass
+    url = _staticmap_url(center_lat, center_lng, zoom, width, height, markers)
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Notre-Histoire-PDF/1.0'})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = resp.read()
+        try:
+            with open(cache_path, 'wb') as f:
+                f.write(data)
+        except Exception as e:
+            log.warning("map cache write fail: %s", e)
+        return data
+    except Exception as e:
+        log.warning("staticmap fetch fail (%s): %s", url[:100], e)
+        return None
+
+
+def _compute_map_zoom(min_lat, max_lat, min_lng, max_lng, width_px, height_px):
+    """Calcule le zoom OSM pour englober le bbox (Mercator approx)."""
+    import math
+    if min_lat is None or max_lat is None:
+        return 2
+    lat_span = max(abs(max_lat - min_lat), 0.001)
+    lng_span = max(abs(max_lng - min_lng), 0.001)
+    zoom_lng = math.log2(360.0 * (width_px / 256.0) / lng_span)
+    zoom_lat = math.log2(170.0 * (height_px / 256.0) / lat_span)
+    z = int(min(zoom_lat, zoom_lng)) - 1
+    return max(2, min(15, z))
+
+
+def _carnet_geo_summary(carnet_id):
+    """Retourne dict {markers, center, bbox, count} ou None si pas de GPS."""
+    rows = query("""
+        SELECT p.gps_lat, p.gps_lng FROM photos p
+        JOIN album_pages ap ON ap.photo_id = p.id
+        WHERE ap.carnet_id = ? AND p.gps_lat IS NOT NULL AND p.gps_lng IS NOT NULL
+        UNION
+        SELECT v.gps_lat, v.gps_lng FROM videos v
+        JOIN album_pages ap ON ap.video_id = v.id
+        WHERE ap.carnet_id = ? AND v.gps_lat IS NOT NULL AND v.gps_lng IS NOT NULL
+    """, (carnet_id, carnet_id))
+    coords = []
+    seen = set()
+    for r in rows:
+        lat, lng = r['gps_lat'], r['gps_lng']
+        if lat is None or lng is None:
+            continue
+        key = (round(lat * 200) / 200, round(lng * 200) / 200)
+        if key in seen:
+            continue
+        seen.add(key)
+        coords.append((lat, lng))
+    if not coords:
+        return None
+    lats = [c[0] for c in coords]
+    lngs = [c[1] for c in coords]
+    return {
+        'markers': coords,
+        'center_lat': (min(lats) + max(lats)) / 2,
+        'center_lng': (min(lngs) + max(lngs)) / 2,
+        'min_lat': min(lats), 'max_lat': max(lats),
+        'min_lng': min(lngs), 'max_lng': max(lngs),
+        'count': len(coords),
+    }
+
 PDF_LAYOUTS = [
     ('1', '1 photo / page'),
     ('2', '2 photos / page'),
@@ -1115,6 +1232,63 @@ def carnet_pdf(cid_carnet):
     pdf.drawCentredString(page_w / 2, margin, "NOTRE HISTOIRE")
 
     pdf.showPage()
+
+    # ─ Page 2 : Carte d'ensemble (Brief 06 §5.2) ───────────────────
+    show_overview = c.get('pdf_show_overview_map', 1)
+    show_minimaps = c.get('pdf_show_section_maps', 1)
+    if show_overview:
+        geo_summary = _carnet_geo_summary(cid_carnet)
+        if geo_summary:
+            pdf.setFillColorRGB(0.98, 0.972, 0.957)
+            pdf.rect(0, 0, page_w, page_h, fill=1, stroke=0)
+
+            pdf.setFont('Times-Italic', 28)
+            pdf.setFillColorRGB(0.110, 0.102, 0.090)
+            pdf.drawCentredString(page_w / 2, page_h - margin - 12*mm, "Notre voyage")
+
+            pdf.setFont('Helvetica', 9)
+            pdf.setFillColorRGB(0.42, 0.41, 0.38)
+            pdf.drawCentredString(page_w / 2, page_h - margin - 22*mm,
+                                  f"{geo_summary['count']} lieu(x) sur la carte")
+
+            map_w_mm = (w_mm - 30)
+            map_h_mm = (h_mm - 70)
+            map_w_px = min(int(map_w_mm * 4), 1024)
+            map_h_px = min(int(map_h_mm * 4), 1024)
+            zoom = _compute_map_zoom(
+                geo_summary['min_lat'], geo_summary['max_lat'],
+                geo_summary['min_lng'], geo_summary['max_lng'],
+                map_w_px, map_h_px
+            )
+            map_png = _fetch_staticmap_png(
+                geo_summary['center_lat'], geo_summary['center_lng'],
+                zoom, map_w_px, map_h_px,
+                markers=geo_summary['markers']
+            )
+            if map_png:
+                try:
+                    map_x = margin + 15*mm
+                    map_y = (page_h - map_h_mm * mm) / 2 - 5*mm
+                    pdf.drawImage(ImageReader(io.BytesIO(map_png)), map_x, map_y,
+                                  width=map_w_mm * mm, height=map_h_mm * mm,
+                                  mask='auto')
+                    pdf.setStrokeColorRGB(0.88, 0.85, 0.80)
+                    pdf.setLineWidth(0.5)
+                    pdf.rect(map_x, map_y, map_w_mm * mm, map_h_mm * mm, fill=0, stroke=1)
+                except Exception as e:
+                    log.warning("PDF overview map draw fail: %s", e)
+                    pdf.setFont('Helvetica', 10)
+                    pdf.setFillColorRGB(0.6, 0.6, 0.6)
+                    pdf.drawCentredString(page_w / 2, page_h / 2, "Carte indisponible")
+            else:
+                pdf.setFont('Helvetica', 10)
+                pdf.setFillColorRGB(0.6, 0.6, 0.6)
+                pdf.drawCentredString(page_w / 2, page_h / 2, "Carte indisponible")
+
+            pdf.setFont('Helvetica', 8)
+            pdf.setFillColorRGB(0.64, 0.611, 0.572)
+            pdf.drawCentredString(page_w / 2, margin, "© OpenStreetMap contributors")
+            pdf.showPage()
 
     # ─ Pages : album principal ─────────────────────────────────────
     def _draw_photo_page(item):
@@ -1378,6 +1552,34 @@ def carnet_pdf(cid_carnet):
         margin_idx += len(out)
         return out
 
+    # ─ Helper : coords du lieu commun d'un chunk (pour mini-map) ───
+    def _section_coords_for_chunk(items_chunk):
+        if not items_chunk:
+            return None
+        section_ids = set(it.get('section_id') for it in items_chunk if it.get('section_id'))
+        if not section_ids:
+            for it in items_chunk:
+                if it.get('photo_gps_lat') is not None and it.get('photo_gps_lng') is not None:
+                    return {
+                        'lat': it['photo_gps_lat'], 'lng': it['photo_gps_lng'],
+                        'label': '', 'zoom': 13,
+                    }
+            return None
+        if len(section_ids) == 1:
+            sid = next(iter(section_ids))
+            sec = query(
+                "SELECT location_lat, location_lng, location_name, primary_label "
+                "FROM album_sections WHERE id=?",
+                (sid,), one=True
+            )
+            if sec and sec['location_lat'] is not None:
+                return {
+                    'lat': sec['location_lat'], 'lng': sec['location_lng'],
+                    'label': sec['location_name'] or sec['primary_label'] or '',
+                    'zoom': 12,
+                }
+        return None
+
     # ─ Layout d'une page composite ────────────────────────────────
     def _draw_composite_page(items_chunk):
         pdf.setFillColorRGB(0.98, 0.972, 0.957)
@@ -1425,6 +1627,53 @@ def carnet_pdf(cid_carnet):
         boxes = _grid_layout(len(items_chunk), album_x, album_y, album_w, album_h)
         for box, item in zip(boxes, items_chunk):
             _draw_in_box(item, *box)
+
+        # ── Mini-carte du lieu (Brief 06 §5.3) ─────────────────────
+        minimap_h_mm = 0
+        if show_minimaps and margin_pos != 'end' and mzone_w > 0:
+            section_coords = _section_coords_for_chunk(items_chunk)
+            if section_coords:
+                if margin_pos in ('right', 'left'):
+                    mm_w_mm = (mzone_w / mm) - 4
+                    mm_h_mm = min(mm_w_mm, 35)
+                else:
+                    mm_h_mm = (mzone_h / mm) - 4
+                    mm_w_mm = min(mm_h_mm * 1.3, 50)
+                mm_w_px = min(int(mm_w_mm * 5), 512)
+                mm_h_px = min(int(mm_h_mm * 5), 512)
+                zoom = section_coords.get('zoom', 12)
+                map_png = _fetch_staticmap_png(
+                    section_coords['lat'], section_coords['lng'],
+                    zoom, mm_w_px, mm_h_px,
+                    markers=[(section_coords['lat'], section_coords['lng'])]
+                )
+                if map_png:
+                    try:
+                        if margin_pos == 'right':
+                            mm_x = mzone_x + 2*mm
+                            mm_y = mzone_y + mzone_h - mm_h_mm * mm - 2*mm
+                        elif margin_pos == 'left':
+                            mm_x = mzone_x + (mzone_w - mm_w_mm * mm) / 2
+                            mm_y = mzone_y + mzone_h - mm_h_mm * mm - 2*mm
+                        else:
+                            mm_x = mzone_x + 2*mm
+                            mm_y = mzone_y + (mzone_h - mm_h_mm * mm) / 2
+                        pdf.drawImage(ImageReader(io.BytesIO(map_png)),
+                                      mm_x, mm_y,
+                                      width=mm_w_mm * mm, height=mm_h_mm * mm,
+                                      mask='auto')
+                        pdf.setStrokeColorRGB(0.88, 0.85, 0.80)
+                        pdf.setLineWidth(0.3)
+                        pdf.rect(mm_x, mm_y, mm_w_mm * mm, mm_h_mm * mm, fill=0, stroke=1)
+                        if section_coords.get('label'):
+                            pdf.setFont('Helvetica', 6)
+                            pdf.setFillColorRGB(0.42, 0.41, 0.38)
+                            pdf.drawCentredString(mm_x + (mm_w_mm * mm) / 2,
+                                                  mm_y - 3*mm,
+                                                  section_coords['label'][:30].upper())
+                        minimap_h_mm = mm_h_mm + 6
+                    except Exception as e:
+                        log.warning("PDF minimap draw fail: %s", e)
 
         # Dessine la zone marge si applicable
         if margin_pos != 'end' and mzone_w > 0:
