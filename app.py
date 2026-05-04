@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "2.1.0-charte-polish"
+APP_VERSION = "2.1.1-import-jsx"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
@@ -2615,6 +2615,135 @@ def histoire_message_supprimer(msg_id):
         return jsonify({'ok': False, 'error': "Auteur seulement"}), 403
     execute("UPDATE messages SET deleted_at=CURRENT_TIMESTAMP WHERE id=?", (msg_id,))
     return jsonify({'ok': True})
+
+
+def _parse_jsx_chapters(src):
+    """Extrait CHAPTERS d'un .jsx style notre_histoire.jsx (Hinge mockup).
+    Resout les references IMG_* / S / L / A et parse via json5."""
+    import json5 as _json5
+    import json as _json
+    import re as _re
+
+    # 1) Extraire les constantes IMG_*
+    imgs = {}
+    for m in _re.finditer(r'^const\s+(IMG_\w+)\s*=\s*"((?:\\.|[^"\\])*)"\s*;',
+                          src, flags=_re.M):
+        imgs[m.group(1)] = m.group(2)
+
+    # 2) Extraire le bloc CHAPTERS = [ ... ];
+    m = _re.search(r'^const\s+CHAPTERS\s*=\s*(\[.*?^\]);',
+                   src, flags=_re.M | _re.S)
+    if not m:
+        raise ValueError("Pas de declaration `const CHAPTERS = [...]` dans le fichier")
+    block = m.group(1)
+
+    # 3) Resoudre les references IMG_* (par ordre decroissant de longueur
+    #    pour eviter qu'IMG_X soit remplace par bout d'IMG_XYZ)
+    for key in sorted(imgs.keys(), key=len, reverse=True):
+        block = block.replace(key, _json.dumps(imgs[key]))
+
+    # 4) Resoudre les references S/L/A juste apres `s:`
+    block = _re.sub(r'(\bs\s*:\s*)([SAL])\b', r'\1"\2"', block)
+
+    # 5) Parser avec json5 (tolere unquoted keys, trailing commas, single quotes)
+    return _json5.loads(block)
+
+
+def _import_chapters_into_conv(conv_id, chapters_data, source='hinge'):
+    """Insere une liste de chapitres parses dans la conversation.
+    Reset l'archive existante d'abord."""
+    execute("DELETE FROM messages WHERE conversation_id=? AND kind='archived'", (conv_id,))
+    execute("DELETE FROM chapters WHERE conversation_id=?", (conv_id,))
+    sender_map = {
+        'S': ('system', ''),
+        'A': ('userA',  'Arthur'),
+        'L': ('userB',  'Laurie'),
+    }
+    nb_chapters = 0
+    nb_messages = 0
+    for idx, chap in enumerate(chapters_data):
+        cap_id = execute(
+            "INSERT INTO chapters (conversation_id, position, title, headline, "
+            "date_label, weekday_label, featured_image_url, image_caption) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (conv_id, chap.get('id', idx + 1),
+             chap.get('title', ''), chap.get('headline', ''),
+             chap.get('date', '') or chap.get('dateLabel', ''),
+             chap.get('weekday', '') or chap.get('weekdayLabel', ''),
+             chap.get('image', '') or chap.get('featuredImageUrl', ''),
+             chap.get('imageCaption', ''))
+        )
+        nb_chapters += 1
+        # Date base : on parse `date` + `time` du chapitre, puis +1 min par message
+        base_dt = None
+        try:
+            from datetime import datetime as _dt
+            time_str = (chap.get('time') or '00:00').strip()
+            # date ex "31 août" ; on garde un ISO synthetique avec annee 2025
+            base_dt = _dt.strptime("2025 " + time_str, "%Y %H:%M")
+            # Tente de parser le mois en francais (rough)
+            base_dt = base_dt.replace(year=2025)
+        except Exception:
+            base_dt = None
+        for j, msg in enumerate(chap.get('messages', [])):
+            sender_code = msg.get('s') or msg.get('senderType', 'system')
+            sender_type, sender_label = sender_map.get(sender_code, (sender_code, ''))
+            if not sender_label:
+                sender_label = msg.get('senderLabel', '')
+            body = msg.get('t') or msg.get('body', '')
+            sent_at = msg.get('sentAt')
+            if not sent_at and base_dt:
+                from datetime import timedelta as _td
+                sent_at = (base_dt + _td(minutes=j)).isoformat()
+            elif not sent_at:
+                sent_at = datetime.utcnow().isoformat()
+            execute(
+                "INSERT INTO messages (conversation_id, kind, chapter_id, "
+                "sender_type, sender_label, body, sent_at) VALUES (?,?,?,?,?,?,?)",
+                (conv_id, 'archived', cap_id, sender_type, sender_label, body, sent_at)
+            )
+            nb_messages += 1
+    execute(
+        "UPDATE conversations SET archive_imported_at=CURRENT_TIMESTAMP, "
+        "archive_source=? WHERE id=?",
+        (source, conv_id)
+    )
+    return nb_chapters, nb_messages
+
+
+@app.route('/histoire/import-jsx', methods=['POST'])
+@couple_required
+def histoire_import_jsx():
+    """Upload du fichier notre_histoire.jsx -> import direct dans Histoire.
+    Resout les references IMG_*, S/L/A automatiquement."""
+    eid = current_espace_id()
+    conv = _get_conversation(eid)
+    if not csrf_check():
+        flash("Session expiree.", "err")
+        return redirect(url_for('histoire_import'))
+    f = request.files.get('jsx_file')
+    if not f or not f.filename:
+        flash("Aucun fichier .jsx selectionne.", "err")
+        return redirect(url_for('histoire_import'))
+    try:
+        src = f.stream.read().decode('utf-8', errors='replace')
+    except Exception as e:
+        flash(f"Lecture impossible : {e}", "err")
+        return redirect(url_for('histoire_import'))
+    try:
+        chapters_data = _parse_jsx_chapters(src)
+    except Exception as e:
+        log.error("parse jsx echec: %s", e)
+        flash(f"Parsing echoue : {e}", "err")
+        return redirect(url_for('histoire_import'))
+    try:
+        nb_chap, nb_msg = _import_chapters_into_conv(conv['id'], chapters_data, source='hinge')
+    except Exception as e:
+        log.error("import chapters echec: %s\n%s", e, traceback.format_exc())
+        flash(f"Import echoue : {e}", "err")
+        return redirect(url_for('histoire_import'))
+    flash(f"Archive importee depuis {f.filename} : {nb_chap} chapitre(s), {nb_msg} message(s).", "ok")
+    return redirect(url_for('histoire'))
 
 
 @app.route('/histoire/import', methods=['GET', 'POST'])

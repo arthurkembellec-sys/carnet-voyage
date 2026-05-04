@@ -29,6 +29,31 @@
   </div>
   {% endif %}
 
+  {# ─── Option 1 : upload du fichier notre_histoire.jsx ─── #}
+  <section class="profil-section" style="margin-top:0;border-top:0;padding-top:0">
+    <h2 class="section-title">Option simple — uploader le fichier <code>notre_histoire.jsx</code></h2>
+    <p class="lead" style="font-size:14px">
+      Si tu as la maquette React du brief V1 (<code>notre_histoire.jsx</code>),
+      uploade-la directement. Le serveur extrait automatiquement les chapitres,
+      résout les références d'images en base64 et importe.
+    </p>
+    <form method="POST" action="{{ url_for('histoire_import_jsx') }}"
+          enctype="multipart/form-data" class="form" style="margin-top:12px">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <label class="field">
+        <span class="label">Fichier .jsx</span>
+        <input type="file" name="jsx_file" accept=".jsx,.js,text/javascript" required>
+        <span class="hint">Le fichier sera parsé côté serveur. Aucune modification de ce fichier.</span>
+      </label>
+      <button type="submit" class="btn btn-primary">Importer le .jsx</button>
+    </form>
+  </section>
+
+  <hr style="margin:40px 0;border:0;border-top:1px solid var(--border-default)">
+
+  {# ─── Option 2 : coller du JSON ─── #}
+  <h2 class="section-title">Option avancée — coller du JSON</h2>
+
   <details class="danger-details" style="margin-bottom:24px">
     <summary class="btn btn-secondary">Voir le format JSON attendu</summary>
     <div class="danger-body" style="background:rgba(28,26,23,0.04);color:var(--ink-soft)">
