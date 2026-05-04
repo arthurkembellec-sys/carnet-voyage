@@ -1,15 +1,12 @@
 {% extends '_base.html' %}
 {% block title %}Notre Histoire — {% if mode == 'modifier' %}Modifier le carnet{% else %}Nouveau carnet{% endif %}{% endblock %}
+{% block back_link %}
+  <a href="{{ url_for('home') }}" class="brand">← Notre Histoire</a>
+{% endblock %}
+
+
 {% block content %}
 
-<header class="topbar">
-  <div class="topbar-inner">
-    <a href="{{ url_for('home') }}" class="brand">Notre Histoire</a>
-    <nav class="topbar-nav">
-      <a href="{{ url_for('home') }}" class="link">Annuler</a>
-    </nav>
-  </div>
-</header>
 
 <main class="page">
   <section class="hero">

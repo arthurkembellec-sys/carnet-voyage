@@ -2,64 +2,6 @@
 {% block title %}Notre Histoire{% endblock %}
 {% block content %}
 
-<header class="topbar">
-  <div class="topbar-inner">
-    <span class="brand">Notre Histoire</span>
-    <div class="espace-switcher">
-      <button type="button" class="espace-btn" id="espace-toggle">
-        {{ current_espace.name or 'Sans nom' }}
-        <span class="espace-arrow">▾</span>
-      </button>
-      <div class="espace-menu" id="espace-menu" hidden>
-        {% for e in user_espaces %}
-        <form method="POST" action="{{ url_for('espace_switch') }}" class="espace-menu-item-form">
-          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-          <input type="hidden" name="espace_id" value="{{ e.id }}">
-          <button type="submit" class="espace-menu-item {% if current_espace and current_espace.id == e.id %}espace-menu-item-active{% endif %}">
-            {{ e.name or 'Sans nom' }}
-            <span class="espace-menu-kind">{{ e.kind or 'couple' }}</span>
-          </button>
-        </form>
-        {% endfor %}
-        <div class="espace-menu-sep"></div>
-        <a href="{{ url_for('espace_nouveau') }}" class="espace-menu-item">+ Nouvel espace</a>
-        <a href="{{ url_for('espace_membres') }}" class="espace-menu-item">Membres de cet espace</a>
-        <a href="{{ url_for('espace_personnaliser') }}" class="espace-menu-item">Personnaliser cet espace</a>
-        <div class="espace-menu-sep"></div>
-        <a href="{{ url_for('admin_backups_list') }}" class="espace-menu-item">Sauvegardes</a>
-        <a href="{{ url_for('profil') }}" class="espace-menu-item">Mon profil</a>
-      </div>
-    </div>
-    <nav class="topbar-tabs">
-      <a href="{{ url_for('home') }}" class="tab-link tab-link-active">Carnets</a>
-      <a href="{{ url_for('souhaits_index') }}" class="tab-link">
-        Rêveries
-        {% if nb_souhaits %}<span class="tab-badge">{{ nb_souhaits }}</span>{% endif %}
-      </a>
-      <a href="{{ url_for('histoire') }}" class="tab-link">Histoire</a>
-    </nav>
-    <nav class="topbar-nav">
-      <a href="{{ url_for('invite_share') }}" class="link">Inviter</a>
-      <a href="{{ url_for('logout') }}" class="link">Deconnexion</a>
-    </nav>
-  </div>
-</header>
-
-<script>
-  (function(){
-    var btn = document.getElementById('espace-toggle');
-    var menu = document.getElementById('espace-menu');
-    if (!btn || !menu) return;
-    btn.addEventListener('click', function(e){
-      e.stopPropagation();
-      menu.hidden = !menu.hidden;
-    });
-    document.addEventListener('click', function(e){
-      if (!menu.hidden && !menu.contains(e.target)) menu.hidden = true;
-    });
-  })();
-</script>
-
 <main class="page">
 
   <section class="hero">

@@ -1,12 +1,12 @@
 {% extends '_base.html' %}
 {% block title %}Importer une archive — Notre Histoire{% endblock %}
+{% block back_link %}
+  <a href="{{ url_for('histoire') }}" class="brand">← Histoire</a>
+{% endblock %}
+
+
 {% block content %}
 
-<header class="topbar">
-  <div class="topbar-inner">
-    <a href="{{ url_for('histoire') }}" class="brand">← Histoire</a>
-  </div>
-</header>
 
 <main class="page">
 

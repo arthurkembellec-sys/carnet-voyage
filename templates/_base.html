@@ -19,15 +19,38 @@
 </head>
 <body data-space-accent="{{ current_accent or 'terracotta' }}">
 
+{# ── Topbar canonique (Brief 06 §1) ── #}
+{% block topbar %}
+  {% if current_user %}
+    {% include '_topbar.html' %}
+  {% endif %}
+{% endblock %}
+
+{# ── Toasts (Brief 06 §3.1) ── #}
 {% with messages = get_flashed_messages(with_categories=true) %}
   {% if messages %}
-  <div class="flash-zone">
+  <div class="toast-zone" id="toast-zone" role="status" aria-live="polite">
     {% for cat, msg in messages %}
-    <div class="flash flash-{{ cat }}">{{ msg }}</div>
+    <div class="toast toast-{{ cat }}" data-toast>
+      <span class="toast-msg">{{ msg }}</span>
+      <button type="button" class="toast-close" aria-label="Fermer">✕</button>
+    </div>
     {% endfor %}
   </div>
   {% endif %}
 {% endwith %}
+
+{# ── Modal de confirmation unifié (Brief 06 §3.2) ── #}
+<div class="modal-backdrop" id="confirm-modal" hidden role="dialog" aria-modal="true">
+  <div class="modal-card">
+    <h3 class="modal-title" id="confirm-title">Confirmer</h3>
+    <p class="modal-body" id="confirm-body">Es-tu sûr ?</p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="confirm-cancel">Annuler</button>
+      <button type="button" class="btn btn-danger" id="confirm-ok">Confirmer</button>
+    </div>
+  </div>
+</div>
 
 {% block content %}{% endblock %}
 
@@ -37,12 +60,8 @@
     function normalizeIso(raw) {
       var s = String(raw || '').trim();
       if (!s) return null;
-      // SQLite peut donner "2026-05-04 14:50:00" -> remplace espace par T
       s = s.replace(' ', 'T');
-      // Tronque les microsecondes si > 3 chiffres apres point (Python utcnow.isoformat
-      // peut donner .123456, certains navigateurs n'aiment pas)
       s = s.replace(/(\.\d{3})\d+/, '$1');
-      // Si pas de timezone explicite, considere comme UTC (datetime.utcnow().isoformat())
       if (!/Z$|[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
       return s;
     }
@@ -70,10 +89,49 @@
     if (document.readyState !== 'loading') paint();
     else document.addEventListener('DOMContentLoaded', paint);
     new MutationObserver(paint).observe(document.body, {childList:true, subtree:true});
-    window.__paintIso = paint; // utile pour debug en console
+    window.__paintIso = paint;
   })();
 
-  // ── Service Worker (PWA + Push) ──────────────────────────────────
+  // ── Toasts auto-dismiss (Brief 06 §3.1) ──
+  (function(){
+    document.querySelectorAll('[data-toast]').forEach(function(t, i){
+      setTimeout(function(){ t.classList.add('toast-in'); }, 50 + i * 100);
+      var dismiss = function(){
+        t.classList.remove('toast-in');
+        t.classList.add('toast-out');
+        setTimeout(function(){ t.remove(); }, 300);
+      };
+      var btn = t.querySelector('.toast-close');
+      if (btn) btn.addEventListener('click', dismiss);
+      setTimeout(dismiss, 4500 + i * 200);
+    });
+  })();
+
+  // ── appConfirm() global (Brief 06 §3.2) ──
+  window.appConfirm = function(opts){
+    opts = opts || {};
+    return new Promise(function(resolve){
+      var modal = document.getElementById('confirm-modal');
+      if (!modal) { resolve(window.confirm(opts.body || 'Confirmer ?')); return; }
+      document.getElementById('confirm-title').textContent = opts.title || 'Confirmer';
+      document.getElementById('confirm-body').textContent = opts.body || '';
+      var okBtn = document.getElementById('confirm-ok');
+      okBtn.textContent = opts.okLabel || 'Confirmer';
+      okBtn.className = 'btn ' + (opts.okClass || 'btn-primary');
+      var cancelBtn = document.getElementById('confirm-cancel');
+      modal.hidden = false;
+      var cleanup = function(result){
+        modal.hidden = true;
+        var fresh1 = okBtn.cloneNode(true); okBtn.replaceWith(fresh1);
+        var fresh2 = cancelBtn.cloneNode(true); cancelBtn.replaceWith(fresh2);
+        resolve(result);
+      };
+      document.getElementById('confirm-ok').addEventListener('click', function(){ cleanup(true); });
+      document.getElementById('confirm-cancel').addEventListener('click', function(){ cleanup(false); });
+    });
+  };
+
+  // ── Service Worker (PWA + Push) ──
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function(){
       navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}", { scope: '/' })
@@ -81,6 +139,7 @@
     });
   }
 </script>
+<script src="{{ url_for('static', filename='topbar.js') }}"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

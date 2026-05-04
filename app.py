@@ -41,7 +41,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "2.3.1-chunked-upload"
+APP_VERSION = "2.4.0-brief06"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
@@ -64,6 +64,13 @@ SMTP_FROM = os.environ.get('SMTP_FROM', SMTP_USER)
 VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')
 VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')
 VAPID_SUBJECT = os.environ.get('VAPID_SUBJECT', 'mailto:arthur.kembellec@gmail.com')
+
+# Admins (pour pages /admin/*)
+ADMIN_EMAILS = set(
+    e.strip().lower()
+    for e in os.environ.get('ADMIN_EMAILS', 'arthur.kembellec@gmail.com').split(',')
+    if e.strip()
+)
 
 os.makedirs(os.path.dirname(DB_PATH) or '.', exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -500,6 +507,19 @@ def couple_required(view):
 espace_required = couple_required
 
 
+def admin_required(view):
+    """Brief 06 §3.3 : reserve aux emails dans ADMIN_EMAILS."""
+    @wraps(view)
+    def wrapper(*a, **kw):
+        if not session.get('uid'):
+            return redirect(url_for('login', next=request.path))
+        u = current_user()
+        if not u or (u.get('email') or '').lower() not in ADMIN_EMAILS:
+            abort(403)
+        return view(*a, **kw)
+    return wrapper
+
+
 def csrf_token():
     """Genere et stocke un token CSRF par session (rotation manuelle si besoin)."""
     if '_csrf' not in session:
@@ -519,11 +539,24 @@ def inject_globals():
     u = current_user()
     espaces = user_espaces(u['id']) if u else []
     esp = current_espace()
+    nb_souhaits = 0
+    eid = current_espace_id()
+    if eid:
+        try:
+            r = query("SELECT COUNT(*) AS n FROM carnets WHERE couple_id=? "
+                      "AND type='souhait' AND deleted_at IS NULL", (eid,), one=True)
+            nb_souhaits = r['n'] if r else 0
+        except Exception:
+            nb_souhaits = 0
+    is_admin = bool(u and (u.get('email') or '').lower() in ADMIN_EMAILS)
     return {
         'current_user': u,
         'current_espace': esp,
         'current_accent': (esp.get('accent') if esp else 'terracotta') or 'terracotta',
         'user_espaces': espaces,
+        'nb_souhaits': nb_souhaits,
+        'is_admin': is_admin,
+        'admin_emails': ADMIN_EMAILS,
         'csrf_token': csrf_token,
         'app_version': APP_VERSION,
         'accents': ACCENTS,
@@ -727,10 +760,11 @@ def carnet_nouveau():
 @app.route('/carnet/<int:cid_carnet>')
 @couple_required
 def carnet_view(cid_carnet):
+    """Brief 06 §4.2 : page intermediaire supprimee, redirige direct vers album/reverie."""
     c = _get_carnet_or_404(cid_carnet)
     if c['type'] == 'souhait':
         return redirect(url_for('carnet_souhait_view', cid_carnet=cid_carnet))
-    return render_template('carnet_view.html', carnet=c, types=CARNET_TYPES)
+    return redirect(url_for('carnet_album', cid_carnet=cid_carnet))
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -3615,7 +3649,9 @@ def admin_backup_run():
     if BACKUP_TOKEN and token == BACKUP_TOKEN:
         pass
     elif session.get('uid'):
-        pass
+        u = current_user()
+        if not u or (u.get('email') or '').lower() not in ADMIN_EMAILS:
+            abort(403)
     else:
         abort(403)
     try:
@@ -3627,7 +3663,7 @@ def admin_backup_run():
 
 
 @app.route('/admin/backups')
-@login_required
+@admin_required
 def admin_backups_list():
     """Page admin : liste des backups + bouton 'creer maintenant'."""
     backups = []
@@ -3650,7 +3686,7 @@ def admin_backups_list():
 
 
 @app.route('/admin/backups/<path:filename>')
-@login_required
+@admin_required
 def admin_backup_download(filename):
     if not filename.startswith('carnet_') or not filename.endswith('.zip'):
         abort(404)
@@ -3658,7 +3694,7 @@ def admin_backup_download(filename):
 
 
 @app.route('/admin/backups/<path:filename>/delete', methods=['POST'])
-@login_required
+@admin_required
 def admin_backup_delete(filename):
     if not csrf_check(): abort(403)
     if not filename.startswith('carnet_') or not filename.endswith('.zip'):

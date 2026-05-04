@@ -1,15 +1,12 @@
 {% extends '_base.html' %}
 {% block title %}{{ carnet.title }} — Rêverie{% endblock %}
+{% block back_link %}
+  <a href="{{ url_for('souhaits_index') }}" class="brand">← Rêveries</a>
+{% endblock %}
+
+
 {% block content %}
 
-<header class="topbar">
-  <div class="topbar-inner">
-    <a href="{{ url_for('home') }}" class="brand">← Notre Histoire</a>
-    <nav class="topbar-nav">
-      <a href="{{ url_for('carnet_modifier', cid_carnet=carnet.id) }}" class="link">Fiche</a>
-    </nav>
-  </div>
-</header>
 
 <main class="page souhait-page">
 

@@ -1,12 +1,12 @@
 {% extends '_base.html' %}
 {% block title %}Transformer en voyage — {{ carnet.title }}{% endblock %}
+{% block back_link %}
+  <a href="{{ url_for('carnet_souhait_view', cid_carnet=carnet.id) }}" class="brand">← {{ carnet.title }}</a>
+{% endblock %}
+
+
 {% block content %}
 
-<header class="topbar">
-  <div class="topbar-inner">
-    <a href="{{ url_for('carnet_souhait_view', cid_carnet=carnet.id) }}" class="brand">← {{ carnet.title }}</a>
-  </div>
-</header>
 
 <main class="page">
 
