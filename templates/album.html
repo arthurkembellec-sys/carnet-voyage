@@ -18,9 +18,18 @@
     <h1 class="display"><em>{{ carnet.title }}</em></h1>
     <p class="lead" id="album-status">
       <span id="main-count">{{ main_pages|length }}</span> page(s) ·
-      <span id="margin-count">{{ margin_pages|length }}</span> en marge
+      <span id="margin-count">{{ margin_pages|length }}</span> en marge ·
+      <span id="sort-mode-label">{% if sort_mode == 'manual' %}ordre manuel{% else %}chronologique{% endif %}</span>
       <span id="save-status" class="save-indicator"></span>
     </p>
+    <div class="sort-mode-row">
+      {% if sort_mode == 'manual' %}
+      <button type="button" class="btn btn-secondary btn-sm" id="btn-sort-chrono">
+        ↻ Re-trier chronologiquement
+      </button>
+      {% endif %}
+      <span class="sort-hint">Glisse-depose les pages pour reorganiser</span>
+    </div>
   </section>
 
   {# ────── MINI CARTE (si photos geolocalisees) ────── #}
@@ -108,8 +117,9 @@
   <div class="viewer-caption" id="viewer-caption"></div>
 </div>
 
-{# Lib EXIF (extrait date + GPS sans charger l'image complete) #}
+{# Libs : EXIF (extraction client) + SortableJS (drag & drop) #}
 <script src="https://cdn.jsdelivr.net/npm/exifr@7/dist/lite.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 {# Lib Leaflet pour la mini-carte (uniquement si geo_photos) #}
 {% if geo_photos %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -282,6 +292,7 @@
     }
     var marginLabel = p.is_margin ? '↓ Album' : '↑ Marge';
     li.innerHTML = `
+      <span class="drag-handle" title="Glisser pour reorganiser">⋮⋮</span>
       <a class="page-photo" href="javascript:void(0)" onclick="openViewer(${p.page_id})">
         <img src="${p.thumb_url}" data-full="${p.full_url}" data-page-id="${p.page_id}" loading="lazy" alt="">
       </a>
@@ -419,6 +430,7 @@
       li.dataset.takenAt = '';
       li.dataset.isMargin = '0';
       li.innerHTML = `
+        <span class="drag-handle" title="Glisser pour reorganiser">⋮⋮</span>
         <div class="page-video">
           <video controls preload="metadata" poster="${d.poster_url}" src="${d.video_url}" playsinline></video>
           <div class="page-video-meta">
@@ -448,6 +460,70 @@
     }
   }
   window.uploadVideo = uploadVideo;
+
+  // ── Drag & drop : reorder pages (SortableJS) ──────────────────
+  function initSortable(listEl) {
+    if (!listEl || !window.Sortable) return;
+    new Sortable(listEl, {
+      animation: 150,
+      handle: '.drag-handle',
+      ghostClass: 'page-ghost',
+      dragClass: 'page-dragging',
+      delay: 50,
+      delayOnTouchOnly: true,
+      onEnd: async function(){
+        var ids = Array.from(listEl.querySelectorAll('.page-item')).map(function(li){
+          return li.dataset.pageId;
+        });
+        setSaving('Reorganisation...');
+        var fd = new FormData(); fd.append('_csrf', CSRF);
+        ids.forEach(function(id){ fd.append('page_id', id); });
+        try {
+          var r = await fetch("{{ url_for('carnet_reorder_pages', cid_carnet=carnet.id) }}", { method:'POST', body: fd });
+          var d = await r.json();
+          if (!d.ok) { setError('Reorder : ' + (d.error || '')); return; }
+          var lbl = document.getElementById('sort-mode-label');
+          if (lbl) lbl.textContent = 'ordre manuel';
+          if (!document.getElementById('btn-sort-chrono')) {
+            var row = document.querySelector('.sort-mode-row');
+            if (row) {
+              var btn = document.createElement('button');
+              btn.type = 'button';
+              btn.className = 'btn btn-secondary btn-sm';
+              btn.id = 'btn-sort-chrono';
+              btn.textContent = '↻ Re-trier chronologiquement';
+              btn.addEventListener('click', resortChrono);
+              row.insertBefore(btn, row.firstChild);
+            }
+          }
+          setSaved('Ordre enregistre');
+        } catch(e) { setError('Reseau : ' + e.message); }
+      }
+    });
+  }
+
+  async function resortChrono() {
+    if (!confirm('Re-trier toutes les pages par date de prise ? Tu perdras ton ordre manuel.')) return;
+    setSaving();
+    var fd = new FormData(); fd.append('_csrf', CSRF);
+    try {
+      var r = await fetch("{{ url_for('carnet_sort_chrono', cid_carnet=carnet.id) }}", { method:'POST', body: fd });
+      var d = await r.json();
+      if (!d.ok) { setError(); return; }
+      setSaved('Trie par date');
+      setTimeout(function(){ location.reload(); }, 800);
+    } catch(e) { setError('Reseau'); }
+  }
+
+  function bootSortable() {
+    initSortable(document.getElementById('pages-main'));
+    initSortable(document.getElementById('pages-margin'));
+    var chronoBtn = document.getElementById('btn-sort-chrono');
+    if (chronoBtn) chronoBtn.addEventListener('click', resortChrono);
+  }
+  if (window.Sortable) bootSortable();
+  else window.addEventListener('load', bootSortable);
+  window.resortChrono = resortChrono;
 
   // ── Auto-save captions / texte ─────────────────────────────────
   function debounce(fn, ms) { let t; return function(){ clearTimeout(t); t = setTimeout(fn, ms); }; }
@@ -508,6 +584,7 @@
       var nowFallback = new Date().toISOString().slice(0, 16).replace('T', ' ');
       var marginLabel = asMargin ? '↓ Album' : '↑ Marge';
       li.innerHTML = `
+        <span class="drag-handle" title="Glisser pour reorganiser">⋮⋮</span>
         <textarea class="page-text" placeholder="Quelques mots..." rows="3" data-page-id="${d.page_id}"></textarea>
         <div class="page-meta page-meta-text">
           <div class="page-date page-date-fallback">ajoute ${nowFallback}</div>

@@ -3,6 +3,7 @@
     data-type="{{ p.type }}"
     data-taken-at="{{ p.photo_taken_at or '' }}"
     data-is-margin="{{ '1' if p.is_margin else '0' }}">
+  <span class="drag-handle" title="Glisser pour reorganiser" aria-label="Reorganiser">⋮⋮</span>
 
   {# Photo principale (toujours affichee si photo_id, quel que soit type) #}
   {% if p.photo_path %}

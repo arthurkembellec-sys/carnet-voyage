@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "1.2.4-exif-reinject"
+APP_VERSION = "1.2.5-drag-drop"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
@@ -258,6 +258,8 @@ def init_db():
         # Pour les carnets de type='souhait', categorie du futur voyage
         # (voyage / restaurant / sortie / autre).
         "ALTER TABLE carnets ADD COLUMN souhait_kind TEXT DEFAULT 'voyage'",
+        # ── v1.2.5 — drag & drop : sort_mode 'chrono' (default) ou 'manual'
+        "ALTER TABLE carnets ADD COLUMN sort_mode TEXT DEFAULT 'chrono'",
         # ── v1.4 — items des carnets de souhait (link/photo/note/lieu/budget)
         """CREATE TABLE IF NOT EXISTS carnet_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -842,14 +844,19 @@ def carnet_supprimer(cid_carnet):
 #                         v1.2 — ALBUM
 # ══════════════════════════════════════════════════════════════════════
 
-def _carnet_pages(carnet_id):
+def _carnet_pages(carnet_id, sort_mode='chrono'):
     """
-    Retourne les pages d'un carnet ordonnees en TIMELINE chronologique :
-    - Photos triees par date EXIF (taken_at) si dispo, sinon date d'ajout
-    - Blocs texte intercales par date d'ajout (created_at)
+    Retourne les pages d'un carnet selon le sort_mode :
+    - 'chrono' (default) : tri par date EXIF/ajout, position en tie-breaker
+    - 'manual' : tri par position (drag & drop)
     Renvoie un dict avec deux listes : 'main' (album) et 'margin' (notes en marge).
     """
-    rows = query("""
+    if sort_mode == 'manual':
+        order_by = "ap.position ASC, ap.id ASC"
+    else:
+        order_by = ("COALESCE(p.taken_at, v.taken_at, ap.created_at) ASC, "
+                    "ap.position ASC, ap.id ASC")
+    rows = query(f"""
         SELECT ap.*,
                p.file_path AS photo_path, p.thumb_path AS photo_thumb,
                p.width AS photo_width, p.height AS photo_height,
@@ -864,9 +871,7 @@ def _carnet_pages(carnet_id):
         LEFT JOIN videos v ON v.id = ap.video_id
         LEFT JOIN users u ON u.id = ap.added_by
         WHERE ap.carnet_id = ?
-        ORDER BY
-            COALESCE(p.taken_at, v.taken_at, ap.created_at) ASC,
-            ap.position ASC, ap.id ASC
+        ORDER BY {order_by}
     """, (carnet_id,))
     pages = [dict(r) for r in rows]
     main = [p for p in pages if not p.get('is_margin')]
@@ -1010,13 +1015,13 @@ def _inject_exif_to_jpeg(jpeg_path, taken_at_iso=None, gps_lat=None, gps_lng=Non
 def carnet_album(cid_carnet):
     """Mode edition album : photos, captions, blocs texte, notes en marge."""
     c = _get_carnet_or_404(cid_carnet)
-    pages = _carnet_pages(cid_carnet)
-    # Photos avec coords GPS pour la mini-carte
+    sort_mode = c.get('sort_mode') or 'chrono'
+    pages = _carnet_pages(cid_carnet, sort_mode=sort_mode)
     geo_photos = [p for p in pages['all']
                   if p.get('photo_gps_lat') is not None and p.get('photo_gps_lng') is not None]
     return render_template('album.html', carnet=c,
         main_pages=pages['main'], margin_pages=pages['margin'],
-        geo_photos=geo_photos, types=CARNET_TYPES)
+        geo_photos=geo_photos, types=CARNET_TYPES, sort_mode=sort_mode)
 
 
 def _safe_float(v):
@@ -1170,6 +1175,82 @@ def page_detach_photo(page_id):
         "UPDATE album_pages SET photo_id=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?",
         (page_id,)
     )
+    return jsonify({'ok': True})
+
+
+@app.route('/carnet/<int:cid_carnet>/pages/reorder', methods=['POST'])
+@couple_required
+def carnet_reorder_pages(cid_carnet):
+    """Drag & drop : nouvel ordre des pages. Bascule en sort_mode='manual'."""
+    c = _get_carnet_or_404(cid_carnet)
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    raw = request.form.getlist('page_id')
+    try:
+        ids = [int(x) for x in raw if str(x).isdigit()]
+    except ValueError:
+        return jsonify({'ok': False, 'error': 'IDs invalides'}), 400
+    if not ids:
+        return jsonify({'ok': False, 'error': 'Aucun id'}), 400
+    placeholders = ','.join('?' * len(ids))
+    valid = query(
+        f"SELECT id FROM album_pages WHERE carnet_id=? AND id IN ({placeholders})",
+        tuple([cid_carnet] + ids)
+    )
+    valid_set = {r['id'] for r in valid}
+    if set(ids) - valid_set:
+        return jsonify({'ok': False, 'error': 'Pages externes'}), 400
+    conn = get_db()
+    try:
+        for pos, pid in enumerate(ids):
+            conn.execute("UPDATE album_pages SET position=? WHERE id=?", (pos, pid))
+        conn.execute("UPDATE carnets SET sort_mode='manual' WHERE id=?", (cid_carnet,))
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'ok': True, 'mode': 'manual'})
+
+
+@app.route('/carnet/<int:cid_carnet>/pages/sort_chrono', methods=['POST'])
+@couple_required
+def carnet_sort_chrono(cid_carnet):
+    """Reset au tri chronologique (oublie l'ordre manuel)."""
+    c = _get_carnet_or_404(cid_carnet)
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    execute("UPDATE carnets SET sort_mode='chrono' WHERE id=?", (cid_carnet,))
+    return jsonify({'ok': True, 'mode': 'chrono'})
+
+
+@app.route('/carnet/<int:cid_carnet>/items/reorder', methods=['POST'])
+@couple_required
+def carnet_reorder_items(cid_carnet):
+    """Drag & drop des items d'un carnet de souhait."""
+    c = _get_carnet_or_404(cid_carnet)
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    raw = request.form.getlist('item_id')
+    try:
+        ids = [int(x) for x in raw if str(x).isdigit()]
+    except ValueError:
+        return jsonify({'ok': False, 'error': 'IDs invalides'}), 400
+    if not ids:
+        return jsonify({'ok': False, 'error': 'Aucun id'}), 400
+    placeholders = ','.join('?' * len(ids))
+    valid = query(
+        f"SELECT id FROM carnet_items WHERE carnet_id=? AND id IN ({placeholders})",
+        tuple([cid_carnet] + ids)
+    )
+    valid_set = {r['id'] for r in valid}
+    if set(ids) - valid_set:
+        return jsonify({'ok': False, 'error': 'Items externes'}), 400
+    conn = get_db()
+    try:
+        for pos, iid in enumerate(ids):
+            conn.execute("UPDATE carnet_items SET position=? WHERE id=?", (pos, iid))
+        conn.commit()
+    finally:
+        conn.close()
     return jsonify({'ok': True})
 
 

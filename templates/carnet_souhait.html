@@ -126,6 +126,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/exifr@7/dist/lite.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 <script>
   const CSRF = "{{ csrf_token() }}";
   const URL_ADD_ITEM = "{{ url_for('carnet_add_item', cid_carnet=carnet.id) }}";
@@ -191,6 +192,31 @@
   window.deleteItem = deleteItem;
   window.showAddModal = showAddModal;
   window.closeAddModal = closeAddModal;
+
+  // ── Drag & drop items ─────────────────────────────────────────
+  function bootSortableItems() {
+    var grid = document.getElementById('items-grid');
+    if (!grid || !window.Sortable) return;
+    new Sortable(grid, {
+      animation: 150,
+      handle: '.drag-handle',
+      ghostClass: 'page-ghost',
+      delay: 50,
+      delayOnTouchOnly: true,
+      onEnd: async function(){
+        var ids = Array.from(grid.querySelectorAll('.item-card')).map(function(li){
+          return li.dataset.itemId;
+        });
+        var fd = new FormData(); fd.append('_csrf', CSRF);
+        ids.forEach(function(id){ fd.append('item_id', id); });
+        try {
+          await fetch("{{ url_for('carnet_reorder_items', cid_carnet=carnet.id) }}", { method:'POST', body: fd });
+        } catch(e) { console.error('reorder items', e); }
+      }
+    });
+  }
+  if (window.Sortable) bootSortableItems();
+  else window.addEventListener('load', bootSortableItems);
 </script>
 
 {% endblock %}

@@ -709,6 +709,49 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
 .page-delete { display: none !important; }
 .page-margin-btn, .page-delete-btn { display: none !important; }
 
+/* ── Drag & drop (SortableJS) ─────────────────────────────────────── */
+.drag-handle {
+  position: absolute;
+  top: 8px; left: 8px;
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.85);
+  color: var(--muted);
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  cursor: grab;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: -2px;
+  user-select: none;
+  z-index: 3;
+  transition: background .2s, color .2s, transform .12s;
+}
+.drag-handle:hover { background: var(--ink); color: var(--bg); }
+.drag-handle:active { cursor: grabbing; transform: scale(.94); }
+.page-item { position: relative; }
+.page-ghost { opacity: 0.4; background: rgba(168,80,61,0.1) !important; }
+.page-dragging { opacity: 0.85; transform: rotate(1deg); }
+
+@media (max-width: 480px) {
+  .drag-handle { width: 30px; height: 30px; top: 6px; left: 6px; font-size: 14px; }
+}
+
+/* Sort mode */
+.sort-mode-row {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-top: 10px;
+}
+.sort-hint {
+  font-size: 11px; color: var(--whisper);
+  letter-spacing: 0.04em;
+  font-style: italic;
+}
+#sort-mode-label {
+  font-style: italic;
+  color: var(--ink-soft);
+}
+
 /* ── Sections album / marge ───────────────────────────────────────── */
 .album-section { margin-top: 32px; }
 .album-section-margin {
