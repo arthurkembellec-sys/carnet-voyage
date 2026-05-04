@@ -2,7 +2,7 @@
 builder = "NIXPACKS"
 
 [deploy]
-startCommand = "gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120"
+startCommand = "gunicorn app:app --bind 0.0.0.0:$PORT --timeout 600 --keep-alive 65 --workers 2"
 healthcheckPath = "/healthz"
 healthcheckTimeout = 100
 restartPolicyType = "ON_FAILURE"

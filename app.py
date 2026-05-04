@@ -20,6 +20,7 @@ import logging
 import traceback
 import zipfile
 import smtplib
+import shutil
 from functools import wraps
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
@@ -40,7 +41,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "2.3.0-album-sections"
+APP_VERSION = "2.3.1-chunked-upload"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
@@ -70,7 +71,7 @@ os.makedirs(BACKUP_DIR, exist_ok=True)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = SECRET_KEY
-app.config['MAX_CONTENT_LENGTH'] = 250 * 1024 * 1024  # 250 Mo upload (videos)
+app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 * 1024  # 2 Go upload (videos lourdes)
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 # SECURE = True uniquement en prod (Railway sert HTTPS).
@@ -2201,6 +2202,146 @@ def carnet_upload_video(cid_carnet):
         'poster_url': url_for('serve_upload', filename=data['poster_path']),
         'scan_token': data['token'],
         'public_url': url_for('video_public', token=data['token'], _external=True),
+        'duration_s': duration_s,
+        'is_margin': is_margin,
+    })
+
+
+@app.route('/carnet/<int:cid_carnet>/videos/init', methods=['POST'])
+@couple_required
+def carnet_video_init(cid_carnet):
+    """Initialise un upload chunked. Retourne upload_id pour les chunks suivants."""
+    c = _get_carnet_or_404(cid_carnet)
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    filename = (request.form.get('filename') or 'video.mp4').strip()
+    try:
+        total_size = int(request.form.get('total_size') or 0)
+    except ValueError:
+        total_size = 0
+    if total_size <= 0 or total_size > 4 * 1024 * 1024 * 1024:  # max 4 Go
+        return jsonify({'ok': False, 'error': 'Taille invalide (max 4 Go)'}), 400
+    upload_id = secrets.token_urlsafe(12)
+    couple_dir = os.path.join(UPLOAD_DIR, str(c['couple_id']), '_chunks')
+    os.makedirs(couple_dir, exist_ok=True)
+    ext = os.path.splitext(filename)[1].lower() or '.mp4'
+    if ext not in ('.mp4', '.mov', '.webm', '.m4v', '.avi', '.mkv'):
+        ext = '.mp4'
+    tmp_path = os.path.join(couple_dir, f"{upload_id}{ext}")
+    # Cree fichier vide
+    open(tmp_path, 'wb').close()
+    return jsonify({
+        'ok': True,
+        'upload_id': upload_id,
+        'chunk_size': 4 * 1024 * 1024,  # suggestion : 4 Mo par chunk
+        'total_size': total_size,
+    })
+
+
+@app.route('/carnet/<int:cid_carnet>/videos/chunk', methods=['POST'])
+@couple_required
+def carnet_video_chunk(cid_carnet):
+    """Append un chunk a l'upload en cours."""
+    c = _get_carnet_or_404(cid_carnet)
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    upload_id = request.form.get('upload_id') or ''
+    if not upload_id or not all(ch.isalnum() or ch in '-_' for ch in upload_id):
+        return jsonify({'ok': False, 'error': 'upload_id invalide'}), 400
+    couple_dir = os.path.join(UPLOAD_DIR, str(c['couple_id']), '_chunks')
+    # Cherche le fichier (extension peut varier)
+    candidates = [f for f in os.listdir(couple_dir) if f.startswith(upload_id)]
+    if not candidates:
+        return jsonify({'ok': False, 'error': 'upload_id introuvable'}), 404
+    tmp_path = os.path.join(couple_dir, candidates[0])
+    chunk = request.files.get('chunk')
+    if not chunk:
+        return jsonify({'ok': False, 'error': 'Aucun chunk'}), 400
+    # Append au fichier
+    with open(tmp_path, 'ab') as f:
+        chunk_data = chunk.stream.read()
+        f.write(chunk_data)
+    return jsonify({'ok': True, 'received': len(chunk_data),
+                    'total_received': os.path.getsize(tmp_path)})
+
+
+@app.route('/carnet/<int:cid_carnet>/videos/finalize', methods=['POST'])
+@couple_required
+def carnet_video_finalize(cid_carnet):
+    """Termine l'upload : extrait poster, save BDD, crée la page album."""
+    c = _get_carnet_or_404(cid_carnet)
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    upload_id = request.form.get('upload_id') or ''
+    couple_dir = os.path.join(UPLOAD_DIR, str(c['couple_id']), '_chunks')
+    candidates = [f for f in os.listdir(couple_dir) if f.startswith(upload_id)]
+    if not candidates:
+        return jsonify({'ok': False, 'error': 'upload_id introuvable'}), 404
+    tmp_path = os.path.join(couple_dir, candidates[0])
+    ext = os.path.splitext(candidates[0])[1] or '.mp4'
+
+    # Deplace dans le dossier final avec son token public
+    final_dir = os.path.join(UPLOAD_DIR, str(c['couple_id']))
+    os.makedirs(final_dir, exist_ok=True)
+    token = secrets.token_urlsafe(12)
+    final_name = f"{token}{ext}"
+    final_path = os.path.join(final_dir, final_name)
+    shutil.move(tmp_path, final_path)
+
+    # Poster : envoye en parallele par le client (ou placeholder)
+    poster_file = request.files.get('poster')
+    poster_name = f"{token}_poster.jpg"
+    poster_path = os.path.join(final_dir, poster_name)
+    try:
+        if poster_file and poster_file.filename:
+            img = Image.open(poster_file.stream)
+            if img.mode != 'RGB': img = img.convert('RGB')
+            img.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+            img.save(poster_path, 'JPEG', quality=82, optimize=True)
+        else:
+            placeholder = Image.new('RGB', (1280, 720), (200, 195, 185))
+            placeholder.save(poster_path, 'JPEG', quality=70)
+    except Exception as e:
+        log.warning("poster fail: %s", e)
+        placeholder = Image.new('RGB', (1280, 720), (200, 195, 185))
+        placeholder.save(poster_path, 'JPEG', quality=70)
+
+    duration_s = _safe_float(request.form.get('duration_s'))
+    width = request.form.get('width')
+    height = request.form.get('height')
+    is_margin = request.form.get('is_margin') == '1'
+    try:
+        width = int(width) if width else None
+        height = int(height) if height else None
+    except ValueError:
+        width = height = None
+
+    rel_video = f"{c['couple_id']}/{final_name}"
+    rel_poster = f"{c['couple_id']}/{poster_name}"
+
+    vid = execute(
+        "INSERT INTO videos (couple_id, file_path, poster_path, duration_s, "
+        "width, height, scan_token, added_by) VALUES (?,?,?,?,?,?,?,?)",
+        (c['couple_id'], rel_video, rel_poster, duration_s, width, height,
+         token, session['uid'])
+    )
+    pos = _next_page_position(cid_carnet)
+    page_id = execute(
+        "INSERT INTO album_pages (carnet_id, type, position, video_id, "
+        "is_margin, added_by) VALUES (?,?,?,?,?,?)",
+        (cid_carnet, 'video', pos, vid, 1 if is_margin else 0, session['uid'])
+    )
+    try:
+        _recompute_sections(cid_carnet)
+    except Exception as e:
+        log.warning("recompute fail: %s", e)
+    return jsonify({
+        'ok': True,
+        'page_id': page_id, 'video_id': vid,
+        'video_url': url_for('serve_upload', filename=rel_video),
+        'poster_url': url_for('serve_upload', filename=rel_poster),
+        'public_url': url_for('video_public', token=token, _external=True),
+        'scan_token': token,
         'duration_s': duration_s,
         'is_margin': is_margin,
     })
