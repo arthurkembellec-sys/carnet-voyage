@@ -2586,7 +2586,7 @@ def histoire_post_message():
     if not body and not attachment_type:
         return jsonify({'ok': False, 'error': 'Message vide'}), 400
 
-    sent_at = datetime.utcnow().isoformat()
+    sent_at = datetime.utcnow().isoformat() + 'Z'
     user = current_user()
     mid = execute(
         "INSERT INTO messages (conversation_id, kind, sender_type, sender_id, sender_label, "
@@ -2832,7 +2832,7 @@ def _import_chapters_into_conv(conv_id, chapters_data, source='hinge'):
                 from datetime import timedelta as _td
                 sent_at = (base_dt + _td(minutes=j)).isoformat()
             elif not sent_at:
-                sent_at = datetime.utcnow().isoformat()
+                sent_at = datetime.utcnow().isoformat() + 'Z'
             execute(
                 "INSERT INTO messages (conversation_id, kind, chapter_id, "
                 "sender_type, sender_label, body, sent_at) VALUES (?,?,?,?,?,?,?)",

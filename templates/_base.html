@@ -34,14 +34,28 @@
 <script>
   // ── Heure locale : convertit tous les [data-iso] en heure du navigateur ──
   (function(){
-    function fmt(iso, fmt) {
-      var d = new Date(iso.endsWith('Z') ? iso : iso + 'Z');
-      if (isNaN(d.getTime())) return null;
-      if (fmt === 'time')      return d.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
-      if (fmt === 'date')      return d.toLocaleDateString('fr-FR');
-      if (fmt === 'datetime')  return d.toLocaleString('fr-FR', {dateStyle:'short', timeStyle:'short'});
-      if (fmt === 'day')       return d.toLocaleDateString('fr-FR', {weekday:'long', day:'numeric', month:'long'});
-      if (fmt === 'daynum')    return d.toLocaleDateString('fr-FR', {day:'numeric', month:'short', year:'numeric'});
+    function normalizeIso(raw) {
+      var s = String(raw || '').trim();
+      if (!s) return null;
+      // SQLite peut donner "2026-05-04 14:50:00" -> remplace espace par T
+      s = s.replace(' ', 'T');
+      // Tronque les microsecondes si > 3 chiffres apres point (Python utcnow.isoformat
+      // peut donner .123456, certains navigateurs n'aiment pas)
+      s = s.replace(/(\.\d{3})\d+/, '$1');
+      // Si pas de timezone explicite, considere comme UTC (datetime.utcnow().isoformat())
+      if (!/Z$|[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
+      return s;
+    }
+    function fmt(rawIso, kind) {
+      var iso = normalizeIso(rawIso);
+      if (!iso) return null;
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) { console.warn('Bad date:', rawIso, '->', iso); return null; }
+      if (kind === 'time')      return d.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
+      if (kind === 'date')      return d.toLocaleDateString('fr-FR');
+      if (kind === 'datetime')  return d.toLocaleString('fr-FR', {dateStyle:'short', timeStyle:'short'});
+      if (kind === 'day')       return d.toLocaleDateString('fr-FR', {weekday:'long', day:'numeric', month:'long'});
+      if (kind === 'daynum')    return d.toLocaleDateString('fr-FR', {day:'numeric', month:'short', year:'numeric'});
       return d.toLocaleString('fr-FR');
     }
     function paint() {
@@ -55,8 +69,8 @@
     }
     if (document.readyState !== 'loading') paint();
     else document.addEventListener('DOMContentLoaded', paint);
-    // Repaint apres ajouts dynamiques (MutationObserver simple)
     new MutationObserver(paint).observe(document.body, {childList:true, subtree:true});
+    window.__paintIso = paint; // utile pour debug en console
   })();
 
   // ── Service Worker (PWA + Push) ──────────────────────────────────
