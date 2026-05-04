@@ -43,14 +43,84 @@
   </section>
   {% endif %}
 
-  {# ────── ALBUM PRINCIPAL ────── #}
+  {# ────── ALBUM PRINCIPAL avec SECTIONS auto (Brief 05) ────── #}
   <section class="album-section">
-    <h2 class="section-title">L'album</h2>
-    <ul class="pages-list" id="pages-main">
-      {% for p in main_pages %}
-        {% include '_page_item.html' %}
+    <div class="album-section-head">
+      <h2 class="section-title">L'album</h2>
+      <button type="button" class="btn btn-secondary btn-sm" id="btn-recompute-sections" title="Réorganiser automatiquement par jour/lieu">
+        ↻ Réorganiser
+      </button>
+    </div>
+
+    {% if structured %}
+      {% for s1 in structured %}
+      <div class="album-level1">
+        <div class="album-l1-head">
+          <h3 class="album-l1-title"><em>{{ s1.section.primary_label }}</em></h3>
+          {% if s1.section.secondary_label %}
+          <p class="album-l1-sub">{{ s1.section.secondary_label }}</p>
+          {% endif %}
+          <div class="album-l1-rule"></div>
+        </div>
+
+        {% for sub in s1.subsections %}
+        <div class="album-level2">
+          <div class="album-l2-head">
+            {% if sub.section.location_lat is not none and sub.section.location_lng is not none %}
+            <div class="album-l2-mini-map">
+              <a href="https://www.google.com/maps?q={{ sub.section.location_lat }},{{ sub.section.location_lng }}" target="_blank" rel="noopener">
+                <img src="https://staticmap.openstreetmap.de/staticmap.php?center={{ sub.section.location_lat }},{{ sub.section.location_lng }}&zoom=11&size=80x80&maptype=mapnik&markers={{ sub.section.location_lat }},{{ sub.section.location_lng }},red-pushpin" alt="" loading="lazy" onerror="this.style.display='none'">
+              </a>
+            </div>
+            {% endif %}
+            <div class="album-l2-meta">
+              <span class="album-l2-title">{{ sub.section.primary_label }}</span>
+              <span class="album-l2-sub">{{ sub.section.secondary_label }}</span>
+            </div>
+          </div>
+          <ul class="pages-list pages-list-sub">
+            {% for p in sub.pages %}
+              {% include '_page_item.html' %}
+            {% endfor %}
+          </ul>
+        </div>
+        {% endfor %}
+
+        {% if s1.pages %}
+        <ul class="pages-list pages-list-sub">
+          {% for p in s1.pages %}
+            {% include '_page_item.html' %}
+          {% endfor %}
+        </ul>
+        {% endif %}
+      </div>
       {% endfor %}
+    {% endif %}
+
+    {% if orphans %}
+    <div class="album-level1">
+      <div class="album-l1-head">
+        <h3 class="album-l1-title"><em>Date inconnue</em></h3>
+        <p class="album-l1-sub">{{ orphans|length }} photo(s) sans EXIF</p>
+        <div class="album-l1-rule"></div>
+      </div>
+      <ul class="pages-list pages-list-sub">
+        {% for p in orphans %}
+          {% include '_page_item.html' %}
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    {# Liste plate : visible si pas de sections (carnet sans EXIF complet) #}
+    <ul class="pages-list" id="pages-main"{% if structured or orphans %} style="display:none"{% endif %}>
+      {% if not structured and not orphans %}
+        {% for p in main_pages %}
+          {% include '_page_item.html' %}
+        {% endfor %}
+      {% endif %}
     </ul>
+
     {% if not main_pages %}
     <div class="empty-state empty-section" id="empty-main">
       <p class="empty-display"><em>L'album est vide.</em></p>
@@ -267,10 +337,8 @@
       } else {
         setSaved(msg);
       }
-      // Si geo, recharger la page pour rebuilder la carte (Leaflet pas dispo dynamique sans rechargement)
-      if (data.created.some(function(p){ return p.gps_lat != null && p.gps_lng != null; })) {
-        setTimeout(function(){ location.reload(); }, 1200);
-      }
+      // Reload : afficher les sections auto (Brief 05) + rebuilder la carte Leaflet
+      setTimeout(function(){ location.reload(); }, 800);
     } catch (e) {
       console.error(e);
       setError('Reseau : ' + e.message);
@@ -527,6 +595,23 @@
   if (window.Sortable) bootSortable();
   else window.addEventListener('load', bootSortable);
   window.resortChrono = resortChrono;
+
+  // ── Recompute sections (Brief 05) ─────────────────────────────
+  var btnRecompute = document.getElementById('btn-recompute-sections');
+  if (btnRecompute) {
+    btnRecompute.addEventListener('click', async function(){
+      if (!confirm('Réorganiser automatiquement par jour et lieu ?\nLes déplacements manuels seront perdus.')) return;
+      setSaving('Réorganisation...');
+      var fd = new FormData(); fd.append('_csrf', CSRF);
+      try {
+        var r = await fetch("{{ url_for('carnet_recompute_sections', cid_carnet=carnet.id) }}", { method:'POST', body: fd });
+        var d = await r.json();
+        if (!d.ok) { setError(); return; }
+        setSaved('Sections recalculées');
+        setTimeout(function(){ location.reload(); }, 600);
+      } catch(e) { setError('Réseau'); }
+    });
+  }
 
   // ── Auto-save captions / texte ─────────────────────────────────
   function debounce(fn, ms) { let t; return function(){ clearTimeout(t); t = setTimeout(fn, ms); }; }

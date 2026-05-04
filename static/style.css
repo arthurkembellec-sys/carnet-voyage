@@ -1162,6 +1162,97 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
 
 /* ── Sections album / marge ───────────────────────────────────────── */
 .album-section { margin-top: 32px; }
+
+/* ── Brief 05 : sections chronologiques auto ─────────────────────── */
+.album-section-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; margin-bottom: 16px;
+}
+.album-level1 {
+  margin-top: var(--space-15, 60px);
+  padding-top: var(--space-8, 32px);
+}
+.album-level1:first-child { margin-top: 0; padding-top: 0; }
+.album-l1-head {
+  text-align: center;
+  margin-bottom: var(--space-8, 32px);
+}
+.album-l1-title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 300;
+  font-variation-settings: "opsz" 144, "SOFT" 100;
+  font-size: clamp(28px, 5.5vw, 40px);
+  line-height: 1.05;
+  margin: 0 0 12px;
+  color: var(--ink-primary);
+  letter-spacing: -0.005em;
+}
+.album-l1-sub {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin: 0 0 16px;
+}
+.album-l1-rule {
+  width: 40px; height: 1px;
+  background: var(--accent);
+  opacity: 0.5;
+  margin: 0 auto;
+}
+
+.album-level2 {
+  margin-top: var(--space-10, 40px);
+}
+.album-l2-head {
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: var(--space-5, 20px);
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.album-l2-mini-map {
+  width: 80px; height: 80px;
+  flex-shrink: 0;
+  border-radius: var(--radius-default);
+  overflow: hidden;
+  background: var(--bg-subtle);
+}
+.album-l2-mini-map img {
+  display: block;
+  width: 100%; height: 100%;
+  object-fit: cover;
+}
+.album-l2-meta {
+  display: flex; flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.album-l2-title {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-primary);
+}
+.album-l2-sub {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+.pages-list-sub {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: 32px;
+}
+
+@media (max-width: 480px) {
+  .album-l2-mini-map { width: 64px; height: 64px; }
+  .album-l1-title { font-size: clamp(24px, 7vw, 32px); }
+}
 .album-section-margin {
   margin-top: 56px;
   padding-top: 32px;

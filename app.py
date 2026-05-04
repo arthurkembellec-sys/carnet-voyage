@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "2.2.0-pwa-push-localtime"
+APP_VERSION = "2.3.0-album-sections"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
@@ -272,6 +272,38 @@ def init_db():
         "ALTER TABLE carnets ADD COLUMN pdf_margin_position TEXT DEFAULT 'right'",
         # ── v2.1 — charte : couleur d'accent par espace ───────────────
         "ALTER TABLE couples ADD COLUMN accent TEXT DEFAULT 'terracotta'",
+        # ── v2.3 — Album : regroupement chronologique automatique ────
+        """CREATE TABLE IF NOT EXISTS album_sections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            carnet_id INTEGER NOT NULL REFERENCES carnets(id) ON DELETE CASCADE,
+            level INTEGER NOT NULL CHECK(level IN (1, 2)),
+            parent_section_id INTEGER REFERENCES album_sections(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL CHECK(kind IN ('day','location','mixed','unknown')),
+            primary_label TEXT NOT NULL DEFAULT '',
+            secondary_label TEXT DEFAULT '',
+            part_of_day TEXT DEFAULT '',
+            date_start TIMESTAMP,
+            date_end TIMESTAMP,
+            location_name TEXT DEFAULT '',
+            location_lat REAL,
+            location_lng REAL,
+            photo_count INTEGER DEFAULT 0,
+            position INTEGER NOT NULL DEFAULT 0,
+            is_auto INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_sections_carnet ON album_sections(carnet_id, position)",
+        "CREATE INDEX IF NOT EXISTS idx_sections_parent ON album_sections(parent_section_id)",
+        "ALTER TABLE album_pages ADD COLUMN section_id INTEGER REFERENCES album_sections(id) ON DELETE SET NULL",
+        "ALTER TABLE album_pages ADD COLUMN manual_order INTEGER DEFAULT 0",
+        "ALTER TABLE album_pages ADD COLUMN is_hidden INTEGER DEFAULT 0",
+        "ALTER TABLE photos ADD COLUMN city_name TEXT DEFAULT ''",
+        # ── v2.3 — Mise en page (Brief 05 §14-17) ─────────────────────
+        "ALTER TABLE carnets ADD COLUMN default_photos_per_page INTEGER DEFAULT 1",
+        "ALTER TABLE carnets ADD COLUMN default_page_margin REAL DEFAULT 15.0",
+        "ALTER TABLE album_pages ADD COLUMN photos_per_page_override INTEGER",
+        "ALTER TABLE album_pages ADD COLUMN page_margin_override REAL",
+        "ALTER TABLE album_pages ADD COLUMN full_bleed_override INTEGER",
         # ── v2.2 — Web Push : abonnements aux notifications PWA ──────
         """CREATE TABLE IF NOT EXISTS push_subscriptions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1516,7 +1548,34 @@ def _carnet_pages(carnet_id, sort_mode='chrono'):
     pages = [dict(r) for r in rows]
     main = [p for p in pages if not p.get('is_margin')]
     margin = [p for p in pages if p.get('is_margin')]
-    return {'main': main, 'margin': margin, 'all': pages}
+
+    # v2.3 : organisation par sections (cas A/B/C)
+    sections = query("""
+        SELECT * FROM album_sections WHERE carnet_id=?
+        ORDER BY position ASC, id ASC
+    """, (carnet_id,))
+    sections = [dict(s) for s in sections]
+    sec_by_id = {s['id']: s for s in sections}
+    # Group sections par level 1
+    level1 = [s for s in sections if s['level'] == 1]
+    structured = []
+    for s1 in level1:
+        children = [s for s in sections if s['parent_section_id'] == s1['id']]
+        children.sort(key=lambda x: x['position'])
+        sub = []
+        for c in children:
+            child_pages = [p for p in main if p.get('section_id') == c['id']]
+            sub.append({'section': c, 'pages': child_pages})
+        # Pages directement rattachees au level 1 (rare)
+        direct = [p for p in main if p.get('section_id') == s1['id']]
+        structured.append({'section': s1, 'subsections': sub, 'pages': direct})
+    # Pages sans section (taken_at manquant) -> categorie speciale
+    orphans = [p for p in main if not p.get('section_id')]
+
+    return {
+        'main': main, 'margin': margin, 'all': pages,
+        'structured': structured, 'orphans': orphans,
+    }
 
 
 def _next_page_position(carnet_id):
@@ -1698,6 +1757,8 @@ def carnet_album(cid_carnet):
                   if p.get('photo_gps_lat') is not None and p.get('photo_gps_lng') is not None]
     return render_template('album.html', carnet=c,
         main_pages=pages['main'], margin_pages=pages['margin'],
+        structured=pages.get('structured', []),
+        orphans=pages.get('orphans', []),
         geo_photos=geo_photos, types=CARNET_TYPES, sort_mode=sort_mode)
 
 
@@ -1789,6 +1850,11 @@ def carnet_upload_photos(cid_carnet):
             'width': data['width'], 'height': data['height'],
         })
     log.info("upload carnet=%s : %d cree(s), %d erreur(s)", cid_carnet, len(created), len(errors))
+    # Brief 05 : recalcul des sections auto apres chaque ajout
+    try:
+        _recompute_sections(cid_carnet)
+    except Exception as e:
+        log.warning("recompute sections fail: %s", e)
     return jsonify({'ok': True, 'created': created, 'errors': errors})
 
 
@@ -2124,6 +2190,10 @@ def carnet_upload_video(cid_carnet):
         "is_margin, added_by) VALUES (?,?,?,?,?,?)",
         (cid_carnet, 'video', pos, vid, 1 if is_margin else 0, session['uid'])
     )
+    try:
+        _recompute_sections(cid_carnet)
+    except Exception as e:
+        log.warning("recompute sections fail: %s", e)
     return jsonify({
         'ok': True,
         'page_id': page_id, 'video_id': vid,
@@ -2644,6 +2714,243 @@ def histoire_message_supprimer(msg_id):
     if msg['sender_id'] != session['uid']:
         return jsonify({'ok': False, 'error': "Auteur seulement"}), 403
     execute("UPDATE messages SET deleted_at=CURRENT_TIMESTAMP WHERE id=?", (msg_id,))
+    return jsonify({'ok': True})
+
+
+# ══════════════════════════════════════════════════════════════════════
+#         v2.3 — ALGORITHME DE REGROUPEMENT CHRONOLOGIQUE
+# ══════════════════════════════════════════════════════════════════════
+# Brief 05 §1 : SECTION (jour OU lieu) > SOUS-SECTION (l'inverse)
+# Cas A : 1 lieu / N jours -> level 1 = lieu, level 2 = jour
+# Cas B : N jours / N lieux (1 lieu/jour) -> level 1 = jour, level 2 = lieu
+# Cas C : 1 jour / >= 2 lieux -> level 1 = jour, level 2 = lieu
+# ══════════════════════════════════════════════════════════════════════
+
+def _haversine_km(lat1, lng1, lat2, lng2):
+    """Distance approximative en km entre 2 points GPS."""
+    import math
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlng = math.radians(lng2 - lng1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng/2)**2
+    return 2 * R * math.asin(math.sqrt(a))
+
+
+def _location_key(photo):
+    """Cle de regroupement par lieu : city_name si dispo, sinon GPS arrondi 0.05° (~5km)."""
+    cn = (photo.get('city_name') or '').strip().lower()
+    if cn:
+        return cn
+    lat, lng = photo.get('gps_lat'), photo.get('gps_lng')
+    if lat is not None and lng is not None:
+        return f"gps_{round(lat * 20) / 20:.2f}_{round(lng * 20) / 20:.2f}"
+    return None
+
+
+def _location_label(photo, key):
+    """Libelle visible d'un lieu."""
+    cn = (photo.get('city_name') or '').strip()
+    if cn:
+        return cn
+    if photo.get('gps_lat') is not None:
+        return f"{photo['gps_lat']:.3f},{photo['gps_lng']:.3f}"
+    return "Lieu inconnu"
+
+
+def _part_of_day(hour):
+    """Brief 05 §3.2 : MATIN 5-12, APRES-MIDI 12-18, SOIREE 18-22, NUIT 22-5."""
+    if 5 <= hour < 12:  return 'MATIN'
+    if 12 <= hour < 18: return 'APRES-MIDI'
+    if 18 <= hour < 22: return 'SOIREE'
+    return 'NUIT'
+
+
+def _format_day_fr(date_str):
+    """Convertit '2026-05-04' en 'LUNDI 4 MAI'."""
+    try:
+        from datetime import datetime as _dt
+        d = _dt.strptime(date_str, '%Y-%m-%d')
+        DAYS = ['LUNDI','MARDI','MERCREDI','JEUDI','VENDREDI','SAMEDI','DIMANCHE']
+        MONTHS = ['JANVIER','FEVRIER','MARS','AVRIL','MAI','JUIN','JUILLET','AOUT','SEPTEMBRE','OCTOBRE','NOVEMBRE','DECEMBRE']
+        return f"{DAYS[d.weekday()]} {d.day} {MONTHS[d.month-1]}"
+    except Exception:
+        return date_str
+
+
+def _recompute_sections(carnet_id):
+    """Recalcule les album_sections pour un carnet (idempotent).
+    Preserve les pages avec manual_order=1 a leur position actuelle."""
+    photos = query("""
+        SELECT ap.id AS page_id, ap.position, ap.manual_order,
+               p.taken_at, p.gps_lat, p.gps_lng, p.city_name,
+               v.taken_at AS video_taken_at
+        FROM album_pages ap
+        LEFT JOIN photos p ON p.id = ap.photo_id
+        LEFT JOIN videos v ON v.id = ap.video_id
+        WHERE ap.carnet_id = ? AND COALESCE(ap.is_hidden, 0) = 0
+    """, (carnet_id,))
+    items = []
+    for r in photos:
+        r = dict(r)
+        ts = r.get('taken_at') or r.get('video_taken_at')
+        if not ts:
+            continue
+        # Date locale (simplification : on prend les 10 premiers chars)
+        day = str(ts)[:10]
+        if not day or len(day) != 10:
+            continue
+        items.append({
+            'page_id': r['page_id'],
+            'taken_at': ts,
+            'day': day,
+            'gps_lat': r.get('gps_lat'),
+            'gps_lng': r.get('gps_lng'),
+            'city_name': r.get('city_name') or '',
+            'manual_order': r.get('manual_order') or 0,
+        })
+    if not items:
+        # Reset sections + section page id sur album_pages
+        execute("DELETE FROM album_sections WHERE carnet_id=?", (carnet_id,))
+        execute("UPDATE album_pages SET section_id=NULL WHERE carnet_id=?", (carnet_id,))
+        return
+
+    # Tri chronologique
+    items.sort(key=lambda x: x['taken_at'])
+
+    # Groupement par jour, puis par lieu dans chaque jour
+    days = {}  # day -> list of items
+    for it in items:
+        days.setdefault(it['day'], []).append(it)
+
+    # Determiner le cas A/B/C
+    nb_days = len(days)
+    all_locs = set()
+    multi_loc_days = 0
+    for day, day_items in days.items():
+        locs_in_day = set(_location_key(p) for p in day_items if _location_key(p))
+        if len(locs_in_day) >= 2:
+            multi_loc_days += 1
+        all_locs |= locs_in_day
+    nb_locs = len(all_locs)
+
+    if multi_loc_days >= 1:
+        case = 'C'
+    elif nb_locs <= 1 and nb_days >= 2:
+        case = 'A'
+    else:
+        case = 'B'
+
+    # Reset
+    execute("DELETE FROM album_sections WHERE carnet_id=?", (carnet_id,))
+
+    pos1 = 0  # position des sections niveau 1
+
+    if case == 'A':
+        # 1 lieu / N jours : level 1 = lieu, level 2 = jour
+        first_loc_item = next((p for p in items if _location_key(p)), None)
+        loc_label = _location_label(first_loc_item, _location_key(first_loc_item)) if first_loc_item else "Voyage"
+        sec1_id = execute(
+            "INSERT INTO album_sections (carnet_id, level, kind, primary_label, "
+            "secondary_label, date_start, date_end, location_name, location_lat, "
+            "location_lng, photo_count, position) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (carnet_id, 1, 'location', loc_label.upper(),
+             f"{len(days)} jour(s) · {len(items)} photo(s)",
+             items[0]['taken_at'], items[-1]['taken_at'], loc_label,
+             first_loc_item['gps_lat'] if first_loc_item else None,
+             first_loc_item['gps_lng'] if first_loc_item else None,
+             len(items), pos1)
+        )
+        pos1 += 1
+        pos2 = 0
+        for day in sorted(days.keys()):
+            day_items = days[day]
+            sec2_id = execute(
+                "INSERT INTO album_sections (carnet_id, level, parent_section_id, "
+                "kind, primary_label, secondary_label, date_start, date_end, "
+                "photo_count, position) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (carnet_id, 2, sec1_id, 'day', _format_day_fr(day),
+                 f"{len(day_items)} photo(s)",
+                 day_items[0]['taken_at'], day_items[-1]['taken_at'],
+                 len(day_items), pos2)
+            )
+            pos2 += 1
+            for it in day_items:
+                if not it['manual_order']:
+                    execute("UPDATE album_pages SET section_id=? WHERE id=?",
+                            (sec2_id, it['page_id']))
+    else:
+        # Cas B ou C : level 1 = jour, level 2 = lieu
+        for day in sorted(days.keys()):
+            day_items = days[day]
+            locs_in_day_label = sorted(set(
+                _location_label(p, _location_key(p))
+                for p in day_items if _location_key(p)
+            ))
+            sec1_id = execute(
+                "INSERT INTO album_sections (carnet_id, level, kind, primary_label, "
+                "secondary_label, date_start, date_end, photo_count, position) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (carnet_id, 1, 'day', _format_day_fr(day),
+                 (', '.join(locs_in_day_label) + ' · ' if locs_in_day_label else '') +
+                    f"{len(day_items)} photo(s)",
+                 day_items[0]['taken_at'], day_items[-1]['taken_at'],
+                 len(day_items), pos1)
+            )
+            pos1 += 1
+            # Sous-sections par lieu (chrono dans le jour)
+            current_key = None
+            current_bucket = []
+            buckets = []
+            for it in day_items:
+                k = _location_key(it)
+                if k != current_key:
+                    if current_bucket:
+                        buckets.append((current_key, current_bucket))
+                    current_key = k
+                    current_bucket = [it]
+                else:
+                    current_bucket.append(it)
+            if current_bucket:
+                buckets.append((current_key, current_bucket))
+            pos2 = 0
+            for key, bucket in buckets:
+                first = bucket[0]
+                from datetime import datetime as _dt
+                try:
+                    hour = int(str(first['taken_at'])[11:13])
+                except Exception:
+                    hour = 12
+                pod = _part_of_day(hour)
+                loc_label = _location_label(first, key) if key else "Lieu inconnu"
+                start_t = str(bucket[0]['taken_at'])[11:16]
+                end_t = str(bucket[-1]['taken_at'])[11:16]
+                sec2_id = execute(
+                    "INSERT INTO album_sections (carnet_id, level, parent_section_id, "
+                    "kind, primary_label, secondary_label, part_of_day, date_start, "
+                    "date_end, location_name, location_lat, location_lng, "
+                    "photo_count, position) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (carnet_id, 2, sec1_id, 'location',
+                     f"{pod} · {loc_label}", f"{start_t} → {end_t} · {len(bucket)} photo(s)",
+                     pod, bucket[0]['taken_at'], bucket[-1]['taken_at'],
+                     loc_label, first.get('gps_lat'), first.get('gps_lng'),
+                     len(bucket), pos2)
+                )
+                pos2 += 1
+                for it in bucket:
+                    if not it['manual_order']:
+                        execute("UPDATE album_pages SET section_id=? WHERE id=?",
+                                (sec2_id, it['page_id']))
+
+
+@app.route('/carnet/<int:cid_carnet>/sections/recompute', methods=['POST'])
+@couple_required
+def carnet_recompute_sections(cid_carnet):
+    """Reset manualOrder + recalcul auto."""
+    c = _get_carnet_or_404(cid_carnet)
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    execute("UPDATE album_pages SET manual_order=0 WHERE carnet_id=?", (cid_carnet,))
+    _recompute_sections(cid_carnet)
     return jsonify({'ok': True})
 
 
