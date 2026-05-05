@@ -388,6 +388,23 @@ def init_db():
         )""",
         "CREATE INDEX IF NOT EXISTS idx_carnet_items ON carnet_items(carnet_id, position)",
         "CREATE INDEX IF NOT EXISTS idx_carnet_items_target ON carnet_items(target_carnet_id)",
+        # ── v3.2 — Fil d'activité partagé (couple) ──────────────────────
+        """CREATE TABLE IF NOT EXISTS activity_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            couple_id INTEGER NOT NULL REFERENCES couples(id) ON DELETE CASCADE,
+            actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            kind TEXT NOT NULL,
+            target_carnet_id INTEGER REFERENCES carnets(id) ON DELETE CASCADE,
+            payload TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_activity_couple ON activity_events(couple_id, created_at DESC)",
+        """CREATE TABLE IF NOT EXISTS activity_seen (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            couple_id INTEGER NOT NULL REFERENCES couples(id) ON DELETE CASCADE,
+            last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, couple_id)
+        )""",
     ]
     for sql in migrations:
         try:
@@ -552,12 +569,19 @@ def inject_globals():
         except Exception:
             nb_souhaits = 0
     is_admin = bool(u and (u.get('email') or '').lower() in ADMIN_EMAILS)
+    nb_activity_unseen = 0
+    if u and eid:
+        try:
+            nb_activity_unseen = _count_unseen_activity(u['id'], eid)
+        except Exception:
+            nb_activity_unseen = 0
     return {
         'current_user': u,
         'current_espace': esp,
         'current_accent': (esp.get('accent') if esp else 'terracotta') or 'terracotta',
         'user_espaces': espaces,
         'nb_souhaits': nb_souhaits,
+        'nb_activity_unseen': nb_activity_unseen,
         'is_admin': is_admin,
         'admin_emails': ADMIN_EMAILS,
         'csrf_token': csrf_token,
@@ -703,6 +727,8 @@ def souhait_nouveau():
             "VALUES (?,?,?,?,?,?)",
             (current_espace_id(), title, 'souhait', kind, 'active', session['uid'])
         )
+        _log_activity(current_espace_id(), session['uid'], 'souhait_created',
+                      target_carnet_id=cid, payload={'title': title, 'kind': kind})
         return redirect(url_for('carnet_souhait_view', cid_carnet=cid))
     return render_template('souhait_form.html', kinds=SOUHAIT_KINDS, souhait=None)
 
@@ -756,6 +782,9 @@ def carnet_nouveau():
             (current_espace_id(), data['title'], data['type'], data['location'],
              data['date_start'], data['date_end'], 'active', session['uid'])
         )
+        _log_activity(current_espace_id(), session['uid'], 'carnet_created',
+                      target_carnet_id=cid,
+                      payload={'title': data['title'], 'type': data['type']})
         return redirect(url_for('carnet_view', cid_carnet=cid))
     return render_template('carnet_form.html', mode='nouveau', carnet=None, types=CARNET_TYPES)
 
@@ -952,6 +981,9 @@ def carnet_transformer(cid_carnet):
             return redirect(url_for('carnet_transformer', cid_carnet=cid_carnet))
         finally:
             conn.close()
+        _log_activity(c['couple_id'], session['uid'], 'carnet_transformed',
+                      target_carnet_id=new_cid,
+                      payload={'title': title, 'from_souhait_id': cid_carnet})
         flash("Carnet de voyage cree depuis ton souhait.", "ok")
         return redirect(url_for('carnet_album', cid_carnet=new_cid))
 
@@ -1258,6 +1290,112 @@ PDF_MARGIN_POSITIONS = [
     ('right',  'Notes à droite'),
     ('left',   'Notes à gauche'),
 ]
+
+
+# ══════════════════════════════════════════════════════════════════════
+#       v3.2 — Fil d'activité partagé (couple)
+# ══════════════════════════════════════════════════════════════════════
+import json as _json
+
+
+def _log_activity(couple_id, actor_user_id, kind, *,
+                  target_carnet_id=None, payload=None):
+    """Insère un événement dans le fil d'activité du couple.
+
+    payload : dict sérialisé en JSON (ex : {'count': 3, 'title': 'Auvergne'}).
+    Échec silencieux : on ne casse jamais la requête principale.
+    """
+    try:
+        if not couple_id:
+            return
+        pl = _json.dumps(payload or {}, ensure_ascii=False)
+        execute(
+            "INSERT INTO activity_events (couple_id, actor_user_id, kind, "
+            "target_carnet_id, payload) VALUES (?,?,?,?,?)",
+            (couple_id, actor_user_id, kind, target_carnet_id, pl)
+        )
+    except Exception as _e:
+        log.warning("activity log fail (%s): %s", kind, _e)
+
+
+def _list_activity(couple_id, limit=50):
+    """Renvoie les N derniers événements + auteur + carnet (jointure)."""
+    rows = query("""
+        SELECT ae.*, u.display_name AS actor_name,
+               c.title AS carnet_title, c.type AS carnet_type
+        FROM activity_events ae
+        LEFT JOIN users u ON u.id = ae.actor_user_id
+        LEFT JOIN carnets c ON c.id = ae.target_carnet_id
+        WHERE ae.couple_id = ?
+        ORDER BY ae.created_at DESC, ae.id DESC
+        LIMIT ?
+    """, (couple_id, limit))
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d['payload_data'] = _json.loads(d.get('payload') or '{}')
+        except Exception:
+            d['payload_data'] = {}
+        out.append(d)
+    return out
+
+
+def _count_unseen_activity(user_id, couple_id):
+    """Combien d'événements non vus par cet utilisateur dans cet espace.
+
+    On ignore les événements dont l'utilisateur est lui-même l'auteur.
+    """
+    if not (user_id and couple_id):
+        return 0
+    try:
+        seen = query(
+            "SELECT last_seen_at FROM activity_seen WHERE user_id=? AND couple_id=?",
+            (user_id, couple_id), one=True
+        )
+        last = seen['last_seen_at'] if seen else None
+        if last:
+            r = query(
+                "SELECT COUNT(*) AS n FROM activity_events "
+                "WHERE couple_id=? AND created_at > ? "
+                "AND COALESCE(actor_user_id, 0) != ?",
+                (couple_id, last, user_id), one=True
+            )
+        else:
+            r = query(
+                "SELECT COUNT(*) AS n FROM activity_events "
+                "WHERE couple_id=? AND COALESCE(actor_user_id, 0) != ?",
+                (couple_id, user_id), one=True
+            )
+        return r['n'] if r else 0
+    except Exception:
+        return 0
+
+
+def _mark_activity_seen(user_id, couple_id):
+    """Marque tous les événements de cet espace comme vus par l'utilisateur."""
+    if not (user_id and couple_id):
+        return
+    try:
+        execute(
+            "INSERT INTO activity_seen (user_id, couple_id, last_seen_at) "
+            "VALUES (?, ?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(user_id, couple_id) DO UPDATE SET "
+            "last_seen_at = CURRENT_TIMESTAMP",
+            (user_id, couple_id)
+        )
+    except Exception as _e:
+        log.warning("activity seen fail: %s", _e)
+
+
+@app.route('/activite')
+@couple_required
+def activity_feed():
+    """Fil d'activité partagé du couple."""
+    eid = current_espace_id()
+    events = _list_activity(eid, limit=80)
+    _mark_activity_seen(session['uid'], eid)
+    return render_template('activite.html', events=events)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -2528,6 +2666,10 @@ def carnet_upload_photos(cid_carnet):
         _recompute_sections(cid_carnet)
     except Exception as e:
         log.warning("recompute sections fail: %s", e)
+    if created:
+        _log_activity(c['couple_id'], session['uid'], 'photos_added',
+                      target_carnet_id=cid_carnet,
+                      payload={'count': len(created)})
     return jsonify({'ok': True, 'created': created, 'errors': errors})
 
 
@@ -2710,6 +2852,11 @@ def page_update_caption(page_id):
         "UPDATE album_pages SET caption=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
         (caption, page_id)
     )
+    if caption:
+        preview = caption if len(caption) <= 80 else caption[:77] + '…'
+        _log_activity(page['couple_id'], session['uid'], 'caption_updated',
+                      target_carnet_id=page['carnet_id'],
+                      payload={'preview': preview})
     return jsonify({'ok': True, 'caption': caption})
 
 
@@ -2771,6 +2918,12 @@ def carnet_add_margin_note(cid_carnet):
         "VALUES (?,?,?,?,?,?,1,?)",
         (cid_carnet, page_type, pos, photo_id, text, caption, session['uid'])
     )
+    cap_short = caption or text or ''
+    if len(cap_short) > 80:
+        cap_short = cap_short[:77] + '…'
+    _log_activity(c['couple_id'], session['uid'], 'margin_note_added',
+                  target_carnet_id=cid_carnet,
+                  payload={'caption': cap_short, 'has_photo': bool(photo_id)})
     return jsonify({'ok': True, 'page_id': page_id, 'position': pos})
 
 

@@ -28,6 +28,18 @@
     <div class="topbar-right">
       {% block topbar_actions %}{% endblock %}
 
+      {% if current_user %}
+      <a href="{{ url_for('activity_feed') }}"
+         class="topbar-bell {% if request.endpoint == 'activity_feed' %}is-active{% endif %}"
+         title="Activité du couple"
+         aria-label="Activité">
+        <span class="topbar-bell-icon" aria-hidden="true">🔔</span>
+        {% if nb_activity_unseen %}
+        <span class="topbar-bell-badge">{{ nb_activity_unseen if nb_activity_unseen < 100 else '99+' }}</span>
+        {% endif %}
+      </a>
+      {% endif %}
+
       {% if user_espaces %}
       <div class="espace-switcher">
         <button type="button" class="espace-btn" id="espace-toggle" aria-haspopup="true" aria-expanded="false">

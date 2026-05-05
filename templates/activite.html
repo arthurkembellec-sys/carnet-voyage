@@ -1,0 +1,122 @@
+{% extends '_base.html' %}
+{% block title %}Activité{% endblock %}
+
+{% block extra_head %}
+<style>
+.activity-page{ padding-bottom: 80px }
+.activity-list{
+  display: flex; flex-direction: column;
+  gap: 10px; margin-top: 18px;
+}
+.activity-item{
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 14px 16px;
+  background: #FAF8F4;
+  border: 1px solid #ece6d9;
+  border-radius: 10px;
+}
+.activity-icon{
+  flex: 0 0 36px; width: 36px; height: 36px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(196,101,74,0.08);
+  border-radius: 50%;
+  font-size: 18px;
+}
+.activity-body{ flex: 1; min-width: 0 }
+.activity-text{
+  margin: 0 0 4px;
+  font-size: 14px; line-height: 1.45;
+  color: #1C1A17;
+}
+.activity-text strong{ font-weight: 600 }
+.activity-meta{
+  font-size: 11px; letter-spacing: 0.04em;
+  color: #6A6357;
+}
+.activity-link{
+  display: inline-block; margin-top: 6px;
+  font-size: 12px; color: #C4654A;
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(196,101,74,0.4);
+}
+.activity-link:hover{ border-bottom-style: solid }
+.activity-empty{
+  padding: 60px 20px; text-align: center;
+  color: #6A6357;
+}
+.activity-empty-icon{ font-size: 48px; margin-bottom: 12px }
+</style>
+{% endblock %}
+
+{% block content %}
+<main class="page activity-page">
+  <section class="hero">
+    <p class="kicker">Activité</p>
+    <h1 class="display"><em>Dans votre espace</em></h1>
+    <p class="lead">Tout ce qui s'est passé récemment dans cet espace partagé.</p>
+  </section>
+
+  {% if events %}
+  <div class="activity-list">
+    {% for ev in events %}
+    {% set p = ev.payload_data %}
+    <article class="activity-item">
+      <div class="activity-icon" aria-hidden="true">
+        {%- if ev.kind == 'carnet_created' -%}📔
+        {%- elif ev.kind == 'photos_added' -%}📸
+        {%- elif ev.kind == 'caption_updated' -%}✎
+        {%- elif ev.kind == 'margin_note_added' -%}🗒️
+        {%- elif ev.kind == 'carnet_transformed' -%}✨
+        {%- elif ev.kind == 'souhait_created' -%}💭
+        {%- elif ev.kind == 'member_joined' -%}🤝
+        {%- else -%}•{%- endif -%}
+      </div>
+      <div class="activity-body">
+        <p class="activity-text">
+          <strong>{{ ev.actor_name or 'Quelqu\'un' }}</strong>
+          {%- if ev.kind == 'carnet_created' %}
+            a créé le carnet <strong>{{ ev.carnet_title or p.title or '?' }}</strong>
+            {% if (ev.carnet_type or p.type) and (ev.carnet_type or p.type) != 'voyage' %}
+              ({{ ev.carnet_type or p.type }})
+            {% endif %}
+          {%- elif ev.kind == 'souhait_created' %}
+            a ajouté la rêverie <strong>{{ ev.carnet_title or p.title or '?' }}</strong>
+          {%- elif ev.kind == 'photos_added' %}
+            a ajouté <strong>{{ p.count or 1 }} photo(s)</strong>
+            {% if ev.carnet_title %}à <strong>{{ ev.carnet_title }}</strong>{% endif %}
+          {%- elif ev.kind == 'caption_updated' %}
+            a modifié une légende
+            {% if ev.carnet_title %}dans <strong>{{ ev.carnet_title }}</strong>{% endif %}
+            {% if p.preview %}<br><em style="color:#6A6357;font-size:13px">« {{ p.preview }} »</em>{% endif %}
+          {%- elif ev.kind == 'margin_note_added' %}
+            a ajouté une note de marge
+            {% if ev.carnet_title %}à <strong>{{ ev.carnet_title }}</strong>{% endif %}
+            {% if p.caption %}<br><em style="color:#6A6357;font-size:13px">« {{ p.caption }} »</em>{% endif %}
+          {%- elif ev.kind == 'carnet_transformed' %}
+            a transformé une rêverie en voyage : <strong>{{ ev.carnet_title or p.title or '?' }}</strong>
+          {%- elif ev.kind == 'member_joined' %}
+            a rejoint cet espace
+          {%- else %}
+            : {{ ev.kind }}
+          {%- endif %}
+        </p>
+        <div class="activity-meta">{{ (ev.created_at or '')|truncate(16, true, '') }}</div>
+        {% if ev.target_carnet_id and ev.kind != 'carnet_transformed' %}
+        <a class="activity-link"
+           href="{{ url_for('carnet_view', cid_carnet=ev.target_carnet_id) }}">
+          Voir le carnet →
+        </a>
+        {% endif %}
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="activity-empty">
+    <div class="activity-empty-icon" aria-hidden="true">🔔</div>
+    <h2 style="font-family:Fraunces,serif;font-style:italic;margin:0 0 8px">Rien à signaler pour l'instant</h2>
+    <p>Quand toi ou ton/ta partenaire ajoutera une photo, une légende ou un nouveau carnet, ça apparaîtra ici.</p>
+  </div>
+  {% endif %}
+</main>
+{% endblock %}

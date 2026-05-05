@@ -2422,6 +2422,30 @@ a:not(.btn):not(.tab-link):not(.chip):not(.link):not(.brand):not(.espace-menu-it
   display: flex; align-items: center; gap: 12px;
   margin-left: auto;
 }
+/* Cloche d'activité */
+.topbar-bell {
+  position: relative;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  text-decoration: none;
+  transition: background .15s;
+}
+.topbar-bell:hover { background: rgba(196,101,74,0.08); }
+.topbar-bell.is-active { background: rgba(196,101,74,0.14); }
+.topbar-bell-icon { font-size: 18px; line-height: 1; filter: grayscale(20%); }
+.topbar-bell:hover .topbar-bell-icon,
+.topbar-bell.is-active .topbar-bell-icon { filter: none; }
+.topbar-bell-badge {
+  position: absolute;
+  top: 2px; right: 2px;
+  min-width: 16px; height: 16px; padding: 0 4px;
+  background: var(--accent, #C4654A); color: #FAF8F4;
+  border-radius: 8px;
+  font-size: 10px; font-weight: 700; line-height: 16px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--cream, #FAF8F4);
+}
 .espace-btn-label {
   max-width: 140px;
   overflow: hidden;
