@@ -68,9 +68,13 @@
 }
 .book-cover-title{
   font-family:Fraunces, Georgia, serif; font-style:italic; font-weight:500;
-  font-size:22px; line-height:1.1; margin:14px 0 6px;
+  font-size:22px; line-height:1.15; margin:14px 0 6px;
   color:#1C1A17; text-align:center;
+  max-width:92%; word-wrap:break-word; overflow-wrap:break-word;
+  hyphens:auto;
 }
+.book-cover-title.is-long{ font-size:18px; }
+.book-cover-title.is-very-long{ font-size:15px; }
 .book-cover-sub{
   font-size:10px; letter-spacing:0.04em;
   color:#6A6357; text-align:center; margin:0;
@@ -540,15 +544,25 @@
             {% set verso_margins = margin_active[verso_idx*per_page_margin:(verso_idx+1)*per_page_margin] if per_page_margin else [] %}
             {% set recto_margins = margin_active[recto_idx*per_page_margin:(recto_idx+1)*per_page_margin] if per_page_margin else [] %}
 
+            {# Marge dynamique : zone visible uniquement si contenu #}
+            {% set verso_has_caps = namespace(v=false) %}
+            {% for it in verso_block.chunk %}{% if it.caption %}{% set verso_has_caps.v = true %}{% endif %}{% endfor %}
+            {% set verso_has_margin = (verso_has_caps.v or verso_margins|length > 0) %}
+            {% set verso_mp_class = (margin_pos if margin_pos in ('outer','inner','bottom','end') else 'outer') if verso_has_margin else 'end' %}
+            {% set recto_has_caps = namespace(v=false) %}
+            {% for it in recto_block.chunk %}{% if it.caption %}{% set recto_has_caps.v = true %}{% endif %}{% endfor %}
+            {% set recto_has_margin = (recto_has_caps.v or recto_margins|length > 0) %}
+            {% set recto_mp_class = (margin_pos if margin_pos in ('outer','inner','bottom','end') else 'outer') if recto_has_margin else 'end' %}
+
             <div class="book-spread book-fmt-{{ format }}">
               {# Verso (gauche) #}
               <div class="book-page-l">
-                <div class="book-inner is-verso mp-{{ margin_pos if margin_pos in ('outer','inner','bottom','end') else 'outer' }}">
+                <div class="book-inner is-verso mp-{{ verso_mp_class }}">
                   <div class="book-album g{% if verso_block.chunk|length == 2 and fmt_info[1] >= fmt_info[2] %}2-h{% elif verso_block.chunk|length == 2 %}2-v{% else %}{{ verso_block.chunk|length }}{% endif %}">
                     {% for it in verso_block.chunk %}
                     <div class="book-cell {% if it.full_bleed_override == 1 %}book-cell-mode-full{% elif it.full_bleed_override == 2 %}book-cell-mode-spread{% endif %}"
-                         data-page-id="{{ it.id }}">
-                      {% if show_letters_unused %}{# placeholder #}{% endif %}
+                         data-page-id="{{ it.id }}"
+                         data-caption="{{ (it.caption or '')|e }}">
                       {% set letter = letters[loop.index0] %}
                       {% if it.caption %}<span class="book-cell-letter">{{ letter }}</span>{% endif %}
                       {% if it.video_path %}
@@ -563,12 +577,9 @@
                     </div>
                     {% endfor %}
                   </div>
-                  {% if margin_pos in ('outer','inner','bottom') %}
+                  {% if verso_has_margin and margin_pos in ('outer','inner','bottom') %}
                   <aside class="book-margin">
-                    {# Légendes des photos (avec lettres a/b/c) #}
-                    {% set has_caps = false %}
-                    {% for it in verso_block.chunk %}{% if it.caption %}{% set has_caps = true %}{% endif %}{% endfor %}
-                    {% if has_caps %}
+                    {% if verso_has_caps.v %}
                     <div class="book-margin-section-label">LÉGENDES</div>
                     <div class="book-margin-rule"></div>
                     {% for it in verso_block.chunk %}
@@ -597,10 +608,11 @@
               </div>
               {# Recto (droite) #}
               <div class="book-page-r">
-                <div class="book-inner is-recto mp-{{ margin_pos if margin_pos in ('outer','inner','bottom','end') else 'outer' }}">
+                <div class="book-inner is-recto mp-{{ recto_mp_class }}">
                   <div class="book-album g{% if recto_block.chunk|length == 2 and fmt_info[1] >= fmt_info[2] %}2-h{% elif recto_block.chunk|length == 2 %}2-v{% else %}{{ recto_block.chunk|length }}{% endif %}">
                     {% for it in recto_block.chunk %}
-                    <div class="book-cell" data-page-id="{{ it.id }}">
+                    <div class="book-cell" data-page-id="{{ it.id }}"
+                         data-caption="{{ (it.caption or '')|e }}">
                       {% set letter = letters[loop.index0] %}
                       {% if it.caption %}<span class="book-cell-letter">{{ letter }}</span>{% endif %}
                       {% if it.video_path %}
@@ -615,11 +627,9 @@
                     </div>
                     {% endfor %}
                   </div>
-                  {% if margin_pos in ('outer','inner','bottom') %}
+                  {% if recto_has_margin and margin_pos in ('outer','inner','bottom') %}
                   <aside class="book-margin">
-                    {% set has_caps_r = false %}
-                    {% for it in recto_block.chunk %}{% if it.caption %}{% set has_caps_r = true %}{% endif %}{% endfor %}
-                    {% if has_caps_r %}
+                    {% if recto_has_caps.v %}
                     <div class="book-margin-section-label">LÉGENDES</div>
                     <div class="book-margin-rule"></div>
                     {% for it in recto_block.chunk %}
@@ -719,11 +729,29 @@
     </div>
   </div>
 
-  {# Menu contextuel plein-page #}
+  {# Menu contextuel plein-page + édition légende #}
   <div class="fullmode-menu" id="fullmode-menu">
+    <button type="button" onclick="editCaption()">✎ Modifier la légende</button>
+    <div style="height:1px;background:#e8e3d6;margin:4px 6px"></div>
     <button type="button" data-mode="normal" onclick="setFullMode('normal')">Format normal</button>
     <button type="button" data-mode="full" onclick="setFullMode('full')">Pleine page</button>
     <button type="button" data-mode="spread" onclick="setFullMode('spread')">Double page (panorama)</button>
+  </div>
+
+  {# Modale édition légende #}
+  <div class="cover-modal" id="caption-modal">
+    <div class="cover-modal-card" style="max-width:480px">
+      <button class="cover-modal-close" type="button" onclick="closeCaption()">×</button>
+      <h3 class="cover-modal-title">Légende de la photo</h3>
+      <p class="cover-modal-sub">Le texte qui apparaît sous la photo (ou en marge dans le livre).</p>
+      <textarea id="caption-input" rows="4"
+                style="width:100%;padding:10px;border:1px solid #d8d2c5;border-radius:4px;font-family:Fraunces,serif;font-style:italic;font-size:14px;resize:vertical"
+                placeholder="Une phrase, un souvenir, un nom de lieu…"></textarea>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+        <button type="button" class="btn btn-secondary" onclick="closeCaption()">Annuler</button>
+        <button type="button" class="btn btn-primary" onclick="saveCaption()">Enregistrer</button>
+      </div>
+    </div>
   </div>
 
   <div class="book-toast" id="book-toast"></div>
@@ -731,9 +759,17 @@
   <script>
   const URL_COVER_SET = "{{ url_for('carnet_cover_set', cid_carnet=carnet.id) }}";
   const URL_FULL_MODE = "{{ url_for('album_page_full_mode', page_id=0)|replace('/0/', '/__PID__/') }}";
+  const URL_CAPTION = "{{ url_for('page_update_caption', page_id=0)|replace('/0/', '/__PID__/') }}";
   const URL_SAVE_SETTINGS = "{{ url_for('carnet_pdf_settings', cid_carnet=carnet.id) }}";
   const CSRF = "{{ csrf_token() }}";
   let currentFullModePageId = null;
+
+  /* Auto-fit titre couverture */
+  document.querySelectorAll('.book-cover-title').forEach(el => {
+    const len = (el.textContent || '').trim().length;
+    if (len > 38) el.classList.add('is-very-long');
+    else if (len > 24) el.classList.add('is-long');
+  });
 
   function showToast(msg){
     const t = document.getElementById('book-toast');
@@ -816,6 +852,42 @@
       }
     } catch(e) { alert('Erreur réseau : ' + e); }
   }
+
+  /* ─ Légende ─ */
+  function editCaption(){
+    if (!currentFullModePageId) return;
+    document.getElementById('fullmode-menu').classList.remove('open');
+    const cell = document.querySelector('.book-cell[data-page-id="' + currentFullModePageId + '"]');
+    const cur = cell ? (cell.dataset.caption || '') : '';
+    document.getElementById('caption-input').value = cur;
+    document.getElementById('caption-modal').classList.add('open');
+    setTimeout(()=>document.getElementById('caption-input').focus(), 100);
+  }
+  function closeCaption(){
+    document.getElementById('caption-modal').classList.remove('open');
+  }
+  async function saveCaption(){
+    if (!currentFullModePageId) return;
+    const val = document.getElementById('caption-input').value.trim();
+    const fd = new FormData();
+    fd.append('_csrf', CSRF);
+    fd.append('caption', val);
+    const url = URL_CAPTION.replace('__PID__', currentFullModePageId);
+    try {
+      const r = await fetch(url, { method:'POST', body: fd });
+      const d = await r.json();
+      if (d.ok) {
+        showToast('Légende enregistrée');
+        closeCaption();
+        setTimeout(()=>location.reload(), 800);
+      } else {
+        alert('Erreur : ' + (d.error || 'inconnue'));
+      }
+    } catch(e) { alert('Erreur réseau : ' + e); }
+  }
+  document.getElementById('caption-modal').addEventListener('click', function(e){
+    if (e.target === this) closeCaption();
+  });
 
   /* ─ Save settings ─ */
   document.getElementById('btn-save-settings').addEventListener('click', async function(){

@@ -1037,10 +1037,124 @@ def _staticmap_url(center_lat, center_lng, zoom, width, height, markers=None):
     return base + '?' + qs
 
 
+_TILE_UA = 'Notre-Histoire/1.0 (+arthur.kembellec@gmail.com)'
+
+
+def _latlng_to_tile_xy(lat, lng, zoom):
+    import math
+    lat_rad = math.radians(max(-85.0511, min(85.0511, lat)))
+    n = 2.0 ** zoom
+    x = (lng + 180.0) / 360.0 * n
+    y = (1.0 - math.log(math.tan(lat_rad) + 1 / math.cos(lat_rad)) / math.pi) / 2.0 * n
+    return x, y
+
+
+def _fetch_osm_tile(z, x, y):
+    """Fetch une tuile OSM 256x256 avec cache disque."""
+    n = 2 ** z
+    if y < 0 or y >= n:
+        return None
+    x = x % n
+    tdir = os.path.join(MAPS_CACHE_DIR, 'tiles', str(z), str(x))
+    os.makedirs(tdir, exist_ok=True)
+    cache_path = os.path.join(tdir, f"{y}.png")
+    if os.path.exists(cache_path):
+        try:
+            age_days = (datetime.utcnow().timestamp() - os.path.getmtime(cache_path)) / 86400
+            if age_days < MAP_CACHE_TTL_DAYS:
+                with open(cache_path, 'rb') as f:
+                    return f.read()
+        except Exception:
+            pass
+    url = f"https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': _TILE_UA})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = resp.read()
+        with open(cache_path, 'wb') as f:
+            f.write(data)
+        return data
+    except Exception as e:
+        log.warning("OSM tile fetch fail z=%d x=%d y=%d: %s", z, x, y, e)
+        return None
+
+
+def _build_map_from_tiles(center_lat, center_lng, zoom, width, height, markers=None):
+    """Compose une carte PNG width×height à partir de tuiles OSM 256x256.
+
+    Trace les markers en pin terracotta. Retourne bytes ou None.
+    """
+    import math
+    try:
+        from PIL import Image as PILImage, ImageDraw
+    except Exception:
+        return None
+    tile_size = 256
+    cx, cy = _latlng_to_tile_xy(center_lat, center_lng, zoom)
+    cx_px = cx * tile_size
+    cy_px = cy * tile_size
+    half_w = width / 2
+    half_h = height / 2
+    # Bbox en pixels monde
+    px0 = cx_px - half_w
+    py0 = cy_px - half_h
+    px1 = cx_px + half_w
+    py1 = cy_px + half_h
+    tx0 = int(math.floor(px0 / tile_size))
+    ty0 = int(math.floor(py0 / tile_size))
+    tx1 = int(math.floor(px1 / tile_size))
+    ty1 = int(math.floor(py1 / tile_size))
+    canvas_w = (tx1 - tx0 + 1) * tile_size
+    canvas_h = (ty1 - ty0 + 1) * tile_size
+    canvas = PILImage.new('RGB', (canvas_w, canvas_h), '#e9e2d3')
+    fetched = 0
+    failed = 0
+    for tx in range(tx0, tx1 + 1):
+        for ty in range(ty0, ty1 + 1):
+            tile_bytes = _fetch_osm_tile(zoom, tx, ty)
+            if not tile_bytes:
+                failed += 1
+                continue
+            try:
+                tile_img = PILImage.open(io.BytesIO(tile_bytes)).convert('RGB')
+                canvas.paste(tile_img,
+                             ((tx - tx0) * tile_size, (ty - ty0) * tile_size))
+                fetched += 1
+            except Exception as e:
+                failed += 1
+                log.warning("tile decode fail z=%d x=%d y=%d: %s", zoom, tx, ty, e)
+    if fetched == 0:
+        return None
+    # Crop sur la zone demandée
+    crop_x = int(px0 - tx0 * tile_size)
+    crop_y = int(py0 - ty0 * tile_size)
+    img = canvas.crop((crop_x, crop_y, crop_x + width, crop_y + height))
+    # Markers en pin terracotta
+    if markers:
+        draw = ImageDraw.Draw(img)
+        for lat, lng in markers[:50]:
+            mx, my = _latlng_to_tile_xy(lat, lng, zoom)
+            mpx = int(mx * tile_size - px0)
+            mpy = int(my * tile_size - py0)
+            if 0 <= mpx < width and 0 <= mpy < height:
+                # halo blanc cassé
+                draw.ellipse([mpx - 7, mpy - 7, mpx + 7, mpy + 7],
+                             fill='#FAF8F4', outline='#1C1A17', width=1)
+                draw.ellipse([mpx - 4, mpy - 4, mpx + 4, mpy + 4],
+                             fill='#C4654A')
+    out = io.BytesIO()
+    img.save(out, 'PNG')
+    return out.getvalue()
+
+
 def _fetch_staticmap_png(center_lat, center_lng, zoom, width, height, markers=None):
-    """Fetch (avec cache local 90j) une staticmap PNG. Retourne bytes ou None."""
+    """Fetch (avec cache local 90j) une staticmap PNG. Retourne bytes ou None.
+
+    Stratégie : cache → tuiles OSM assemblées (fiable) → fallback staticmap.openstreetmap.de.
+    """
     if center_lat is None or center_lng is None:
         return None
+    # Clé cache (incluant markers)
     key = f"{center_lat:.5f}_{center_lng:.5f}_{zoom}_{width}_{height}"
     if markers:
         marker_str = '|'.join(f"{a:.5f},{b:.5f}" for a, b in markers[:30])
@@ -1055,20 +1169,29 @@ def _fetch_staticmap_png(center_lat, center_lng, zoom, width, height, markers=No
                     return f.read()
         except Exception:
             pass
-    url = _staticmap_url(center_lat, center_lng, zoom, width, height, markers)
+    # 1) Assemblage tuiles OSM (fiable, contrôle total markers)
+    data = None
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Notre-Histoire-PDF/1.0'})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = resp.read()
+        data = _build_map_from_tiles(center_lat, center_lng, zoom, width, height, markers)
+    except Exception as e:
+        log.warning("OSM tile build fail: %s", e)
+    # 2) Fallback staticmap.openstreetmap.de
+    if not data:
+        url = _staticmap_url(center_lat, center_lng, zoom, width, height, markers)
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': _TILE_UA})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = resp.read()
+        except Exception as e:
+            log.warning("staticmap fetch fail (%s): %s", url[:100], e)
+            return None
+    if data:
         try:
             with open(cache_path, 'wb') as f:
                 f.write(data)
         except Exception as e:
             log.warning("map cache write fail: %s", e)
-        return data
-    except Exception as e:
-        log.warning("staticmap fetch fail (%s): %s", url[:100], e)
-        return None
+    return data
 
 
 def _compute_map_zoom(min_lat, max_lat, min_lng, max_lng, width_px, height_px):
@@ -2606,6 +2729,49 @@ def page_update_text(page_id):
         (text, page_id)
     )
     return jsonify({'ok': True, 'text_content': text})
+
+
+@app.route('/carnet/<int:cid_carnet>/margin_note', methods=['POST'])
+@couple_required
+def carnet_add_margin_note(cid_carnet):
+    """v3 — Ajoute une note de marge (texte + photo optionnelle) en 1 POST."""
+    c = _get_carnet_or_404(cid_carnet)
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    text = (request.form.get('text') or '').strip()
+    caption = (request.form.get('caption') or '').strip()
+    f = request.files.get('photo')
+    if not text and not caption and not (f and f.filename):
+        return jsonify({'ok': False, 'error': 'Note vide'}), 400
+    photo_id = None
+    if f and f.filename:
+        try:
+            data = _save_uploaded_photo(f, c['couple_id'])
+            gps_lat = _safe_float(request.form.get('gps_lat'))
+            gps_lng = _safe_float(request.form.get('gps_lng'))
+            taken_at = request.form.get('taken_at') or data.get('taken_at')
+            _inject_exif_to_jpeg(os.path.join(UPLOAD_DIR, data['file_path']),
+                                 taken_at, gps_lat, gps_lng)
+            _inject_exif_to_jpeg(os.path.join(UPLOAD_DIR, data['thumb_path']),
+                                 taken_at, gps_lat, gps_lng)
+            photo_id = execute(
+                "INSERT INTO photos (couple_id, file_path, thumb_path, width, height, "
+                "taken_at, gps_lat, gps_lng, added_by) VALUES (?,?,?,?,?,?,?,?,?)",
+                (c['couple_id'], data['file_path'], data['thumb_path'],
+                 data['width'], data['height'], taken_at, gps_lat, gps_lng, session['uid'])
+            )
+        except Exception as e:
+            log.error("margin_note photo upload: %s", e)
+            return jsonify({'ok': False, 'error': 'Photo : ' + str(e)}), 500
+    pos = _next_page_position(cid_carnet)
+    page_type = 'photo' if photo_id else 'text'
+    page_id = execute(
+        "INSERT INTO album_pages (carnet_id, type, position, photo_id, "
+        "text_content, caption, is_margin, added_by) "
+        "VALUES (?,?,?,?,?,?,1,?)",
+        (cid_carnet, page_type, pos, photo_id, text, caption, session['uid'])
+    )
+    return jsonify({'ok': True, 'page_id': page_id, 'position': pos})
 
 
 @app.route('/carnet/<int:cid_carnet>/text', methods=['POST'])

@@ -21,6 +21,11 @@
         <h1 class="display"><em>{{ carnet.title }}</em></h1>
       </div>
       <div class="album-head-actions">
+        <button type="button" class="btn btn-secondary" id="btn-add-margin-note"
+                title="Ajouter une note ou un billet en marge"
+                style="margin-right:8px">
+          ✎ + Note de marge
+        </button>
         <a href="{{ url_for('carnet_apercu', cid_carnet=carnet.id) }}"
            class="btn-print-card"
            title="Aperçu du livre + impression PDF">
@@ -192,6 +197,38 @@
   </button>
 </div>
 
+<!-- Modale ajout note de marge -->
+<div class="cover-modal" id="margin-note-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);align-items:center;justify-content:center;z-index:9000;padding:20px">
+  <div style="background:#FAF8F4;max-width:520px;width:100%;max-height:88vh;overflow-y:auto;border-radius:8px;padding:22px">
+    <button type="button" onclick="closeMarginNote()"
+            style="background:transparent;border:none;cursor:pointer;font-size:22px;line-height:1;float:right;padding:0;color:#6A6357">×</button>
+    <h3 style="font-family:Fraunces,serif;font-style:italic;margin:0 0 6px;font-size:22px">Note de marge</h3>
+    <p style="font-size:12px;color:#6A6357;margin:0 0 16px">
+      Photo de contexte, billet de musée, gribouillis, citation… apparaîtra dans la marge du livre.
+    </p>
+    <form id="margin-note-form" enctype="multipart/form-data">
+      <label style="display:block;font-size:11px;letter-spacing:0.06em;color:#6A6357;margin-bottom:6px">PHOTO (optionnelle)</label>
+      <input type="file" name="photo" id="mn-photo" accept="image/*"
+             style="display:block;margin-bottom:14px">
+
+      <label style="display:block;font-size:11px;letter-spacing:0.06em;color:#6A6357;margin-bottom:6px">LÉGENDE COURTE</label>
+      <input type="text" name="caption" id="mn-caption" maxlength="120"
+             placeholder="Une phrase, un nom de lieu…"
+             style="width:100%;padding:8px 10px;border:1px solid #d8d2c5;border-radius:4px;font-size:13px;margin-bottom:14px">
+
+      <label style="display:block;font-size:11px;letter-spacing:0.06em;color:#6A6357;margin-bottom:6px">NOTE LONGUE (optionnelle)</label>
+      <textarea name="text" id="mn-text" rows="4"
+                placeholder="Souvenir, anecdote, prix, adresse…"
+                style="width:100%;padding:10px;border:1px solid #d8d2c5;border-radius:4px;font-family:Fraunces,serif;font-style:italic;font-size:13px;resize:vertical"></textarea>
+
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button type="button" class="btn btn-secondary" onclick="closeMarginNote()">Annuler</button>
+        <button type="submit" class="btn btn-primary" id="mn-submit">Ajouter à la marge</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- Viewer plein ecran -->
 <div class="photo-viewer" id="photo-viewer" hidden>
   <button type="button" class="viewer-close" onclick="closeViewer()" aria-label="Fermer">✕</button>
@@ -217,6 +254,50 @@
   const CARNET_ID = {{ carnet.id }};
   const URL_UPLOAD_PHOTOS = "{{ url_for('carnet_upload_photos', cid_carnet=carnet.id) }}";
   const URL_ADD_TEXT = "{{ url_for('carnet_add_text', cid_carnet=carnet.id) }}";
+  const URL_ADD_MARGIN_NOTE = "{{ url_for('carnet_add_margin_note', cid_carnet=carnet.id) }}";
+
+  /* ─ Note de marge ─ */
+  function openMarginNote(){
+    const m = document.getElementById('margin-note-modal');
+    m.style.display = 'flex';
+    document.getElementById('mn-caption').value = '';
+    document.getElementById('mn-text').value = '';
+    document.getElementById('mn-photo').value = '';
+    setTimeout(()=>document.getElementById('mn-caption').focus(), 100);
+  }
+  function closeMarginNote(){
+    document.getElementById('margin-note-modal').style.display = 'none';
+  }
+  document.addEventListener('DOMContentLoaded', function(){
+    const btn = document.getElementById('btn-add-margin-note');
+    if (btn) btn.addEventListener('click', openMarginNote);
+    const form = document.getElementById('margin-note-form');
+    if (form) form.addEventListener('submit', async function(ev){
+      ev.preventDefault();
+      const submit = document.getElementById('mn-submit');
+      submit.disabled = true; submit.textContent = 'Ajout…';
+      const fd = new FormData(form);
+      fd.append('_csrf', CSRF);
+      try {
+        const r = await fetch(URL_ADD_MARGIN_NOTE, { method:'POST', body: fd });
+        const d = await r.json();
+        if (d.ok) {
+          closeMarginNote();
+          location.reload();
+        } else {
+          alert('Erreur : ' + (d.error || 'inconnue'));
+          submit.disabled = false; submit.textContent = 'Ajouter à la marge';
+        }
+      } catch(e) {
+        alert('Erreur réseau : ' + e);
+        submit.disabled = false; submit.textContent = 'Ajouter à la marge';
+      }
+    });
+    const modal = document.getElementById('margin-note-modal');
+    if (modal) modal.addEventListener('click', function(e){
+      if (e.target === this) closeMarginNote();
+    });
+  });
 
   // ── Save indicator ────────────────────────────────────────────
   const saveStatus = document.getElementById('save-status');

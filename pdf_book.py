@@ -563,9 +563,32 @@ def render_carnet_pdf(
                               width=dw, height=dh, mask='auto')
             except Exception:
                 pass
-        pdf.setFont('Times-Italic', 36)
+        # Titre auto-fit + wrap 2 lignes max
+        from reportlab.pdfbase.pdfmetrics import stringWidth
+        title = carnet['title'] or ''
+        title_max_w = (w_mm * mm) - 30 * mm
+        title_size = 36
+        title_lines = [title]
+        while title_size > 22 and stringWidth(title, 'Times-Italic', title_size) > title_max_w:
+            title_size -= 1
+        if stringWidth(title, 'Times-Italic', title_size) > title_max_w and ' ' in title:
+            words = title.split()
+            best_split = len(words) // 2
+            best_diff = float('inf')
+            for k in range(1, len(words)):
+                w1 = stringWidth(' '.join(words[:k]), 'Times-Italic', title_size)
+                w2 = stringWidth(' '.join(words[k:]), 'Times-Italic', title_size)
+                if max(w1, w2) <= title_max_w and abs(w1 - w2) < best_diff:
+                    best_diff = abs(w1 - w2)
+                    best_split = k
+            title_lines = [' '.join(words[:best_split]), ' '.join(words[best_split:])]
+        pdf.setFont('Times-Italic', title_size)
         pdf.setFillColorRGB(*INK_RGB)
-        pdf.drawCentredString(page_w / 2, bleed + (h_mm * mm) * 0.30, carnet['title'])
+        line_h = title_size * 1.15
+        y_title = bleed + (h_mm * mm) * 0.30 + (len(title_lines) - 1) * line_h / 2
+        for line in title_lines:
+            pdf.drawCentredString(page_w / 2, y_title, line)
+            y_title -= line_h
         sub = []
         if carnet.get('location'):
             sub.append(carnet['location'])
@@ -686,7 +709,16 @@ def render_carnet_pdf(
         album_x, album_y, album_w, album_h = cx, cy, cw, ch
         mzone_x = mzone_y = mzone_w = mzone_h = 0
 
-        if margin_pos_eff == 'outer':
+        # Marge dynamique : si rien à mettre en marge, l'album prend toute la place
+        has_caption = any(it.get('caption') for it in chunk)
+        has_margin_notes = bool(margin_items_for_page)
+        has_section_map = (show_section_maps
+                           and section_zone_map_resolver is not None
+                           and section_zone_map_resolver(chunk) is not None)
+        margin_has_content = has_caption or has_margin_notes or has_section_map
+        margin_pos_local = margin_pos_eff if margin_has_content else 'end'
+
+        if margin_pos_local == 'outer':
             # Notes côté extérieur (loin de la reliure)
             margin_w = cw * 0.30
             album_w = cw - margin_w - 4 * mm
@@ -701,7 +733,7 @@ def render_carnet_pdf(
             mzone_y = cy
             mzone_w = margin_w
             mzone_h = ch
-        elif margin_pos_eff == 'inner':
+        elif margin_pos_local == 'inner':
             # Notes côté reliure (proche de la couture)
             margin_w = cw * 0.30
             album_w = cw - margin_w - 4 * mm
@@ -716,7 +748,7 @@ def render_carnet_pdf(
             mzone_y = cy
             mzone_w = margin_w
             mzone_h = ch
-        elif margin_pos_eff == 'bottom':
+        elif margin_pos_local == 'bottom':
             margin_h = ch * 0.22
             album_h = ch - margin_h - 4 * mm
             album_y = cy + margin_h + 4 * mm
@@ -750,10 +782,10 @@ def render_carnet_pdf(
             pdf.setStrokeColorRGB(*LINE_RGB)
             pdf.setDash(2, 2)
             pdf.setLineWidth(0.4)
-            if margin_pos_eff in ('outer', 'inner'):
+            if margin_pos_local in ('outer', 'inner'):
                 # ligne verticale entre album et marge
-                if (margin_pos_eff == 'outer' and side == 'recto') or \
-                   (margin_pos_eff == 'inner' and side == 'verso'):
+                if (margin_pos_local == 'outer' and side == 'recto') or \
+                   (margin_pos_local == 'inner' and side == 'verso'):
                     sep_x = mzone_x - 2 * mm
                 else:
                     sep_x = mzone_x + mzone_w + 2 * mm
