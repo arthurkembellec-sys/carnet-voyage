@@ -1127,35 +1127,234 @@ PDF_LAYOUTS = [
 ]
 
 PDF_MARGIN_POSITIONS = [
-    ('right',  'Notes a droite'),
-    ('left',   'Notes a gauche'),
+    ('outer',  'Notes côté extérieur'),
+    ('inner',  'Notes côté reliure'),
     ('bottom', 'Notes en bas'),
     ('end',    'Notes en fin de livre'),
+    # Alias rétro-compat (anciens carnets stockés avec right/left)
+    ('right',  'Notes à droite'),
+    ('left',   'Notes à gauche'),
 ]
+
+
+# ══════════════════════════════════════════════════════════════════════
+#       v3.0 — Adaptateur souhait : carnet_items → pages_data
+# ══════════════════════════════════════════════════════════════════════
+def _souhait_pages_for_book(cid_carnet):
+    """Adapte les carnet_items d'un souhait en pages_data pour pdf_book.
+
+    main : items kind='photo' (avec photo_path) → pseudo album_pages
+    margin : items kind='link'/'note'/'budget'/'location' → notes contextuelles
+    """
+    items = _carnet_items(cid_carnet)
+    main = []
+    margin = []
+    for it in items:
+        if it.get('kind') == 'photo' and it.get('photo_path'):
+            main.append({
+                'id': it['id'],
+                'photo_id': it.get('photo_id'),
+                'photo_path': it['photo_path'],
+                'photo_thumb': it.get('photo_thumb'),
+                'photo_gps_lat': it.get('photo_gps_lat'),
+                'photo_gps_lng': it.get('photo_gps_lng'),
+                'caption': (it.get('title') or '') + (
+                    f" — {it['body']}" if (it.get('title') and it.get('body')) else (it.get('body') or '')
+                ),
+                'full_bleed_override': None,
+                'type': 'photo',
+                'section_id': None,
+            })
+        else:
+            text_parts = []
+            if it.get('title'):   text_parts.append(it['title'])
+            if it.get('body'):    text_parts.append(it['body'])
+            if it.get('url'):     text_parts.append(it['url'])
+            if it.get('address'): text_parts.append(it['address'])
+            if it.get('amount') is not None:
+                text_parts.append(f"{it['amount']:.0f} {it.get('currency') or 'EUR'}")
+            margin.append({
+                'id': it['id'],
+                'caption': '\n'.join(p for p in text_parts if p),
+                'text_content': it.get('body') or '',
+                'photo_thumb': it.get('photo_thumb'),
+                'photo_path': it.get('photo_path'),
+                'type': 'text' if not it.get('photo_path') else 'photo',
+            })
+    return {'main': main, 'margin': margin}
+
+
+def _souhait_geo_summary(cid_carnet):
+    """Geo summary pour un souhait : items kind='location' + photos GPS."""
+    items = _carnet_items(cid_carnet)
+    coords = []
+    for it in items:
+        if (it.get('kind') == 'location'
+                and it.get('geo_lat') is not None
+                and it.get('geo_lng') is not None):
+            coords.append((it['geo_lat'], it['geo_lng']))
+        elif (it.get('photo_gps_lat') is not None
+              and it.get('photo_gps_lng') is not None):
+            coords.append((it['photo_gps_lat'], it['photo_gps_lng']))
+    if not coords:
+        return None
+    lats = [c[0] for c in coords]
+    lngs = [c[1] for c in coords]
+    return {
+        'markers': coords,
+        'center_lat': (min(lats) + max(lats)) / 2,
+        'center_lng': (min(lngs) + max(lngs)) / 2,
+        'min_lat': min(lats), 'max_lat': max(lats),
+        'min_lng': min(lngs), 'max_lng': max(lngs),
+        'count': len(coords),
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════
+#                v3.0 — MOTEUR PDF PRO (pdf_book.py)
+# ══════════════════════════════════════════════════════════════════════
+try:
+    import pdf_book as _pdf_book
+    _PDF_BOOK_OK = True
+except Exception as _e:
+    _pdf_book = None
+    _PDF_BOOK_OK = False
+    log.warning("pdf_book non disponible : %s", _e)
+
+
+def _section_coords_for_chunk_v3(items_chunk):
+    """Mini-carte en marge : retrouve coords + label de la section d'un chunk.
+
+    Retourne {lat, lng, label, zoom} ou None.
+    """
+    if not items_chunk:
+        return None
+    section_ids = set(it.get('section_id') for it in items_chunk if it.get('section_id'))
+    if not section_ids:
+        for it in items_chunk:
+            if it.get('photo_gps_lat') is not None and it.get('photo_gps_lng') is not None:
+                return {
+                    'lat': it['photo_gps_lat'],
+                    'lng': it['photo_gps_lng'],
+                    'label': '',
+                    'zoom': 13,
+                }
+        return None
+    if len(section_ids) == 1:
+        sid = next(iter(section_ids))
+        sec = query(
+            "SELECT location_lat, location_lng, location_name, primary_label "
+            "FROM album_sections WHERE id=?",
+            (sid,), one=True
+        )
+        if sec and sec['location_lat'] is not None:
+            return {
+                'lat': sec['location_lat'],
+                'lng': sec['location_lng'],
+                'label': sec['location_name'] or sec['primary_label'] or '',
+                'zoom': 12,
+            }
+    return None
+
+
+@app.route('/carnet/<int:cid_carnet>/cover_set', methods=['POST'])
+@couple_required
+def carnet_cover_set(cid_carnet):
+    """Définit la photo de couverture du carnet à partir d'une page album."""
+    _get_carnet_or_404(cid_carnet)
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    page_id = request.form.get('page_id', type=int)
+    if not page_id:
+        return jsonify({'ok': False, 'error': 'page_id requis'}), 400
+    page = query(
+        "SELECT photo_id FROM album_pages WHERE id=? AND carnet_id=?",
+        (page_id, cid_carnet), one=True
+    )
+    if not page or not page['photo_id']:
+        return jsonify({'ok': False, 'error': 'Page sans photo'}), 404
+    execute(
+        "UPDATE carnets SET cover_photo_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (page['photo_id'], cid_carnet)
+    )
+    return jsonify({'ok': True, 'cover_photo_id': page['photo_id']})
+
+
+@app.route('/album_page/<int:page_id>/full_mode', methods=['POST'])
+@couple_required
+def album_page_full_mode(page_id):
+    """Bascule le mode plein-page d'une photo : normal / full / spread."""
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    mode = request.form.get('mode', 'normal')
+    mapping = {'normal': 0, 'full': 1, 'spread': 2}
+    if mode not in mapping:
+        return jsonify({'ok': False, 'error': 'mode invalide'}), 400
+    page = query(
+        "SELECT ap.id FROM album_pages ap "
+        "JOIN carnets c ON c.id = ap.carnet_id "
+        "WHERE ap.id=? AND c.couple_id=?",
+        (page_id, current_espace_id()), one=True
+    )
+    if not page:
+        return jsonify({'ok': False, 'error': 'Non autorisé'}), 404
+    val = mapping[mode] if mapping[mode] != 0 else None
+    execute(
+        "UPDATE album_pages SET full_bleed_override=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (val, page_id)
+    )
+    return jsonify({'ok': True, 'mode': mode, 'value': val})
 
 
 @app.route('/carnet/<int:cid_carnet>/apercu')
 @couple_required
 def carnet_apercu(cid_carnet):
-    """Page apercu HTML paginée du livre photo."""
+    """Page apercu HTML paginée du livre photo (v3 : double page + cover picker)."""
     c = _get_carnet_or_404(cid_carnet)
     sort_mode = c.get('sort_mode') or 'chrono'
-    pages_data = _carnet_pages(cid_carnet, sort_mode=sort_mode)
+    # v3 : extension souhait — convertir carnet_items en pseudo album_pages
+    if c['type'] == 'souhait':
+        pages_data = _souhait_pages_for_book(cid_carnet)
+    else:
+        pages_data = _carnet_pages(cid_carnet, sort_mode=sort_mode)
     fmt = request.args.get('format', 'square_20')
     if fmt not in PDF_FORMATS:
         fmt = 'square_20'
     layout = request.args.get('layout', c.get('pdf_layout') or '1')
     if layout not in dict(PDF_LAYOUTS):
         layout = '1'
-    margin_pos = request.args.get('margin', c.get('pdf_margin_position') or 'right')
+    margin_pos = request.args.get('margin', c.get('pdf_margin_position') or 'outer')
     if margin_pos not in dict(PDF_MARGIN_POSITIONS):
-        margin_pos = 'right'
+        margin_pos = 'outer'
+    # v3 : couverture résolue (cover_photo_id ou fallback 1ère photo)
+    cover_item = None
+    if c.get('cover_photo_id'):
+        for p in pages_data['main']:
+            if p.get('photo_id') == c['cover_photo_id']:
+                cover_item = p
+                break
+    if cover_item is None:
+        cover_item = next((p for p in pages_data['main'] if p.get('photo_path')), None)
+    # Géo : présence de coordonnées sur le carnet
+    geo_count = 0
+    try:
+        if c['type'] == 'souhait':
+            geo_count = sum(1 for p in pages_data['main']
+                            if p.get('photo_gps_lat') is not None)
+        else:
+            gs = _carnet_geo_summary(cid_carnet)
+            if gs:
+                geo_count = gs['count']
+    except Exception:
+        pass
     return render_template('apercu.html',
         carnet=c,
         main_pages=pages_data['main'],
         margin_pages=pages_data['margin'],
         format=fmt, layout=layout, margin_pos=margin_pos,
         formats=PDF_FORMATS, layouts=PDF_LAYOUTS, margin_positions=PDF_MARGIN_POSITIONS,
+        cover_item=cover_item,
+        geo_count=geo_count,
     )
 
 
@@ -1181,7 +1380,11 @@ def carnet_pdf_settings(cid_carnet):
 @app.route('/carnet/<int:cid_carnet>/pdf')
 @couple_required
 def carnet_pdf(cid_carnet):
-    """Genere le PDF du livre photo a la volee, avec layout et position marge."""
+    """Genere le PDF du livre photo a la volee.
+
+    Délègue au moteur pro pdf_book.render_carnet_pdf si disponible (v3),
+    sinon retombe sur le rendu legacy embarqué (v2).
+    """
     c = _get_carnet_or_404(cid_carnet)
     fmt = request.args.get('format', 'square_20')
     if fmt not in PDF_FORMATS:
@@ -1190,11 +1393,56 @@ def carnet_pdf(cid_carnet):
     if layout not in dict(PDF_LAYOUTS):
         layout = '1'
     n_per_page = int(layout)
-    margin_pos = request.args.get('margin', c.get('pdf_margin_position') or 'right')
+    margin_pos = request.args.get('margin', c.get('pdf_margin_position') or 'outer')
     if margin_pos not in dict(PDF_MARGIN_POSITIONS):
-        margin_pos = 'right'
+        margin_pos = 'outer'
     sort_mode = c.get('sort_mode') or 'chrono'
-    pages_data = _carnet_pages(cid_carnet, sort_mode=sort_mode)
+    if c['type'] == 'souhait':
+        pages_data = _souhait_pages_for_book(cid_carnet)
+    else:
+        pages_data = _carnet_pages(cid_carnet, sort_mode=sort_mode)
+
+    # ── v3 : déléguer à pdf_book si disponible ─────────────────────────
+    if _PDF_BOOK_OK and _pdf_book is not None:
+        try:
+            geo_summary = (_souhait_geo_summary(cid_carnet)
+                           if c['type'] == 'souhait'
+                           else _carnet_geo_summary(cid_carnet))
+            buf = _pdf_book.render_carnet_pdf(
+                carnet=c,
+                pages_data=pages_data,
+                fmt_info=PDF_FORMATS[fmt],
+                layout=layout,
+                margin_pos=margin_pos,
+                upload_dir=UPLOAD_DIR,
+                show_overview_map=bool(c.get('pdf_show_overview_map', 1)),
+                show_section_maps=bool(c.get('pdf_show_section_maps', 1)),
+                show_letters=bool(c.get('pdf_show_letters', 1)),
+                cover_photo_id=c.get('cover_photo_id'),
+                geo_summary=geo_summary,
+                fetch_static_map=_fetch_staticmap_png,
+                compute_zoom=_compute_map_zoom,
+                section_zone_map_resolver=_section_coords_for_chunk_v3,
+                qr_make=qrcode.make,
+                video_url_for=lambda token: url_for('video_public', token=token, _external=True),
+            )
+            safe_title = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_'
+                                 for ch in c['title'])[:40] or 'carnet'
+            fname = f"{safe_title}_{fmt}.pdf"
+            from flask import Response
+            return Response(buf.getvalue(),
+                mimetype='application/pdf',
+                headers={'Content-Disposition': f'attachment; filename="{fname}"'})
+        except Exception as _e:
+            log.error("pdf_book render fail, fallback legacy : %s", _e, exc_info=True)
+            # tombe en legacy ci-dessous
+
+    # ── Fallback legacy (v2) ───────────────────────────────────────────
+    # Compat : ancien code attend right/left, pas outer/inner
+    if margin_pos == 'outer':
+        margin_pos = 'right'
+    elif margin_pos == 'inner':
+        margin_pos = 'left'
 
     from reportlab.pdfgen import canvas as pdf_canvas
     from reportlab.lib.units import mm

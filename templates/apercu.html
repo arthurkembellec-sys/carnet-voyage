@@ -1,17 +1,333 @@
 {% extends '_base.html' %}
 {% block title %}{{ carnet.title }} — Aperçu livre{% endblock %}
-{% block back_link %}
-  <a href="{{ url_for('carnet_album', cid_carnet=carnet.id) }}" class="brand">← Album</a>
+
+{% block extra_head %}
+<style>
+/* ─────────────────────────────────────────────────────────────────────
+   Aperçu livre — double-page, picker couverture, menu plein-page
+   ───────────────────────────────────────────────────────────────────── */
+.book-stage{
+  background:linear-gradient(180deg, #efe9df 0%, #e5dfd3 100%);
+  padding:40px 16px 80px;
+  min-height:100vh;
+  margin:0 -20px;
+}
+.book-stage-inner{
+  max-width:1100px; margin:0 auto;
+}
+.book-spread{
+  display:flex; justify-content:center; align-items:stretch;
+  gap:0; margin:0 auto 28px;
+  filter:drop-shadow(0 14px 30px rgba(0,0,0,0.18));
+}
+.book-page-l, .book-page-r{
+  background:#FAF8F4; position:relative; overflow:hidden;
+  box-sizing:border-box;
+}
+.book-page-l{
+  border-radius:6px 0 0 6px;
+  box-shadow:inset -8px 0 18px -8px rgba(0,0,0,0.2);
+}
+.book-page-r{
+  border-radius:0 6px 6px 0;
+  box-shadow:inset 8px 0 18px -8px rgba(0,0,0,0.2);
+}
+/* Formats : ratio largeur/hauteur basés sur PDF_FORMATS */
+.book-fmt-square_20 .book-page-l, .book-fmt-square_20 .book-page-r{
+  width:300px; height:300px;
+}
+.book-fmt-landscape_a4 .book-page-l, .book-fmt-landscape_a4 .book-page-r{
+  width:330px; height:233px;
+}
+.book-fmt-portrait_a5 .book-page-l, .book-fmt-portrait_a5 .book-page-r{
+  width:220px; height:312px;
+}
+@media (max-width:780px){
+  .book-fmt-square_20 .book-page-l, .book-fmt-square_20 .book-page-r{
+    width:42vw; height:42vw;
+  }
+  .book-fmt-landscape_a4 .book-page-l, .book-fmt-landscape_a4 .book-page-r{
+    width:46vw; height:32vw;
+  }
+  .book-fmt-portrait_a5 .book-page-l, .book-fmt-portrait_a5 .book-page-r{
+    width:35vw; height:50vw;
+  }
+}
+
+/* ─ Couverture ─ */
+.book-cover{
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  height:100%; padding:18px; cursor:pointer;
+  transition:background .15s;
+}
+.book-cover:hover{ background:rgba(196,101,74,0.04); }
+.book-cover-img{
+  max-width:80%; max-height:55%; object-fit:cover;
+  box-shadow:0 4px 12px rgba(0,0,0,0.12);
+  border-radius:2px;
+}
+.book-cover-title{
+  font-family:Fraunces, Georgia, serif; font-style:italic; font-weight:500;
+  font-size:22px; line-height:1.1; margin:14px 0 6px;
+  color:#1C1A17; text-align:center;
+}
+.book-cover-sub{
+  font-size:10px; letter-spacing:0.04em;
+  color:#6A6357; text-align:center; margin:0;
+}
+.book-cover-rule{
+  width:30px; height:1px; background:#C4654A; margin:8px auto;
+}
+.book-cover-edit-hint{
+  position:absolute; bottom:8px; right:10px;
+  font-size:9px; letter-spacing:0.04em; text-transform:uppercase;
+  color:#6A6357; opacity:0; transition:opacity .15s;
+  background:#FAF8F4; padding:3px 7px; border-radius:3px;
+  border:1px solid #d8d2c5;
+}
+.book-cover:hover .book-cover-edit-hint{ opacity:1; }
+
+/* ─ Inner page : album zone + margin zone ─ */
+.book-inner{
+  position:relative; height:100%; padding:14px;
+  display:flex; gap:8px;
+  font-family:Geist, system-ui, sans-serif;
+}
+/* Recto/verso intelligent : la zone marge se positionne selon side + margin_pos */
+.book-inner.is-recto{ /* page de droite : reliure à gauche */
+  padding-left:22px; padding-right:14px;
+}
+.book-inner.is-verso{ /* page de gauche : reliure à droite */
+  padding-left:14px; padding-right:22px;
+}
+.book-inner.mp-outer.is-recto{ flex-direction:row; }      /* marge à droite */
+.book-inner.mp-outer.is-verso{ flex-direction:row-reverse; } /* marge à gauche */
+.book-inner.mp-inner.is-recto{ flex-direction:row-reverse; } /* marge à gauche (reliure) */
+.book-inner.mp-inner.is-verso{ flex-direction:row; }         /* marge à droite (reliure) */
+.book-inner.mp-bottom{ flex-direction:column; }
+.book-inner.mp-end .book-margin{ display:none; }
+
+.book-album{
+  flex:1 1 auto; display:grid; gap:4px; min-width:0;
+}
+.book-album.g1{ grid-template:1fr / 1fr; }
+.book-album.g2-h{ grid-template:1fr / 1fr 1fr; }
+.book-album.g2-v{ grid-template:1fr 1fr / 1fr; }
+.book-album.g3{ grid-template:55% 1fr / 1fr 1fr; }
+.book-album.g3 > .book-cell:first-child{ grid-column:1 / 3; }
+.book-album.g4{ grid-template:1fr 1fr / 1fr 1fr; }
+
+.book-cell{
+  position:relative; min-width:0; min-height:0;
+  display:flex; align-items:center; justify-content:center;
+  background:transparent;
+}
+.book-cell img{
+  max-width:100%; max-height:100%; object-fit:contain;
+}
+.book-cell-letter{
+  position:absolute; top:3px; left:3px;
+  background:rgba(250,248,244,0.92);
+  color:#C4654A; font-weight:700; font-size:9px;
+  width:14px; height:14px; line-height:14px;
+  text-align:center; border-radius:2px;
+}
+.book-cell-fullbtn{
+  position:absolute; top:3px; right:3px;
+  background:rgba(28,26,23,0.62); color:#fff;
+  border:none; cursor:pointer;
+  width:18px; height:18px; line-height:18px;
+  font-size:11px; border-radius:50%;
+  opacity:0; transition:opacity .12s;
+  padding:0;
+}
+.book-cell:hover .book-cell-fullbtn{ opacity:1; }
+.book-cell-mode-full::after,
+.book-cell-mode-spread::after{
+  content:'PLEINE PAGE'; position:absolute; bottom:3px; left:3px;
+  background:rgba(196,101,74,0.85); color:#fff;
+  font-size:7px; padding:1px 4px; border-radius:2px; letter-spacing:0.05em;
+}
+.book-cell-mode-spread::after{ content:'DOUBLE PAGE'; }
+
+.book-text{
+  font-family:Fraunces, Georgia, serif; font-style:italic;
+  font-size:13px; line-height:1.5; color:#1C1A17;
+  text-align:center; padding:6px;
+  display:flex; align-items:center; justify-content:center;
+  height:100%;
+}
+
+/* ─ Margin zone ─ */
+.book-margin{
+  flex:0 0 28%; min-width:0;
+  border-left:1px dashed #d8d2c5;
+  padding:0 4px 0 8px;
+  font-size:9px; line-height:1.35; color:#3D3830;
+  overflow:hidden;
+}
+.book-inner.mp-outer.is-verso .book-margin,
+.book-inner.mp-inner.is-recto .book-margin{
+  border-left:none; border-right:1px dashed #d8d2c5;
+  padding:0 8px 0 4px;
+}
+.book-inner.mp-bottom .book-margin{
+  flex:0 0 22%; border-left:none; border-top:1px dashed #d8d2c5;
+  padding:6px 4px 0; max-width:100%;
+  display:flex; gap:6px; flex-wrap:wrap;
+}
+
+.book-margin-minimap{
+  margin:0 auto 6px; width:90%; aspect-ratio:1.3 / 1;
+  background:#e9e2d3 url('') center / cover;
+  border:1px solid #d8d2c5;
+  position:relative; overflow:hidden;
+}
+.book-margin-minimap-label{
+  font-size:7px; letter-spacing:0.06em; color:#6A6357;
+  text-align:center; margin:2px 0 5px; text-transform:uppercase;
+}
+
+.book-margin-section-label{
+  font-size:7px; letter-spacing:0.06em; color:#6A6357;
+  font-weight:700; margin:0 0 3px;
+}
+.book-margin-rule{
+  width:30px; height:1px; background:#C4654A; margin:0 0 6px;
+}
+.book-margin-item{
+  margin:0 0 6px; padding-bottom:4px;
+  border-bottom:0.5px solid #e8e3d6;
+}
+.book-margin-item:last-child{ border-bottom:none; }
+.book-margin-item-letter{
+  display:inline-block; color:#C4654A; font-weight:700;
+  margin-right:3px; font-size:9px;
+}
+.book-margin-item-text{
+  font-style:italic; color:#3D3830;
+}
+.book-margin-thumb{
+  width:100%; max-width:60px; height:auto;
+  margin:0 0 3px; display:block;
+}
+
+.book-page-num{
+  position:absolute; bottom:6px; font-size:8px; color:#9B9286;
+  font-family:Geist, sans-serif;
+}
+.book-page-l .book-page-num{ left:14px; }
+.book-page-r .book-page-num{ right:14px; }
+
+/* ─ Spread (image qui couvre les 2 pages) ─ */
+.book-spread.is-spread .book-page-l, .book-spread.is-spread .book-page-r{
+  overflow:hidden; padding:0;
+}
+.book-spread-img{
+  position:absolute; top:0; height:100%; width:200%;
+  max-width:none; object-fit:cover;
+}
+.book-spread.is-spread .book-page-l .book-spread-img{ left:0; }
+.book-spread.is-spread .book-page-r .book-spread-img{ left:-100%; }
+
+/* ─ Plein-page (1 photo couvre toute une page) ─ */
+.book-page-fullbleed{
+  padding:0 !important;
+}
+.book-page-fullbleed img{
+  width:100%; height:100%; object-fit:cover;
+}
+
+/* ─ Modale picker de couverture ─ */
+.cover-modal{
+  position:fixed; inset:0; background:rgba(0,0,0,0.55);
+  display:none; align-items:center; justify-content:center;
+  z-index:9000; padding:20px;
+}
+.cover-modal.open{ display:flex; }
+.cover-modal-card{
+  background:#FAF8F4; max-width:760px; width:100%;
+  max-height:85vh; overflow-y:auto;
+  border-radius:8px; padding:22px;
+}
+.cover-modal-title{
+  font-family:Fraunces, serif; font-style:italic; margin:0 0 6px;
+  font-size:22px;
+}
+.cover-modal-sub{
+  font-size:12px; color:#6A6357; margin:0 0 16px;
+}
+.cover-modal-grid{
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr));
+  gap:8px;
+}
+.cover-modal-item{
+  position:relative; cursor:pointer;
+  border:2px solid transparent;
+  aspect-ratio:1 / 1; overflow:hidden;
+  background:#e9e2d3;
+}
+.cover-modal-item img{
+  width:100%; height:100%; object-fit:cover;
+}
+.cover-modal-item:hover{ border-color:#C4654A; }
+.cover-modal-item.is-current{ border-color:#1C1A17; }
+.cover-modal-item.is-current::after{
+  content:'✓'; position:absolute; top:4px; right:4px;
+  background:#1C1A17; color:#FAF8F4;
+  width:18px; height:18px; line-height:18px;
+  font-size:11px; text-align:center; border-radius:50%;
+}
+.cover-modal-close{
+  background:transparent; border:none; cursor:pointer;
+  font-size:22px; line-height:1; float:right; padding:0;
+  color:#6A6357;
+}
+
+/* ─ Menu contextuel plein-page ─ */
+.fullmode-menu{
+  position:fixed; background:#FAF8F4;
+  border:1px solid #d8d2c5; border-radius:6px;
+  box-shadow:0 6px 20px rgba(0,0,0,0.15);
+  padding:6px; display:none; z-index:9100;
+  font-size:12px; min-width:160px;
+}
+.fullmode-menu.open{ display:block; }
+.fullmode-menu button{
+  display:block; width:100%; text-align:left;
+  background:transparent; border:none; cursor:pointer;
+  padding:8px 10px; border-radius:4px;
+  font-family:Geist, sans-serif; font-size:12px;
+  color:#1C1A17;
+}
+.fullmode-menu button:hover{ background:#efe9df; }
+.fullmode-menu button.is-active{ color:#C4654A; font-weight:600; }
+
+/* ─ Toast ─ */
+.book-toast{
+  position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
+  background:#1C1A17; color:#FAF8F4;
+  padding:10px 16px; border-radius:6px;
+  font-size:13px; opacity:0; transition:opacity .2s;
+  pointer-events:none; z-index:9200;
+}
+.book-toast.show{ opacity:1; }
+</style>
 {% endblock %}
 
-
 {% block content %}
-
+<header class="topbar">
+  <div class="topbar-inner">
+    <a href="{{ url_for('carnet_album', cid_carnet=carnet.id) }}" class="brand">← Album</a>
+    <nav class="topbar-nav">
+      <a href="{{ url_for('carnet_pdf', cid_carnet=carnet.id, format=format, layout=layout, margin=margin_pos) }}" class="link">📄 Télécharger PDF</a>
+    </nav>
+  </div>
+</header>
 
 <main class="page apercu-page">
-
   <section class="hero">
-    <p class="kicker">Aperçu livre</p>
+    <p class="kicker">Aperçu livre · prêt à imprimer</p>
     <h1 class="display"><em>{{ carnet.title }}</em></h1>
   </section>
 
@@ -38,8 +354,10 @@
       <span class="apercu-label">Notes en marge</span>
       <div class="chips">
         {% for key, lab in margin_positions %}
+        {% if key in ('outer','inner','bottom','end') %}
         <a href="{{ url_for('carnet_apercu', cid_carnet=carnet.id, format=format, layout=layout, margin=key) }}"
            class="chip {% if margin_pos == key %}chip-active{% endif %}">{{ lab }}</a>
+        {% endif %}
         {% endfor %}
       </div>
     </div>
@@ -51,139 +369,475 @@
   </div>
 
   {% set fmt_info = formats[format] %}
-  <p class="lead" style="margin-bottom:24px">
+  <p class="lead" style="margin-bottom:8px">
     Format : <strong>{{ fmt_info[0] }}</strong> ({{ fmt_info[1] }} × {{ fmt_info[2] }} mm)
-    · {{ main_pages|length }} pages album
-    {% if margin_pages %} · {{ margin_pages|length }} notes en marge{% endif %}
+    · {{ main_pages|length }} page(s) album
+    {% if margin_pages %} · {{ margin_pages|length }} note(s) en marge{% endif %}
+    {% if geo_count %} · {{ geo_count }} lieu(x) GPS{% endif %}
+  </p>
+  <p class="lead" style="margin-bottom:24px;font-size:13px;color:#6A6357">
+    Astuce : <strong>clique une photo</strong> pour la mettre en pleine page ou en double page.
+    <strong>Clique la couverture</strong> pour choisir une autre photo.
   </p>
 
-  {# Apercu paginé : chaque page est un cadre proche du PDF final #}
-  {% set n = layout|int %}
-  {% set chunks_main = [] %}
+  {# ──────────────────────────────────────────────────────────────────
+     Construction des doubles pages
+     1) p1 = couverture (recto seul)
+     2) verso de couverture = blank
+     3) chunks de pages composites + pleines pages + spreads
+     ────────────────────────────────────────────────────────────────── #}
+  {% set n_per = layout|int %}
+
+  {# Sépare les items en groupes selon full_bleed_override #}
+  {% set ns = namespace(blocks=[]) %}
+  {% set ns.cur_chunk = [] %}
   {% for p in main_pages %}
-    {% if loop.index0 % n == 0 %}{% set _ = chunks_main.append([]) %}{% endif %}
-    {% set _ = chunks_main[-1].append(p) %}
-  {% endfor %}
-  {% set nb_main_pages = chunks_main|length or 1 %}
-  {% set margin_pages_active = margin_pages if margin_pos != 'end' else [] %}
-  {% set margin_per_page = ((margin_pages_active|length + nb_main_pages - 1) // nb_main_pages) if margin_pages_active else 0 %}
-
-  <div class="book-pages book-format-{{ format }}">
-
-    {# Couverture #}
-    <div class="book-page book-page-cover">
-      {% set cover = main_pages|selectattr('photo_path')|first %}
-      {% if cover %}
-      <img class="book-cover-img" src="{{ url_for('serve_upload', filename=cover.photo_path) }}" alt="">
+    {% set fb = p.full_bleed_override %}
+    {% if fb == 2 %}
+      {# spread : ferme le chunk en cours, ajoute le spread #}
+      {% if ns.cur_chunk %}{% set _ = ns.blocks.append({'kind':'composite','chunk':ns.cur_chunk}) %}{% set ns.cur_chunk = [] %}{% endif %}
+      {% set _ = ns.blocks.append({'kind':'spread','item':p}) %}
+    {% elif fb == 1 %}
+      {% if ns.cur_chunk %}{% set _ = ns.blocks.append({'kind':'composite','chunk':ns.cur_chunk}) %}{% set ns.cur_chunk = [] %}{% endif %}
+      {% set _ = ns.blocks.append({'kind':'full','item':p}) %}
+    {% else %}
+      {% set _ = ns.cur_chunk.append(p) %}
+      {% if ns.cur_chunk|length >= n_per %}
+        {% set _ = ns.blocks.append({'kind':'composite','chunk':ns.cur_chunk}) %}
+        {% set ns.cur_chunk = [] %}
       {% endif %}
-      <h2 class="book-cover-title">{{ carnet.title }}</h2>
-      {% if carnet.location or carnet.date_start %}
-      <p class="book-cover-sub">
-        {%- if carnet.location %}{{ carnet.location }}{% endif -%}
-        {%- if carnet.location and carnet.date_start %} · {% endif -%}
-        {%- if carnet.date_start and carnet.date_end and carnet.date_start != carnet.date_end -%}
-          {{ carnet.date_start }} → {{ carnet.date_end }}
-        {%- elif carnet.date_start -%}{{ carnet.date_start }}{%- endif -%}
-      </p>
-      {% endif %}
-      <span class="book-page-num">Couverture</span>
-    </div>
-
-    {# Album principal — pages composites #}
-    {% for chunk in chunks_main %}
-      {% set page_idx = loop.index0 %}
-      {% set margin_chunk = margin_pages_active[page_idx*margin_per_page:(page_idx+1)*margin_per_page] %}
-      <div class="book-page book-composite book-margin-{{ margin_pos }}">
-        <div class="book-album-zone book-grid-{{ chunk|length }}">
-          {% for p in chunk %}
-          <div class="book-photo-cell">
-            {% if p.video_path %}
-              <div class="book-video-mini">
-                <img src="{{ url_for('serve_upload', filename=p.video_poster) }}" alt="">
-                <div class="book-play-overlay">▶</div>
-              </div>
-            {% elif p.photo_path %}
-              <img class="book-photo-img" src="{{ url_for('serve_upload', filename=p.photo_path) }}" alt="">
-            {% elif p.type == 'text' %}
-              <div class="book-text">{{ p.text_content }}</div>
-            {% endif %}
-            {% if p.caption %}<div class="book-caption-mini">{{ p.caption }}</div>{% endif %}
-          </div>
-          {% endfor %}
-        </div>
-        {% if margin_chunk and margin_pos != 'end' %}
-        <div class="book-margin-zone">
-          <span class="book-margin-label">NOTES EN MARGE</span>
-          <div class="book-margin-list">
-            {% for m in margin_chunk %}
-            <div class="book-margin-item">
-              {% if m.photo_path %}
-                <img src="{{ url_for('serve_upload', filename=m.photo_thumb) }}" alt="">
-              {% elif m.text_content %}
-                <div class="book-margin-text">{{ m.text_content[:80] }}</div>
-              {% endif %}
-              {% if m.caption %}<div class="book-margin-caption">{{ m.caption }}</div>{% endif %}
-            </div>
-            {% endfor %}
-          </div>
-        </div>
-        {% endif %}
-        <span class="book-page-num">{{ loop.index + 1 }}</span>
-      </div>
-    {% endfor %}
-
-    {# Notes en marge en fin (si margin_pos='end') #}
-    {% if margin_pos == 'end' and margin_pages %}
-    <div class="book-page book-page-section">
-      <h2 class="book-section-title"><em>Notes en marge</em></h2>
-      <p class="book-section-sub">PHOTOS DE CONTEXTE · LIEUX · BILLETS</p>
-    </div>
-
-    {% set end_chunks = [] %}
-    {% for m in margin_pages %}
-      {% if loop.index0 % 4 == 0 %}{% set _ = end_chunks.append([]) %}{% endif %}
-      {% set _ = end_chunks[-1].append(m) %}
-    {% endfor %}
-    {% for chunk in end_chunks %}
-    <div class="book-page book-page-mosaic">
-      {% for m in chunk %}
-      <div class="book-mosaic-cell">
-        {% if m.photo_path %}
-          <img src="{{ url_for('serve_upload', filename=m.photo_thumb) }}" alt="">
-        {% elif m.text_content %}
-          <div class="book-mosaic-text">{{ m.text_content[:120] }}</div>
-        {% endif %}
-        {% if m.caption %}<div class="book-mosaic-caption">{{ m.caption }}</div>{% endif %}
-      </div>
-      {% endfor %}
-    </div>
-    {% endfor %}
     {% endif %}
+  {% endfor %}
+  {% if ns.cur_chunk %}{% set _ = ns.blocks.append({'kind':'composite','chunk':ns.cur_chunk}) %}{% endif %}
 
-    {# Page de fin #}
-    <div class="book-page book-page-end">
-      <p class="book-end-text"><em>Fin</em></p>
+  {# Lettres pour cross-réf photos↔légendes en marge #}
+  {% set letters = ['a','b','c','d','e','f','g','h'] %}
+
+  {# Distribution des notes en marge sur les pages composites #}
+  {% set composite_count = ns.blocks|selectattr('kind','equalto','composite')|list|length %}
+  {% set margin_active = margin_pages if margin_pos != 'end' else [] %}
+  {% set per_page_margin = ((margin_active|length + composite_count - 1) // composite_count) if (margin_active and composite_count) else 0 %}
+
+  <div class="book-stage">
+    <div class="book-stage-inner">
+
+      {# Spread 1 : Couverture (recto seule) #}
+      <div class="book-spread book-fmt-{{ format }}" data-spread-idx="0">
+        <div class="book-page-l" style="visibility:hidden"></div>
+        <div class="book-page-r">
+          <div class="book-cover" id="cover-trigger" onclick="openCoverPicker()">
+            {% if cover_item and cover_item.photo_path %}
+              <img class="book-cover-img" src="{{ url_for('serve_upload', filename=cover_item.photo_path) }}" alt="">
+            {% endif %}
+            <h2 class="book-cover-title">{{ carnet.title }}</h2>
+            {% if carnet.location or carnet.date_start %}
+            <div class="book-cover-rule"></div>
+            <p class="book-cover-sub">
+              {%- if carnet.location %}{{ carnet.location|upper }}{% endif -%}
+              {%- if carnet.location and carnet.date_start %} · {% endif -%}
+              {%- if carnet.date_start and carnet.date_end and carnet.date_start != carnet.date_end -%}
+                {{ carnet.date_start }} → {{ carnet.date_end }}
+              {%- elif carnet.date_start -%}{{ carnet.date_start }}{%- endif -%}
+            </p>
+            {% endif %}
+            <span class="book-cover-edit-hint">Changer</span>
+          </div>
+        </div>
+      </div>
+
+      {# Boucle sur les blocs : on les mappe sur des doubles pages #}
+      {% set state = namespace(side='verso', page_num=0, margin_idx=0, composite_seen=0, pending=None) %}
+      {# pending = bloc en attente (pour gérer alignements) ; commence à verso après cover #}
+
+      {% for block in ns.blocks %}
+        {% if block.kind == 'spread' %}
+          {# Spread doit démarrer sur verso #}
+          {% if state.side == 'recto' %}
+            {# insérer page blanche d'alignement à droite #}
+            {% set state.page_num = state.page_num + 1 %}
+            <div class="book-spread book-fmt-{{ format }}">
+              <div class="book-page-l">
+                {% set state.side = 'verso' %}
+              </div>
+              <div class="book-page-r">
+                <div class="book-inner is-recto"></div>
+                <span class="book-page-num">{{ state.page_num }}</span>
+              </div>
+            </div>
+          {% endif %}
+          {# Maintenant on sait qu'on est sur verso : on peut faire un spread sur cette double page complète #}
+          {% set state.page_num = state.page_num + 2 %}
+          <div class="book-spread book-fmt-{{ format }} is-spread"
+               data-page-id="{{ block.item.id }}">
+            <div class="book-page-l">
+              {% if block.item.photo_path %}
+              <img class="book-spread-img"
+                   src="{{ url_for('serve_upload', filename=block.item.photo_path) }}" alt="">
+              {% endif %}
+              <button class="book-cell-fullbtn" type="button"
+                      onclick="event.stopPropagation();openFullModeMenu(event,{{ block.item.id }},'spread')"
+                      style="opacity:1">⋯</button>
+              <span class="book-page-num">{{ state.page_num - 1 }}</span>
+            </div>
+            <div class="book-page-r">
+              {% if block.item.photo_path %}
+              <img class="book-spread-img"
+                   src="{{ url_for('serve_upload', filename=block.item.photo_path) }}" alt="">
+              {% endif %}
+              <span class="book-page-num">{{ state.page_num }}</span>
+            </div>
+          </div>
+          {% set state.side = 'verso' %}{# page suivante = verso #}
+
+        {% elif block.kind == 'full' %}
+          {# Pleine page : 1 face. On l'apparie avec le bloc suivant ou page blanche. #}
+          {# Pour simplifier l'aperçu, on dessine la page seule comme 1/2 de spread #}
+          {% set state.page_num = state.page_num + 1 %}
+          <div class="book-spread book-fmt-{{ format }}">
+            {% if state.side == 'verso' %}
+              <div class="book-page-l book-page-fullbleed" data-page-id="{{ block.item.id }}">
+                {% if block.item.photo_path %}
+                <img src="{{ url_for('serve_upload', filename=block.item.photo_path) }}" alt="">
+                {% endif %}
+                <button class="book-cell-fullbtn" type="button"
+                        onclick="event.stopPropagation();openFullModeMenu(event,{{ block.item.id }},'full')"
+                        style="opacity:1">⋯</button>
+                <span class="book-page-num">{{ state.page_num }}</span>
+              </div>
+              <div class="book-page-r">
+                <div class="book-inner is-recto"></div>
+              </div>
+              {% set state.side = 'verso' %}
+            {% else %}
+              <div class="book-page-l">
+                <div class="book-inner is-verso"></div>
+              </div>
+              <div class="book-page-r book-page-fullbleed" data-page-id="{{ block.item.id }}">
+                {% if block.item.photo_path %}
+                <img src="{{ url_for('serve_upload', filename=block.item.photo_path) }}" alt="">
+                {% endif %}
+                <button class="book-cell-fullbtn" type="button"
+                        onclick="event.stopPropagation();openFullModeMenu(event,{{ block.item.id }},'full')"
+                        style="opacity:1">⋯</button>
+                <span class="book-page-num">{{ state.page_num }}</span>
+              </div>
+              {% set state.side = 'verso' %}
+            {% endif %}
+          </div>
+
+        {% else %}
+          {# composite : on apparie 2 par 2 #}
+          {% if state.pending == None %}
+            {# Stocke en pending pour apparier avec le suivant #}
+            {% set state.pending = block %}
+          {% else %}
+            {# Couple : pending = verso, current = recto #}
+            {% set state.page_num = state.page_num + 2 %}
+            {% set verso_block = state.pending %}
+            {% set recto_block = block %}
+            {% set verso_idx = state.composite_seen %}
+            {% set recto_idx = state.composite_seen + 1 %}
+            {% set verso_margins = margin_active[verso_idx*per_page_margin:(verso_idx+1)*per_page_margin] if per_page_margin else [] %}
+            {% set recto_margins = margin_active[recto_idx*per_page_margin:(recto_idx+1)*per_page_margin] if per_page_margin else [] %}
+
+            <div class="book-spread book-fmt-{{ format }}">
+              {# Verso (gauche) #}
+              <div class="book-page-l">
+                <div class="book-inner is-verso mp-{{ margin_pos if margin_pos in ('outer','inner','bottom','end') else 'outer' }}">
+                  <div class="book-album g{% if verso_block.chunk|length == 2 and fmt_info[1] >= fmt_info[2] %}2-h{% elif verso_block.chunk|length == 2 %}2-v{% else %}{{ verso_block.chunk|length }}{% endif %}">
+                    {% for it in verso_block.chunk %}
+                    <div class="book-cell {% if it.full_bleed_override == 1 %}book-cell-mode-full{% elif it.full_bleed_override == 2 %}book-cell-mode-spread{% endif %}"
+                         data-page-id="{{ it.id }}">
+                      {% if show_letters_unused %}{# placeholder #}{% endif %}
+                      {% set letter = letters[loop.index0] %}
+                      {% if it.caption %}<span class="book-cell-letter">{{ letter }}</span>{% endif %}
+                      {% if it.video_path %}
+                        <img src="{{ url_for('serve_upload', filename=it.video_poster) }}" alt="">
+                      {% elif it.photo_path %}
+                        <img src="{{ url_for('serve_upload', filename=it.photo_path) }}" alt="">
+                      {% elif it.type == 'text' %}
+                        <div class="book-text">{{ it.text_content }}</div>
+                      {% endif %}
+                      <button class="book-cell-fullbtn" type="button"
+                              onclick="event.stopPropagation();openFullModeMenu(event,{{ it.id }},'normal')">⋯</button>
+                    </div>
+                    {% endfor %}
+                  </div>
+                  {% if margin_pos in ('outer','inner','bottom') %}
+                  <aside class="book-margin">
+                    {# Légendes des photos (avec lettres a/b/c) #}
+                    {% set has_caps = false %}
+                    {% for it in verso_block.chunk %}{% if it.caption %}{% set has_caps = true %}{% endif %}{% endfor %}
+                    {% if has_caps %}
+                    <div class="book-margin-section-label">LÉGENDES</div>
+                    <div class="book-margin-rule"></div>
+                    {% for it in verso_block.chunk %}
+                      {% if it.caption %}
+                      <div class="book-margin-item">
+                        <span class="book-margin-item-letter">{{ letters[loop.index0] }}</span>
+                        <span class="book-margin-item-text">{{ it.caption }}</span>
+                      </div>
+                      {% endif %}
+                    {% endfor %}
+                    {% endif %}
+                    {% if verso_margins %}
+                    <div class="book-margin-section-label" style="margin-top:8px">NOTES</div>
+                    <div class="book-margin-rule"></div>
+                    {% for m in verso_margins %}
+                    <div class="book-margin-item">
+                      {% if m.photo_thumb %}<img class="book-margin-thumb" src="{{ url_for('serve_upload', filename=m.photo_thumb) }}" alt="">{% endif %}
+                      <span class="book-margin-item-text">{{ m.caption or m.text_content or '' }}</span>
+                    </div>
+                    {% endfor %}
+                    {% endif %}
+                  </aside>
+                  {% endif %}
+                </div>
+                <span class="book-page-num">{{ state.page_num - 1 }}</span>
+              </div>
+              {# Recto (droite) #}
+              <div class="book-page-r">
+                <div class="book-inner is-recto mp-{{ margin_pos if margin_pos in ('outer','inner','bottom','end') else 'outer' }}">
+                  <div class="book-album g{% if recto_block.chunk|length == 2 and fmt_info[1] >= fmt_info[2] %}2-h{% elif recto_block.chunk|length == 2 %}2-v{% else %}{{ recto_block.chunk|length }}{% endif %}">
+                    {% for it in recto_block.chunk %}
+                    <div class="book-cell" data-page-id="{{ it.id }}">
+                      {% set letter = letters[loop.index0] %}
+                      {% if it.caption %}<span class="book-cell-letter">{{ letter }}</span>{% endif %}
+                      {% if it.video_path %}
+                        <img src="{{ url_for('serve_upload', filename=it.video_poster) }}" alt="">
+                      {% elif it.photo_path %}
+                        <img src="{{ url_for('serve_upload', filename=it.photo_path) }}" alt="">
+                      {% elif it.type == 'text' %}
+                        <div class="book-text">{{ it.text_content }}</div>
+                      {% endif %}
+                      <button class="book-cell-fullbtn" type="button"
+                              onclick="event.stopPropagation();openFullModeMenu(event,{{ it.id }},'normal')">⋯</button>
+                    </div>
+                    {% endfor %}
+                  </div>
+                  {% if margin_pos in ('outer','inner','bottom') %}
+                  <aside class="book-margin">
+                    {% set has_caps_r = false %}
+                    {% for it in recto_block.chunk %}{% if it.caption %}{% set has_caps_r = true %}{% endif %}{% endfor %}
+                    {% if has_caps_r %}
+                    <div class="book-margin-section-label">LÉGENDES</div>
+                    <div class="book-margin-rule"></div>
+                    {% for it in recto_block.chunk %}
+                      {% if it.caption %}
+                      <div class="book-margin-item">
+                        <span class="book-margin-item-letter">{{ letters[loop.index0] }}</span>
+                        <span class="book-margin-item-text">{{ it.caption }}</span>
+                      </div>
+                      {% endif %}
+                    {% endfor %}
+                    {% endif %}
+                    {% if recto_margins %}
+                    <div class="book-margin-section-label" style="margin-top:8px">NOTES</div>
+                    <div class="book-margin-rule"></div>
+                    {% for m in recto_margins %}
+                    <div class="book-margin-item">
+                      {% if m.photo_thumb %}<img class="book-margin-thumb" src="{{ url_for('serve_upload', filename=m.photo_thumb) }}" alt="">{% endif %}
+                      <span class="book-margin-item-text">{{ m.caption or m.text_content or '' }}</span>
+                    </div>
+                    {% endfor %}
+                    {% endif %}
+                  </aside>
+                  {% endif %}
+                </div>
+                <span class="book-page-num">{{ state.page_num }}</span>
+              </div>
+            </div>
+            {% set state.composite_seen = state.composite_seen + 2 %}
+            {% set state.pending = None %}
+            {% set state.side = 'verso' %}
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+
+      {# S'il reste un composite en pending, on l'affiche en page de gauche seule #}
+      {% if state.pending != None %}
+        {% set state.page_num = state.page_num + 1 %}
+        {% set verso_idx = state.composite_seen %}
+        {% set verso_margins = margin_active[verso_idx*per_page_margin:(verso_idx+1)*per_page_margin] if per_page_margin else [] %}
+        <div class="book-spread book-fmt-{{ format }}">
+          <div class="book-page-l">
+            <div class="book-inner is-verso mp-{{ margin_pos if margin_pos in ('outer','inner','bottom','end') else 'outer' }}">
+              <div class="book-album g{{ state.pending.chunk|length }}">
+                {% for it in state.pending.chunk %}
+                <div class="book-cell" data-page-id="{{ it.id }}">
+                  {% set letter = letters[loop.index0] %}
+                  {% if it.caption %}<span class="book-cell-letter">{{ letter }}</span>{% endif %}
+                  {% if it.photo_path %}<img src="{{ url_for('serve_upload', filename=it.photo_path) }}" alt="">{% endif %}
+                  <button class="book-cell-fullbtn" type="button"
+                          onclick="event.stopPropagation();openFullModeMenu(event,{{ it.id }},'normal')">⋯</button>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+            <span class="book-page-num">{{ state.page_num }}</span>
+          </div>
+          <div class="book-page-r">
+            <div class="book-inner is-recto"></div>
+          </div>
+        </div>
+      {% endif %}
+
+      {# Notes en fin si margin_pos == 'end' #}
+      {% if margin_pos == 'end' and margin_pages %}
+      <div class="book-spread book-fmt-{{ format }}">
+        <div class="book-page-l"><div class="book-inner is-verso"></div></div>
+        <div class="book-page-r">
+          <div class="book-inner is-recto" style="display:flex;align-items:center;justify-content:center;flex-direction:column">
+            <h2 style="font-family:Fraunces,serif;font-style:italic;font-size:24px;margin:0">Notes en marge</h2>
+            <div style="width:30px;height:1px;background:#C4654A;margin:8px 0"></div>
+            <p style="font-size:9px;letter-spacing:0.06em;color:#6A6357">PHOTOS DE CONTEXTE · LIEUX · BILLETS</p>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
     </div>
-
   </div>
 
-<script>
+  {# Modale picker de couverture #}
+  <div class="cover-modal" id="cover-modal">
+    <div class="cover-modal-card">
+      <button class="cover-modal-close" type="button" onclick="closeCoverPicker()">×</button>
+      <h3 class="cover-modal-title">Choisir la couverture</h3>
+      <p class="cover-modal-sub">Clique une photo pour la mettre en couverture du livre.</p>
+      <div class="cover-modal-grid">
+        {% for p in main_pages %}
+          {% if p.photo_path %}
+          <div class="cover-modal-item {% if cover_item and cover_item.photo_id == p.photo_id %}is-current{% endif %}"
+               data-page-id="{{ p.id }}" data-photo-id="{{ p.photo_id }}"
+               onclick="pickCover({{ p.id }}, '{{ url_for('serve_upload', filename=p.photo_path) }}')">
+            <img src="{{ url_for('serve_upload', filename=p.photo_thumb) }}" alt="">
+          </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  {# Menu contextuel plein-page #}
+  <div class="fullmode-menu" id="fullmode-menu">
+    <button type="button" data-mode="normal" onclick="setFullMode('normal')">Format normal</button>
+    <button type="button" data-mode="full" onclick="setFullMode('full')">Pleine page</button>
+    <button type="button" data-mode="spread" onclick="setFullMode('spread')">Double page (panorama)</button>
+  </div>
+
+  <div class="book-toast" id="book-toast"></div>
+
+  <script>
+  const URL_COVER_SET = "{{ url_for('carnet_cover_set', cid_carnet=carnet.id) }}";
+  const URL_FULL_MODE = "{{ url_for('album_page_full_mode', page_id=0)|replace('/0/', '/__PID__/') }}";
+  const URL_SAVE_SETTINGS = "{{ url_for('carnet_pdf_settings', cid_carnet=carnet.id) }}";
+  const CSRF = "{{ csrf_token() }}";
+  let currentFullModePageId = null;
+
+  function showToast(msg){
+    const t = document.getElementById('book-toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(()=>t.classList.remove('show'), 1800);
+  }
+
+  /* ─ Cover picker ─ */
+  function openCoverPicker(){
+    document.getElementById('cover-modal').classList.add('open');
+  }
+  function closeCoverPicker(){
+    document.getElementById('cover-modal').classList.remove('open');
+  }
+  async function pickCover(pageId, photoUrl){
+    const fd = new FormData();
+    fd.append('_csrf', CSRF);
+    fd.append('page_id', pageId);
+    try {
+      const r = await fetch(URL_COVER_SET, { method:'POST', body: fd });
+      const d = await r.json();
+      if (d.ok) {
+        // Update cover image inline
+        const trigger = document.getElementById('cover-trigger');
+        let img = trigger.querySelector('.book-cover-img');
+        if (!img) {
+          img = document.createElement('img');
+          img.className = 'book-cover-img';
+          trigger.insertBefore(img, trigger.firstChild);
+        }
+        img.src = photoUrl;
+        // Update modal selection
+        document.querySelectorAll('.cover-modal-item').forEach(el=>{
+          el.classList.toggle('is-current', el.dataset.pageId == pageId);
+        });
+        showToast('Couverture mise à jour');
+        closeCoverPicker();
+      } else {
+        alert('Erreur : ' + (d.error || 'inconnue'));
+      }
+    } catch(e) { alert('Erreur réseau : ' + e); }
+  }
+
+  /* ─ Plein-page menu ─ */
+  function openFullModeMenu(ev, pageId, currentMode){
+    currentFullModePageId = pageId;
+    const menu = document.getElementById('fullmode-menu');
+    menu.style.left = ev.clientX + 'px';
+    menu.style.top = ev.clientY + 'px';
+    menu.classList.add('open');
+    // Marquer le mode actuel
+    menu.querySelectorAll('button').forEach(b=>{
+      b.classList.toggle('is-active', b.dataset.mode === currentMode);
+    });
+    // Fermeture au prochain click ailleurs
+    setTimeout(()=>{
+      document.addEventListener('click', closeFullModeMenuOnce, { once:true });
+    }, 50);
+  }
+  function closeFullModeMenuOnce(){
+    document.getElementById('fullmode-menu').classList.remove('open');
+  }
+  async function setFullMode(mode){
+    if (!currentFullModePageId) return;
+    const fd = new FormData();
+    fd.append('_csrf', CSRF);
+    fd.append('mode', mode);
+    const url = URL_FULL_MODE.replace('__PID__', currentFullModePageId);
+    try {
+      const r = await fetch(url, { method:'POST', body: fd });
+      const d = await r.json();
+      if (d.ok) {
+        showToast('Mise en page mise à jour — recharge pour voir');
+        document.getElementById('fullmode-menu').classList.remove('open');
+        // Auto reload après 1.2s
+        setTimeout(()=>location.reload(), 1200);
+      } else {
+        alert('Erreur : ' + (d.error || 'inconnue'));
+      }
+    } catch(e) { alert('Erreur réseau : ' + e); }
+  }
+
+  /* ─ Save settings ─ */
   document.getElementById('btn-save-settings').addEventListener('click', async function(){
-    var fd = new FormData();
-    fd.append('_csrf', "{{ csrf_token() }}");
+    const fd = new FormData();
+    fd.append('_csrf', CSRF);
     fd.append('layout', "{{ layout }}");
     fd.append('margin', "{{ margin_pos }}");
     try {
-      var r = await fetch("{{ url_for('carnet_pdf_settings', cid_carnet=carnet.id) }}", { method:'POST', body: fd });
-      var d = await r.json();
+      const r = await fetch(URL_SAVE_SETTINGS, { method:'POST', body: fd });
+      const d = await r.json();
       if (d.ok) {
         this.textContent = '✓ Enregistré';
         this.disabled = true;
       }
     } catch(e) { alert('Erreur réseau'); }
   });
-</script>
+
+  /* Fermer modale en cliquant le fond */
+  document.getElementById('cover-modal').addEventListener('click', function(e){
+    if (e.target === this) closeCoverPicker();
+  });
+  </script>
 
 </main>
-
 {% endblock %}
