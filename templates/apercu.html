@@ -316,6 +316,39 @@
   pointer-events:none; z-index:9200;
 }
 .book-toast.show{ opacity:1; }
+
+/* ─ Bouton flottant Télécharger PDF (sticky bottom) ─ */
+.fab-download{
+  position:fixed; left:50%; transform:translateX(-50%);
+  bottom:18px; z-index:9000;
+  display:flex; align-items:center; gap:8px;
+  padding:12px 20px; border-radius:30px;
+  background:#1C1A17; color:#FAF8F4;
+  text-decoration:none;
+  font-family:Geist, system-ui, sans-serif; font-size:14px; font-weight:500;
+  letter-spacing:0.02em;
+  box-shadow:0 8px 24px rgba(0,0,0,0.28), 0 2px 6px rgba(0,0,0,0.12);
+  transition:transform .15s, box-shadow .15s, background .15s;
+  border:1px solid rgba(196,101,74,0.35);
+}
+.fab-download:hover{
+  background:#C4654A;
+  transform:translateX(-50%) translateY(-2px);
+  box-shadow:0 12px 28px rgba(196,101,74,0.32), 0 2px 6px rgba(0,0,0,0.12);
+}
+.fab-download .fab-icon{ font-size:18px; line-height:1 }
+.fab-download.is-loading{ pointer-events:none; opacity:0.85 }
+.fab-download.is-loading .fab-label::after{
+  content:''; display:inline-block; width:12px; height:12px;
+  margin-left:8px; vertical-align:middle;
+  border:2px solid #FAF8F4; border-top-color:transparent;
+  border-radius:50%; animation:fab-spin .7s linear infinite;
+}
+@keyframes fab-spin{ to{ transform:rotate(360deg) } }
+@media (max-width:780px){
+  .fab-download{ bottom:14px; padding:11px 18px; font-size:13px }
+}
+@media print{ .fab-download{ display:none } }
 </style>
 {% endblock %}
 
@@ -709,6 +742,15 @@
     </div>
   </div>
 
+  {# Bouton flottant Télécharger PDF (toujours visible) #}
+  <a href="{{ url_for('carnet_pdf', cid_carnet=carnet.id, format=format, layout=layout, margin=margin_pos) }}"
+     class="fab-download" id="fab-download"
+     download="{{ carnet.title }}.pdf"
+     onclick="onPdfClick()">
+    <span class="fab-icon" aria-hidden="true">📄</span>
+    <span class="fab-label">Télécharger le PDF</span>
+  </a>
+
   {# Modale picker de couverture #}
   <div class="cover-modal" id="cover-modal">
     <div class="cover-modal-card">
@@ -776,6 +818,22 @@
     t.textContent = msg;
     t.classList.add('show');
     setTimeout(()=>t.classList.remove('show'), 1800);
+  }
+
+  /* ─ FAB Télécharger : feedback pendant la génération ─ */
+  function onPdfClick(){
+    const fab = document.getElementById('fab-download');
+    if (!fab) return;
+    fab.classList.add('is-loading');
+    const label = fab.querySelector('.fab-label');
+    if (label) label.textContent = 'Génération en cours';
+    showToast('Génération du PDF…');
+    // Le navigateur télécharge le fichier — on remet le bouton dispo après 12s
+    // au cas où l'utilisateur reste sur la page.
+    setTimeout(()=>{
+      fab.classList.remove('is-loading');
+      if (label) label.textContent = 'Télécharger le PDF';
+    }, 12000);
   }
 
   /* ─ Cover picker ─ */
