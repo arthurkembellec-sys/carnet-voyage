@@ -317,38 +317,42 @@
 }
 .book-toast.show{ opacity:1; }
 
-/* ─ Bouton flottant Télécharger PDF (sticky bottom) ─ */
-.fab-download{
+/* ─ Barre flottante Télécharger PDF (sticky bottom) ─ */
+.fab-bar{
   position:fixed; left:50%; transform:translateX(-50%);
   bottom:18px; z-index:9000;
-  display:flex; align-items:center; gap:8px;
-  padding:12px 20px; border-radius:30px;
-  background:#1C1A17; color:#FAF8F4;
-  text-decoration:none;
-  font-family:Geist, system-ui, sans-serif; font-size:14px; font-weight:500;
-  letter-spacing:0.02em;
+  display:flex; gap:8px;
+  background:#1C1A17;
+  border-radius:30px;
+  padding:4px;
   box-shadow:0 8px 24px rgba(0,0,0,0.28), 0 2px 6px rgba(0,0,0,0.12);
-  transition:transform .15s, box-shadow .15s, background .15s;
   border:1px solid rgba(196,101,74,0.35);
 }
-.fab-download:hover{
-  background:#C4654A;
-  transform:translateX(-50%) translateY(-2px);
-  box-shadow:0 12px 28px rgba(196,101,74,0.32), 0 2px 6px rgba(0,0,0,0.12);
+.fab-bar button, .fab-bar a{
+  display:flex; align-items:center; gap:6px;
+  padding:10px 18px; border-radius:24px;
+  background:transparent; color:#FAF8F4;
+  border:none; cursor:pointer;
+  font-family:Geist, system-ui, sans-serif; font-size:13px; font-weight:500;
+  letter-spacing:0.02em; text-decoration:none;
+  transition:background .15s;
 }
-.fab-download .fab-icon{ font-size:18px; line-height:1 }
-.fab-download.is-loading{ pointer-events:none; opacity:0.85 }
-.fab-download.is-loading .fab-label::after{
-  content:''; display:inline-block; width:12px; height:12px;
-  margin-left:8px; vertical-align:middle;
+.fab-bar button:hover, .fab-bar a:hover{ background:#C4654A }
+.fab-bar .fab-icon{ font-size:16px; line-height:1 }
+.fab-bar.is-loading{ pointer-events:none; opacity:0.85 }
+.fab-bar.is-loading .fab-status{
+  display:inline-block; width:12px; height:12px;
+  margin-left:6px; vertical-align:middle;
   border:2px solid #FAF8F4; border-top-color:transparent;
   border-radius:50%; animation:fab-spin .7s linear infinite;
 }
+.fab-status{ display:none }
 @keyframes fab-spin{ to{ transform:rotate(360deg) } }
-@media (max-width:780px){
-  .fab-download{ bottom:14px; padding:11px 18px; font-size:13px }
+@media (max-width:480px){
+  .fab-bar{ bottom:12px; padding:3px }
+  .fab-bar button, .fab-bar a{ padding:9px 14px; font-size:12px }
 }
-@media print{ .fab-download{ display:none } }
+@media print{ .fab-bar{ display:none } }
 </style>
 {% endblock %}
 
@@ -356,9 +360,6 @@
 <header class="topbar">
   <div class="topbar-inner">
     <a href="{{ url_for('carnet_album', cid_carnet=carnet.id) }}" class="brand">← Album</a>
-    <nav class="topbar-nav">
-      <a href="{{ url_for('carnet_pdf', cid_carnet=carnet.id, format=format, layout=layout, margin=margin_pos) }}" class="link">📄 Télécharger PDF</a>
-    </nav>
   </div>
 </header>
 
@@ -400,8 +401,6 @@
     </div>
     <div class="apercu-row apercu-row-actions">
       <button type="button" class="btn btn-secondary" id="btn-save-settings">Enregistrer ces réglages</button>
-      <a href="{{ url_for('carnet_pdf', cid_carnet=carnet.id, format=format, layout=layout, margin=margin_pos) }}"
-         class="btn btn-primary">📄 Télécharger le PDF</a>
     </div>
   </div>
 
@@ -742,14 +741,23 @@
     </div>
   </div>
 
-  {# Bouton flottant Télécharger PDF (toujours visible) #}
-  <a href="{{ url_for('carnet_pdf', cid_carnet=carnet.id, format=format, layout=layout, margin=margin_pos) }}"
-     class="fab-download" id="fab-download"
-     download="{{ carnet.title }}.pdf"
-     onclick="onPdfClick()">
-    <span class="fab-icon" aria-hidden="true">📄</span>
-    <span class="fab-label">Télécharger le PDF</span>
-  </a>
+  {# Barre flottante : ouvrir le PDF + l'enregistrer #}
+  <div class="fab-bar" id="fab-bar"
+       data-pdf-url="{{ url_for('carnet_pdf', cid_carnet=carnet.id, format=format, layout=layout, margin=margin_pos) }}"
+       data-filename="{{ carnet.title }}.pdf">
+    <a href="{{ url_for('carnet_pdf', cid_carnet=carnet.id, format=format, layout=layout, margin=margin_pos) }}"
+       target="_blank" rel="noopener"
+       title="Ouvrir le PDF dans un nouvel onglet">
+      <span class="fab-icon" aria-hidden="true">📖</span>
+      <span>Ouvrir</span>
+    </a>
+    <button type="button" id="fab-save" onclick="downloadPdf()"
+            title="Enregistrer le PDF sur l'appareil">
+      <span class="fab-icon" aria-hidden="true">💾</span>
+      <span>Enregistrer</span>
+      <span class="fab-status"></span>
+    </button>
+  </div>
 
   {# Modale picker de couverture #}
   <div class="cover-modal" id="cover-modal">
@@ -820,20 +828,35 @@
     setTimeout(()=>t.classList.remove('show'), 1800);
   }
 
-  /* ─ FAB Télécharger : feedback pendant la génération ─ */
-  function onPdfClick(){
-    const fab = document.getElementById('fab-download');
-    if (!fab) return;
-    fab.classList.add('is-loading');
-    const label = fab.querySelector('.fab-label');
-    if (label) label.textContent = 'Génération en cours';
+  /* ─ FAB Enregistrer : fetch + blob + download attribute (force save) ─ */
+  async function downloadPdf(){
+    const bar = document.getElementById('fab-bar');
+    if (!bar) return;
+    const url = bar.dataset.pdfUrl;
+    const filename = bar.dataset.filename || 'carnet.pdf';
+    bar.classList.add('is-loading');
     showToast('Génération du PDF…');
-    // Le navigateur télécharge le fichier — on remet le bouton dispo après 12s
-    // au cas où l'utilisateur reste sur la page.
-    setTimeout(()=>{
-      fab.classList.remove('is-loading');
-      if (label) label.textContent = 'Télécharger le PDF';
-    }, 12000);
+    try {
+      const r = await fetch(url, { credentials: 'same-origin' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const blob = await r.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(()=>URL.revokeObjectURL(blobUrl), 5000);
+      showToast('PDF enregistré dans Téléchargements');
+    } catch(e) {
+      console.error('PDF download fail:', e);
+      window.open(url, '_blank');
+      showToast('Ouverture du PDF — utilise Partager pour l\'enregistrer');
+    } finally {
+      bar.classList.remove('is-loading');
+    }
   }
 
   /* ─ Cover picker ─ */
