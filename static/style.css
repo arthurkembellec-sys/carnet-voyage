@@ -691,6 +691,54 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
 
 .album-head { padding: 24px 0 8px; }
 
+/* Brief 07 : bouton "Imprimer" visible en haut de l'album */
+.album-head-top {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+}
+.album-head-text { flex: 1; min-width: 0; }
+.album-head-actions { flex-shrink: 0; }
+.btn-print-card {
+  display: inline-flex; align-items: center; gap: 12px;
+  padding: 12px 18px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-default);
+  color: var(--ink-primary);
+  text-decoration: none;
+  transition: all var(--motion-fast);
+  margin-top: 8px;
+}
+.btn-print-card:hover {
+  border-color: var(--ink-primary);
+  text-decoration: none;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(28, 26, 23, 0.06);
+}
+.btn-print-icon { font-size: 24px; line-height: 1; }
+.btn-print-label { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.btn-print-line1 {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--ink-primary);
+}
+.btn-print-line2 {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+@media (max-width: 480px) {
+  .album-head-top { flex-direction: column; }
+  .album-head-actions { width: 100%; }
+  .btn-print-card { width: 100%; justify-content: center; }
+}
+
 .save-indicator {
   margin-left: 12px;
   font-size: 12px;

@@ -15,8 +15,23 @@
 <main class="page album-page">
 
   <section class="album-head">
-    <p class="kicker">Album</p>
-    <h1 class="display"><em>{{ carnet.title }}</em></h1>
+    <div class="album-head-top">
+      <div class="album-head-text">
+        <p class="kicker">Album</p>
+        <h1 class="display"><em>{{ carnet.title }}</em></h1>
+      </div>
+      <div class="album-head-actions">
+        <a href="{{ url_for('carnet_apercu', cid_carnet=carnet.id) }}"
+           class="btn-print-card"
+           title="Aperçu du livre + impression PDF">
+          <span class="btn-print-icon" aria-hidden="true">📖</span>
+          <span class="btn-print-label">
+            <span class="btn-print-line1">Imprimer</span>
+            <span class="btn-print-line2">Aperçu &amp; PDF</span>
+          </span>
+        </a>
+      </div>
+    </div>
     <p class="lead" id="album-status">
       <span id="main-count">{{ main_pages|length }}</span> page(s) ·
       <span id="margin-count">{{ margin_pages|length }}</span> en marge ·
@@ -29,7 +44,7 @@
         ↻ Re-trier chronologiquement
       </button>
       {% endif %}
-      <span class="sort-hint">Glisse-depose les pages pour reorganiser</span>
+      <span class="sort-hint">Glisse-dépose les pages pour réorganiser</span>
     </div>
   </section>
 

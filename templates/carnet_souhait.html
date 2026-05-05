@@ -21,6 +21,17 @@
     </div>
   </section>
 
+  {# ────── Carte des lieux (Brief 07) ────── #}
+  {% if geo_items %}
+  <section class="album-map-wrap">
+    <div class="album-map-head">
+      <span class="kicker">Sur la carte</span>
+      <span class="map-count">{{ geo_items|length }} lieu(x) repéré(s)</span>
+    </div>
+    <div id="reverie-map" class="album-map"></div>
+  </section>
+  {% endif %}
+
   {% if voyages %}
   <section class="voyages-issus">
     <h2 class="section-title">Voyages issus de cette rêverie</h2>
@@ -124,6 +135,10 @@
 
 <script src="https://cdn.jsdelivr.net/npm/exifr@7/dist/lite.umd.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+{% if geo_items %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+{% endif %}
 <script>
   const CSRF = "{{ csrf_token() }}";
   const URL_ADD_ITEM = "{{ url_for('carnet_add_item', cid_carnet=carnet.id) }}";
@@ -187,6 +202,34 @@
     if (li) li.remove();
   }
   window.deleteItem = deleteItem;
+
+  // ── Mini-carte des lieux (Brief 07) ─────────────────────────────
+  {% if geo_items %}
+  (function(){
+    var el = document.getElementById('reverie-map');
+    if (!el || !window.L) return;
+    var pts = [
+      {% for g in geo_items %}
+      { lat: {{ g.lat }}, lng: {{ g.lng }}, kind: "{{ g.kind }}",
+        title: {{ (g.title or '')|tojson }}{% if g.thumb %}, thumb: "{{ g.thumb }}"{% endif %} },
+      {% endfor %}
+    ];
+    var map = L.map(el, { scrollWheelZoom: false });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+    var bounds = [];
+    pts.forEach(function(p){
+      var marker = L.marker([p.lat, p.lng]).addTo(map);
+      var html = '<strong>' + (p.title || (p.kind === 'photo' ? 'Photo' : 'Lieu')) + '</strong>';
+      if (p.thumb) html = '<img src="' + p.thumb + '" style="max-width:160px;display:block;margin-bottom:6px">' + html;
+      marker.bindPopup(html);
+      bounds.push([p.lat, p.lng]);
+    });
+    if (bounds.length) map.fitBounds(bounds, { padding: [24, 24], maxZoom: 13 });
+  })();
+  {% endif %}
   window.showAddModal = showAddModal;
   window.closeAddModal = closeAddModal;
 

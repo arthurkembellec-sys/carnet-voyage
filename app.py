@@ -41,7 +41,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger('histoire')
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "2.4.0-brief06"
+APP_VERSION = "2.4.1-pdf-btn-reverie-map"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
@@ -777,6 +777,7 @@ def carnet_view(cid_carnet):
 def _carnet_items(carnet_id):
     rows = query("""
         SELECT ci.*, p.thumb_path AS photo_thumb, p.file_path AS photo_path,
+               p.gps_lat AS photo_gps_lat, p.gps_lng AS photo_gps_lng,
                u.display_name AS added_by_name
         FROM carnet_items ci
         LEFT JOIN photos p ON p.id = ci.photo_id
@@ -806,8 +807,25 @@ def carnet_souhait_view(cid_carnet):
         "WHERE parent_souhait_id=? AND deleted_at IS NULL ORDER BY created_at DESC",
         (cid_carnet,)
     )
+    # Brief 07 : carte des lieux de la reverie (items location + photos avec GPS)
+    geo_items = []
+    for it in items:
+        if it.get('kind') == 'location' and it.get('geo_lat') is not None and it.get('geo_lng') is not None:
+            geo_items.append({
+                'lat': it['geo_lat'], 'lng': it['geo_lng'],
+                'kind': 'location',
+                'title': it.get('title') or it.get('address') or 'Lieu',
+            })
+        elif it.get('kind') == 'photo' and it.get('photo_gps_lat') is not None and it.get('photo_gps_lng') is not None:
+            geo_items.append({
+                'lat': it['photo_gps_lat'], 'lng': it['photo_gps_lng'],
+                'kind': 'photo',
+                'title': it.get('title') or 'Photo',
+                'thumb': url_for('serve_upload', filename=it['photo_thumb']) if it.get('photo_thumb') else None,
+            })
     return render_template('carnet_souhait.html', carnet=c, items=items,
-        voyages=[dict(v) for v in voyages], item_kinds=ITEM_KINDS)
+        voyages=[dict(v) for v in voyages], item_kinds=ITEM_KINDS,
+        geo_items=geo_items)
 
 
 @app.route('/carnet/<int:cid_carnet>/item', methods=['POST'])
