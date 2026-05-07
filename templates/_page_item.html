@@ -52,8 +52,21 @@
       {% endif %}
       {% if p.photo_gps_lat is not none and p.photo_gps_lng is not none %}
         <a class="page-gps" target="_blank" rel="noopener"
-           href="https://www.google.com/maps?q={{ p.photo_gps_lat }},{{ p.photo_gps_lng }}">
-          📍 {{ "%.5f"|format(p.photo_gps_lat) }},{{ "%.5f"|format(p.photo_gps_lng) }}
+           href="https://www.google.com/maps?q={{ p.photo_gps_lat }},{{ p.photo_gps_lng }}"
+           title="{{ p.photo_address_full or '' }}">
+          📍
+          {%- if p.photo_address_full -%}
+            {{ p.photo_address_full }}
+          {%- elif p.photo_city or p.photo_state or p.photo_country -%}
+            {% set parts = [] %}
+            {% if p.photo_road %}{% set _ = parts.append(p.photo_road) %}{% endif %}
+            {% if p.photo_city %}{% set _ = parts.append(p.photo_city) %}{% endif %}
+            {% if p.photo_state %}{% set _ = parts.append(p.photo_state) %}{% endif %}
+            {% if p.photo_country %}{% set _ = parts.append(p.photo_country) %}{% endif %}
+            {{ parts|join(' · ') }}
+          {%- else -%}
+            {{ "%.5f"|format(p.photo_gps_lat) }},{{ "%.5f"|format(p.photo_gps_lng) }}
+          {%- endif -%}
         </a>
       {% endif %}
     </div>

@@ -1,0 +1,44 @@
+{% extends '_base.html' %}
+{% block title %}Notre Histoire — Choisir un espace{% endblock %}
+{% block back_link %}
+  <a href="{{ url_for('home') }}" class="brand">Notre Histoire</a>
+{% endblock %}
+
+{% block content %}
+
+<main class="page">
+  <section class="hero">
+    <p class="kicker">Mes espaces</p>
+    <h1 class="display"><em>Bonjour {{ user.display_name or '' }}</em></h1>
+    <p class="lead">
+      Choisis l'espace dans lequel tu veux entrer.
+    </p>
+  </section>
+
+  <section class="profil-section">
+    <ul class="espace-membership-list">
+      {% for e in espaces %}
+      <li class="espace-membership-item">
+        <div class="espace-membership-info">
+          <div class="espace-membership-name">{{ e.name or 'Sans nom' }}</div>
+          <div class="espace-membership-meta">
+            <span class="espace-kind-pill">{{ e.kind or 'couple' }}</span>
+            {% if e.role == 'owner' %} · <span class="member-role">Créateur</span>{% endif %}
+          </div>
+        </div>
+        <form method="POST" action="{{ url_for('espace_switch') }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="espace_id" value="{{ e.id }}">
+          <button type="submit" class="btn btn-primary btn-sm">Entrer</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    <div class="cta-row" style="margin-top:16px">
+      <a href="{{ url_for('espace_nouveau') }}" class="btn btn-secondary">+ Nouvel espace</a>
+      <a href="{{ url_for('logout') }}" class="btn btn-ghost">Déconnexion</a>
+    </div>
+  </section>
+</main>
+
+{% endblock %}

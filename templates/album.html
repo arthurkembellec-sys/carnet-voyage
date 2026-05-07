@@ -365,15 +365,46 @@
     });
   }
 
+  // ── Brief 08 §5 : geolocalisation pour les photos prises in-app ─
+  // Le navigateur ne grave pas les EXIF quand on capture via input[capture],
+  // donc on injecte heure locale + position GPS du device si dispo.
+  async function getGeolocOnce() {
+    if (!('geolocation' in navigator)) return null;
+    return new Promise(function(resolve){
+      var done = false;
+      var to = setTimeout(function(){ if (!done) { done = true; resolve(null); } }, 5000);
+      navigator.geolocation.getCurrentPosition(
+        function(pos){
+          if (done) return; done = true; clearTimeout(to);
+          resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        },
+        function(err){
+          if (done) return; done = true; clearTimeout(to);
+          console.warn('geoloc denied/unavailable:', err && err.message);
+          resolve(null);
+        },
+        { enableHighAccuracy: true, timeout: 4500, maximumAge: 60000 }
+      );
+    });
+  }
+
   // ── Upload de photos ──────────────────────────────────────────
   async function uploadFiles(files, opts) {
     if (!files || !files.length) return;
     var total = files.length;
     var asMargin = !!(opts && opts.margin);
+    var fromCamera = !!(opts && opts.fromCamera);
     setSaving('Lecture EXIF + compression 0 / ' + total + '...');
 
     const empty = document.getElementById(asMargin ? 'empty-margin' : 'empty-main');
     if (empty) empty.style.display = 'none';
+
+    // Brief 08 §5 : si capture in-app, on demande la position GPS UNE fois
+    // (pour toutes les photos du batch) — heure = maintenant cote client.
+    var liveGeo = null;
+    if (fromCamera) {
+      try { liveGeo = await getGeolocOnce(); } catch (e) { liveGeo = null; }
+    }
 
     const compressed = [];
     const exifMeta = [];
@@ -388,6 +419,14 @@
       }
       try {
         const exif = await readExif(f);
+        // Brief 08 §5 : photo in-app sans EXIF -> on remplit avec now/geoloc
+        if (fromCamera) {
+          if (!exif.taken_at) exif.taken_at = new Date().toISOString();
+          if ((exif.gps_lat == null || exif.gps_lng == null) && liveGeo) {
+            exif.gps_lat = liveGeo.lat;
+            exif.gps_lng = liveGeo.lng;
+          }
+        }
         // < 8 Mo : on envoie l'ORIGINAL pour preserver tous les EXIF cote serveur.
         // >= 8 Mo : on compresse pour eviter timeout reseau (Pillow lira les EXIF de la version compressee).
         const SKIP_COMPRESS = 8 * 1024 * 1024;
@@ -493,7 +532,7 @@
     uploadFiles(e.target.files, { margin: false }); e.target.value = '';
   });
   document.getElementById('file-camera').addEventListener('change', function(e){
-    uploadFiles(e.target.files, { margin: false }); e.target.value = '';
+    uploadFiles(e.target.files, { margin: false, fromCamera: true }); e.target.value = '';
   });
   document.getElementById('file-margin').addEventListener('change', function(e){
     uploadFiles(e.target.files, { margin: true }); e.target.value = '';

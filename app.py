@@ -83,6 +83,16 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 # SECURE = True uniquement en prod (Railway sert HTTPS).
 app.config['SESSION_COOKIE_SECURE'] = bool(os.environ.get('RAILWAY_ENVIRONMENT'))
+# Brief 08 §1 : rester connecte — session persistante 90 jours
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=90)
+
+
+@app.before_request
+def _make_session_permanent():
+    """Brief 08 §1 : tant que l'utilisateur est logge, sa session reste
+    valide 90 jours et se prolonge a chaque requete."""
+    if session.get('uid'):
+        session.permanent = True
 
 
 # ── DB helpers ────────────────────────────────────────────────────────
@@ -306,6 +316,20 @@ def init_db():
         "ALTER TABLE album_pages ADD COLUMN manual_order INTEGER DEFAULT 0",
         "ALTER TABLE album_pages ADD COLUMN is_hidden INTEGER DEFAULT 0",
         "ALTER TABLE photos ADD COLUMN city_name TEXT DEFAULT ''",
+        # ── Brief 08 §3 : reverse-geocoding lisible (Pays / Departement / Ville / Rue)
+        "ALTER TABLE photos ADD COLUMN country TEXT DEFAULT ''",
+        "ALTER TABLE photos ADD COLUMN state TEXT DEFAULT ''",
+        "ALTER TABLE photos ADD COLUMN road TEXT DEFAULT ''",
+        "ALTER TABLE photos ADD COLUMN address_full TEXT DEFAULT ''",
+        """CREATE TABLE IF NOT EXISTS geo_cache (
+            key         TEXT PRIMARY KEY,
+            country     TEXT DEFAULT '',
+            state       TEXT DEFAULT '',
+            city        TEXT DEFAULT '',
+            road        TEXT DEFAULT '',
+            full        TEXT DEFAULT '',
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
         # ── v2.3 — Mise en page (Brief 05 §14-17) ─────────────────────
         "ALTER TABLE carnets ADD COLUMN default_photos_per_page INTEGER DEFAULT 1",
         "ALTER TABLE carnets ADD COLUMN default_page_margin REAL DEFAULT 15.0",
@@ -555,12 +579,28 @@ def csrf_check():
 
 @app.context_processor
 def inject_globals():
-    """Variables disponibles dans tous les templates."""
-    u = current_user()
-    espaces = user_espaces(u['id']) if u else []
-    esp = current_espace()
+    """Variables disponibles dans tous les templates.
+
+    Defensif : aucune exception ne doit faire echouer le rendu d'une page,
+    sinon on tombe sur un Internal Server Error generique (Brief 08 §4).
+    """
+    try:
+        u = current_user()
+    except Exception:
+        u = None
+    try:
+        espaces = user_espaces(u['id']) if u else []
+    except Exception:
+        espaces = []
+    try:
+        esp = current_espace()
+    except Exception:
+        esp = None
     nb_souhaits = 0
-    eid = current_espace_id()
+    try:
+        eid = current_espace_id()
+    except Exception:
+        eid = None
     if eid:
         try:
             r = query("SELECT COUNT(*) AS n FROM carnets WHERE couple_id=? "
@@ -568,17 +608,24 @@ def inject_globals():
             nb_souhaits = r['n'] if r else 0
         except Exception:
             nb_souhaits = 0
-    is_admin = bool(u and (u.get('email') or '').lower() in ADMIN_EMAILS)
+    try:
+        is_admin = bool(u and (u.get('email') or '').lower() in ADMIN_EMAILS)
+    except Exception:
+        is_admin = False
     nb_activity_unseen = 0
     if u and eid:
         try:
             nb_activity_unseen = _count_unseen_activity(u['id'], eid)
         except Exception:
             nb_activity_unseen = 0
+    try:
+        accent = (esp.get('accent') if esp else 'terracotta') or 'terracotta'
+    except Exception:
+        accent = 'terracotta'
     return {
         'current_user': u,
         'current_espace': esp,
-        'current_accent': (esp.get('accent') if esp else 'terracotta') or 'terracotta',
+        'current_accent': accent,
         'user_espaces': espaces,
         'nb_souhaits': nb_souhaits,
         'nb_activity_unseen': nb_activity_unseen,
@@ -635,6 +682,11 @@ def home():
         return redirect(url_for('login'))
     cid = current_espace_id()
     if not cid:
+        # Brief 08 §2 : pas d'espace par defaut. Si l'user a des espaces,
+        # il choisit explicitement ; sinon onboarding.
+        esps = user_espaces(session['uid'])
+        if esps:
+            return redirect(url_for('espace_choisir'))
         return redirect(url_for('onboarding_couple'))
     type_filter = request.args.get('type') or ''
     if type_filter and type_filter not in dict(CARNET_TYPES):
@@ -807,6 +859,9 @@ def _carnet_items(carnet_id):
     rows = query("""
         SELECT ci.*, p.thumb_path AS photo_thumb, p.file_path AS photo_path,
                p.gps_lat AS photo_gps_lat, p.gps_lng AS photo_gps_lng,
+               p.address_full AS photo_address_full,
+               p.country AS photo_country, p.state AS photo_state,
+               p.city_name AS photo_city, p.road AS photo_road,
                u.display_name AS added_by_name
         FROM carnet_items ci
         LEFT JOIN photos p ON p.id = ci.photo_id
@@ -894,6 +949,7 @@ def carnet_add_item(cid_carnet):
                  data['width'], data['height'], data['taken_at'],
                  gps_lat, gps_lng, session['uid'])
             )
+            _enrich_photo_geo(photo_id, gps_lat, gps_lng)
         except Exception as e:
             log.error("upload item photo: %s", e)
             return jsonify({'ok': False, 'error': 'Photo : ' + str(e)}), 500
@@ -2345,6 +2401,9 @@ def _carnet_pages(carnet_id, sort_mode='chrono'):
                p.width AS photo_width, p.height AS photo_height,
                p.taken_at AS photo_taken_at,
                p.gps_lat AS photo_gps_lat, p.gps_lng AS photo_gps_lng,
+               p.address_full AS photo_address_full,
+               p.country AS photo_country, p.state AS photo_state,
+               p.city_name AS photo_city, p.road AS photo_road,
                v.file_path AS video_path, v.poster_path AS video_poster,
                v.duration_s AS video_duration, v.scan_token AS video_token,
                v.taken_at AS video_taken_at,
@@ -2395,6 +2454,100 @@ def _next_page_position(carnet_id):
         (carnet_id,), one=True
     )
     return r['next'] if r else 0
+
+
+# ══════════════════════════════════════════════════════════════════════
+#   Brief 08 §3 — Reverse geocoding (coords → Pays / Departement / Ville / Rue)
+# ══════════════════════════════════════════════════════════════════════
+_GEO_UA = 'Notre-Histoire/1.0 (+arthur.kembellec@gmail.com)'
+
+
+def _geo_cache_key(lat, lng):
+    """Cle de cache : coords arrondies a 4 decimales (~11m) pour mutualiser
+    le geocodage entre photos prises au meme endroit."""
+    try:
+        return f"{round(float(lat), 4):.4f},{round(float(lng), 4):.4f}"
+    except (TypeError, ValueError):
+        return None
+
+
+def _reverse_geocode(lat, lng):
+    """Resoud des coordonnees GPS en {country, state, city, road, full}.
+
+    - Cache disque dans la table geo_cache (cle = lat/lng arrondi 4 dec).
+    - Best effort : retourne {} en cas d'erreur reseau ou hors-ligne.
+    - Respecte la policy Nominatim (User-Agent identifie, 1 req/s max
+      assure par le cache + l'usage par lot a l'upload).
+    """
+    key = _geo_cache_key(lat, lng)
+    if not key:
+        return {}
+    try:
+        r = query("SELECT country, state, city, road, full FROM geo_cache WHERE key=?",
+                  (key,), one=True)
+        if r:
+            return {'country': r['country'] or '', 'state': r['state'] or '',
+                    'city': r['city'] or '', 'road': r['road'] or '',
+                    'full': r['full'] or ''}
+    except Exception as e:
+        log.debug("geo_cache lookup fail: %s", e)
+    # Lookup Nominatim
+    url = ("https://nominatim.openstreetmap.org/reverse"
+           f"?format=jsonv2&lat={lat}&lon={lng}&zoom=14"
+           "&addressdetails=1&accept-language=fr")
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': _GEO_UA})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            raw = resp.read()
+        import json as _json
+        data = _json.loads(raw)
+        addr = data.get('address') or {}
+        country = addr.get('country') or ''
+        state = (addr.get('state') or addr.get('region')
+                 or addr.get('county') or '')
+        city = (addr.get('city') or addr.get('town') or addr.get('village')
+                or addr.get('hamlet') or addr.get('locality')
+                or addr.get('suburb') or addr.get('municipality') or '')
+        road = (addr.get('road') or addr.get('pedestrian')
+                or addr.get('footway') or addr.get('path') or '')
+        # Reconstitue une adresse lisible : Rue · Ville · Departement · Pays
+        parts = [p for p in [road, city, state, country] if p]
+        full = ' · '.join(parts)
+        try:
+            execute("INSERT OR REPLACE INTO geo_cache "
+                    "(key, country, state, city, road, full) VALUES (?,?,?,?,?,?)",
+                    (key, country, state, city, road, full))
+        except Exception as e:
+            log.debug("geo_cache write fail: %s", e)
+        return {'country': country, 'state': state, 'city': city,
+                'road': road, 'full': full}
+    except Exception as e:
+        log.info("reverse_geocode fail (%s,%s): %s", lat, lng, e)
+        # Cache l'echec brievement (vide) pour eviter de marteler
+        try:
+            execute("INSERT OR IGNORE INTO geo_cache "
+                    "(key, country, state, city, road, full) VALUES (?,?,?,?,?,?)",
+                    (key, '', '', '', '', ''))
+        except Exception:
+            pass
+        return {}
+
+
+def _enrich_photo_geo(photo_id, lat, lng):
+    """Reverse-geocode + UPDATE photos. Best effort, silencieux si echec."""
+    if lat is None or lng is None:
+        return
+    try:
+        info = _reverse_geocode(lat, lng)
+        if not info:
+            return
+        execute("UPDATE photos SET country=?, state=?, city_name=?, road=?, "
+                "address_full=? WHERE id=?",
+                (info.get('country') or '', info.get('state') or '',
+                 info.get('city') or '', info.get('road') or '',
+                 info.get('full') or '', photo_id))
+    except Exception as e:
+        log.debug("enrich photo geo fail: %s", e)
 
 
 def _gps_dms_to_dd(dms, ref):
@@ -2644,6 +2797,7 @@ def carnet_upload_photos(cid_carnet):
              data['width'], data['height'], data['taken_at'],
              gps_lat, gps_lng, session['uid'])
         )
+        _enrich_photo_geo(photo_id, gps_lat, gps_lng)
         pos = _next_page_position(cid_carnet)
         page_id = execute(
             "INSERT INTO album_pages (carnet_id, type, position, photo_id, "
@@ -2711,6 +2865,7 @@ def page_attach_photo(page_id):
          data['width'], data['height'], data['taken_at'],
          gps_lat, gps_lng, session['uid'])
     )
+    _enrich_photo_geo(photo_id, gps_lat, gps_lng)
     execute(
         "UPDATE album_pages SET photo_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
         (photo_id, page_id)
@@ -2907,6 +3062,7 @@ def carnet_add_margin_note(cid_carnet):
                 (c['couple_id'], data['file_path'], data['thumb_path'],
                  data['width'], data['height'], taken_at, gps_lat, gps_lng, session['uid'])
             )
+            _enrich_photo_geo(photo_id, gps_lat, gps_lng)
         except Exception as e:
             log.error("margin_note photo upload: %s", e)
             return jsonify({'ok': False, 'error': 'Photo : ' + str(e)}), 500
@@ -3273,6 +3429,7 @@ def login():
                 (email, display_name or email.split('@')[0], hash_pw(password))
             )
             session['uid'] = uid
+            session.permanent = True  # Brief 08 §1 : rester connecte
             session.pop('couple_id', None); session.pop('espace_id', None)
             return redirect(next_url if next_url.startswith('/') else '/')
         else:  # login
@@ -3283,13 +3440,11 @@ def login():
                 flash("Compte supprime. Contactez le support pour restaurer (30j max).", "err")
                 return render_template('login.html', email=email, next_url=next_url)
             session['uid'] = existing['id']
-            # Espace par defaut : 1er espace dont l'user est membre
-            esps = user_espaces(existing['id'])
-            if esps:
-                session['espace_id'] = esps[0]['id']
-                session['couple_id'] = esps[0]['id']  # rétro-compat
-            else:
-                session.pop('espace_id', None); session.pop('couple_id', None)
+            session.permanent = True  # Brief 08 §1 : rester connecte
+            # Brief 08 §2 : on n'auto-selectionne PAS un espace.
+            # L'utilisateur passe par le selecteur (/espace/choisir) au prochain
+            # appel a home() s'il a des espaces, ou vers onboarding sinon.
+            session.pop('espace_id', None); session.pop('couple_id', None)
             return redirect(next_url if next_url.startswith('/') else '/')
     return render_template('login.html', next_url=next_url)
 
@@ -3393,6 +3548,21 @@ def espace_switch():
         return redirect(url_for('home'))
     flash("Espace inaccessible.", "err")
     return redirect(url_for('home'))
+
+
+@app.route('/espace/choisir', methods=['GET'])
+@login_required
+def espace_choisir():
+    """Brief 08 §2 : selecteur d'espace explicite (pas de defaut au login).
+
+    Affiche la liste des espaces de l'utilisateur. Le choix se fait
+    via le formulaire POST de /espace/switch (deja existant).
+    """
+    user = current_user()
+    espaces = user_espaces(user['id']) if user else []
+    if not espaces:
+        return redirect(url_for('onboarding_couple'))
+    return render_template('espace_choisir.html', user=user, espaces=espaces)
 
 
 @app.route('/espace/personnaliser', methods=['GET', 'POST'])
@@ -3656,6 +3826,7 @@ def histoire_post_message():
                  data['width'], data['height'], data['taken_at'],
                  gps_lat, gps_lng, session['uid'])
             )
+            _enrich_photo_geo(photo_id, gps_lat, gps_lng)
             attachment_type = 'photo'
             attachment_ref = str(photo_id)
         except Exception as e:
@@ -3786,9 +3957,31 @@ def _format_day_fr(date_str):
         return date_str
 
 
+def _backfill_missing_geo(carnet_id, max_per_call=5):
+    """Brief 08 §3 : enrichit les photos qui ont des coords GPS mais pas
+    de city_name. Limite par appel pour respecter Nominatim (1 req/s).
+    Best effort, silencieux."""
+    try:
+        rows = query("""
+            SELECT p.id, p.gps_lat, p.gps_lng FROM photos p
+            JOIN album_pages ap ON ap.photo_id = p.id
+            WHERE ap.carnet_id = ?
+              AND p.gps_lat IS NOT NULL AND p.gps_lng IS NOT NULL
+              AND COALESCE(p.city_name, '') = ''
+              AND COALESCE(p.address_full, '') = ''
+            LIMIT ?
+        """, (carnet_id, max_per_call))
+        for r in rows:
+            _enrich_photo_geo(r['id'], r['gps_lat'], r['gps_lng'])
+    except Exception as e:
+        log.debug("backfill geo fail: %s", e)
+
+
 def _recompute_sections(carnet_id):
     """Recalcule les album_sections pour un carnet (idempotent).
     Preserve les pages avec manual_order=1 a leur position actuelle."""
+    # Best-effort backfill geocoding pour les photos sans city_name
+    _backfill_missing_geo(carnet_id)
     photos = query("""
         SELECT ap.id AS page_id, ap.position, ap.manual_order,
                p.taken_at, p.gps_lat, p.gps_lng, p.city_name,
@@ -4265,23 +4458,41 @@ def histoire_import():
 @app.route('/profil')
 @login_required
 def profil():
-    user = current_user()
-    espaces = user_espaces(user['id'])
-    # Stats : carnets de l'espace courant + photos uploadees par l'user
-    eid = current_espace_id()
-    stats = {'carnets': 0, 'photos': 0, 'reveries': 0, 'videos': 0}
-    if eid:
-        r = query("SELECT COUNT(*) AS n FROM carnets WHERE couple_id=? "
-                  "AND deleted_at IS NULL AND type != 'souhait'", (eid,), one=True)
-        stats['carnets'] = r['n'] if r else 0
-        r = query("SELECT COUNT(*) AS n FROM carnets WHERE couple_id=? "
-                  "AND deleted_at IS NULL AND type = 'souhait'", (eid,), one=True)
-        stats['reveries'] = r['n'] if r else 0
-    r = query("SELECT COUNT(*) AS n FROM photos WHERE added_by=?", (user['id'],), one=True)
-    stats['photos'] = r['n'] if r else 0
-    r = query("SELECT COUNT(*) AS n FROM videos WHERE added_by=?", (user['id'],), one=True)
-    stats['videos'] = r['n'] if r else 0
-    return render_template('profil.html', user=user, espaces=espaces, stats=stats)
+    """Brief 08 §4 : page profil hardenee — chaque etape echoue silencieusement
+    pour eviter le 500 quand un compte est dans un etat partiel
+    (uid en session sans user en base, espace orphelin, etc.)."""
+    try:
+        user = current_user()
+        if not user:
+            # uid en session mais user disparu → on nettoie et on redirige
+            session.clear()
+            return redirect(url_for('login'))
+        try:
+            espaces = user_espaces(user['id']) or []
+        except Exception as e:
+            log.warning("profil: user_espaces fail: %s", e)
+            espaces = []
+        stats = {'carnets': 0, 'photos': 0, 'reveries': 0, 'videos': 0}
+        try:
+            eid = current_espace_id()
+            if eid:
+                r = query("SELECT COUNT(*) AS n FROM carnets WHERE couple_id=? "
+                          "AND deleted_at IS NULL AND type != 'souhait'", (eid,), one=True)
+                stats['carnets'] = r['n'] if r else 0
+                r = query("SELECT COUNT(*) AS n FROM carnets WHERE couple_id=? "
+                          "AND deleted_at IS NULL AND type = 'souhait'", (eid,), one=True)
+                stats['reveries'] = r['n'] if r else 0
+            r = query("SELECT COUNT(*) AS n FROM photos WHERE added_by=?", (user['id'],), one=True)
+            stats['photos'] = r['n'] if r else 0
+            r = query("SELECT COUNT(*) AS n FROM videos WHERE added_by=?", (user['id'],), one=True)
+            stats['videos'] = r['n'] if r else 0
+        except Exception as e:
+            log.warning("profil: stats fail: %s", e)
+        return render_template('profil.html', user=user, espaces=espaces, stats=stats)
+    except Exception as e:
+        log.error("profil ECHEC: %s\n%s", e, traceback.format_exc())
+        flash("Profil indisponible pour le moment. Erreur : %s" % e, "err")
+        return redirect(url_for('home'))
 
 
 @app.route('/profil/displayname', methods=['POST'])
@@ -4538,6 +4749,18 @@ def admin_backup_delete(filename):
         os.remove(p)
         flash(f"{filename} supprime.", "ok")
     return redirect(url_for('admin_backups_list'))
+
+
+@app.errorhandler(500)
+def _on_500(e):
+    """Brief 08 §4 : on log la trace complete pour diagnostic Railway,
+    et on affiche un message moins anxiogene a l'utilisateur."""
+    log.error("500 sur %s : %s\n%s", request.path, e, traceback.format_exc())
+    return ("<!doctype html><meta charset=utf-8>"
+            "<style>body{font:16px/1.5 system-ui;padding:24px;max-width:520px;margin:auto}"
+            "a{color:#A8503D}</style>"
+            "<h1>Oups, une erreur est survenue.</h1>"
+            "<p>Reessayez ou revenez a <a href='/'>l'accueil</a>.</p>"), 500
 
 
 # ── Bootstrap ─────────────────────────────────────────────────────────

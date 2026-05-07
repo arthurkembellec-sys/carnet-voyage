@@ -43,7 +43,7 @@
       {% if user_espaces %}
       <div class="espace-switcher">
         <button type="button" class="espace-btn" id="espace-toggle" aria-haspopup="true" aria-expanded="false">
-          <span class="espace-btn-label">{{ current_espace.name or 'Sans nom' }}</span>
+          <span class="espace-btn-label">{% if current_espace %}{{ current_espace.name or 'Sans nom' }}{% else %}Choisir un espace{% endif %}</span>
           <span class="espace-arrow">▾</span>
         </button>
         <div class="espace-menu" id="espace-menu" hidden role="menu">
