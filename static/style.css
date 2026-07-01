@@ -752,16 +752,22 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
 .save-indicator.saved  { color: #2F5A2A; }
 .save-indicator.error  { color: var(--error-ink); }
 
+/* v3.4 : grille responsive (avant : 1 colonne pleine largeur, 70vh par
+   photo -> scroll interminable). Les blocs texte gardent la pleine largeur. */
 .pages-list {
   list-style: none; padding: 0; margin: 24px 0;
-  display: flex; flex-direction: column; gap: 32px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  align-items: start;
 }
+.pages-list .page-item[data-type="text"] { grid-column: 1 / -1; }
 .page-item {
   position: relative;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-  padding: 14px;
+  padding: 10px;
   transition: border-color .2s;
 }
 .page-item:hover { border-color: var(--border-strong); }
@@ -778,7 +784,7 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
   display: block;
   width: 100%;
   height: auto;
-  max-height: 70vh;
+  max-height: 340px;
   object-fit: contain;
   background: #f0eee9;
 }
@@ -804,6 +810,38 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
   color: var(--whisper);
   font-weight: 400;
 }
+.page-date-edit {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  margin: 0;
+}
+.page-date-edit-label {
+  font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted);
+  font-family: var(--font-ui);
+}
+.page-date-input {
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 4px;
+  border: 1px solid var(--whisper);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-ui);
+}
+.page-date-input:focus { outline: none; border-color: var(--accent); }
+.page-date-save {
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+.page-date-save:hover { opacity: 0.85; }
 .page-gps {
   font-size: 10.5px;
   font-weight: 500;
@@ -1294,8 +1332,12 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
 }
 .pages-list-sub {
   list-style: none; padding: 0; margin: 0;
-  display: flex; flex-direction: column; gap: 32px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  align-items: start;
 }
+.pages-list-sub .page-item[data-type="text"] { grid-column: 1 / -1; }
 
 @media (max-width: 480px) {
   .album-l2-mini-map { width: 64px; height: 64px; }
@@ -1342,6 +1384,22 @@ a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-under
 }
 .pages-list-margin .page-photo img { max-height: 200px; }
 .pages-list-margin .page-text { font-size: 16px; }
+
+/* v3.4 : separateur de jour dans les notes de marge (suit la chronologie) */
+.margin-day-sep {
+  grid-column: 1 / -1;
+  list-style: none;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px dashed var(--border);
+  padding-bottom: 6px;
+  margin-top: 10px;
+}
+.pages-list-margin .margin-day-sep:first-child { margin-top: 0; }
 
 /* Empty state plus discret par section */
 .empty-section {
@@ -2238,7 +2296,8 @@ a:not(.btn):not(.tab-link):not(.chip):not(.link):not(.brand):not(.espace-menu-it
 
 @media (max-width: 480px) {
   .page-delete { opacity: 1; } /* toujours visible sur mobile */
-  .page-photo img { max-height: 80vh; }
+  /* v3.4 : 55vh (au lieu de 80vh) -> moins de scroll, photo lisible */
+  .page-photo img { max-height: 55vh; }
 }
 
 /* ── Footer flottant (FAB) ────────────────────────────────────────── */

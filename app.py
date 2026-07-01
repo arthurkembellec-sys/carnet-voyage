@@ -2383,18 +2383,36 @@ def _wrap_text(pdf, text, cx, cy, max_width, line_height=14, max_lines=99):
 #                         v1.2 — ALBUM
 # ══════════════════════════════════════════════════════════════════════
 
+def _norm_ts(ts):
+    """v3.4 : normalise un timestamp en cle triable 'YYYY-MM-DD HH:MM:SS'.
+    Neutralise les formats mixtes qui cassaient le tri chronologique par
+    comparaison de chaines : 'T' vs espace ('T' > ' ' en ASCII), suffixe 'Z'
+    et millisecondes des dates ISO envoyees par le client (exifr)."""
+    if not ts:
+        return ''
+    s = str(ts).strip().replace('T', ' ')
+    if s.endswith('Z'):
+        s = s[:-1]
+    return s[:19]
+
+
+def _page_chrono_key(p):
+    """Cle de tri chronologique d'une page d'album (photo > video > ajout)."""
+    ts = _norm_ts(p.get('photo_taken_at') or p.get('video_taken_at')
+                  or p.get('created_at'))
+    # Pages sans date -> en fin, ordre stable par position/id
+    return (ts == '', ts, p.get('position') or 0, p.get('id') or 0)
+
+
 def _carnet_pages(carnet_id, sort_mode='chrono'):
     """
     Retourne les pages d'un carnet selon le sort_mode :
-    - 'chrono' (default) : tri par date EXIF/ajout, position en tie-breaker
+    - 'chrono' (default) : tri par date EXIF/ajout (normalise en Python,
+      les formats de taken_at etant heterogenes -> pas de tri fiable en SQL)
     - 'manual' : tri par position (drag & drop)
     Renvoie un dict avec deux listes : 'main' (album) et 'margin' (notes en marge).
     """
-    if sort_mode == 'manual':
-        order_by = "ap.position ASC, ap.id ASC"
-    else:
-        order_by = ("COALESCE(p.taken_at, v.taken_at, ap.created_at) ASC, "
-                    "ap.position ASC, ap.id ASC")
+    order_by = "ap.position ASC, ap.id ASC"
     rows = query(f"""
         SELECT ap.*,
                p.file_path AS photo_path, p.thumb_path AS photo_thumb,
@@ -2416,6 +2434,8 @@ def _carnet_pages(carnet_id, sort_mode='chrono'):
         ORDER BY {order_by}
     """, (carnet_id,))
     pages = [dict(r) for r in rows]
+    if sort_mode != 'manual':
+        pages.sort(key=_page_chrono_key)
     main = [p for p in pages if not p.get('is_margin')]
     margin = [p for p in pages if p.get('is_margin')]
 
@@ -2719,8 +2739,24 @@ def carnet_album(cid_carnet):
     pages = _carnet_pages(cid_carnet, sort_mode=sort_mode)
     geo_photos = [p for p in pages['all']
                   if p.get('photo_gps_lat') is not None and p.get('photo_gps_lng') is not None]
+    # v3.4 : notes de marge groupees par jour (suivent la chronologie de l'album)
+    margin_groups = []
+    last_day = None
+    for p in pages['margin']:
+        ts = _norm_ts(p.get('photo_taken_at') or p.get('video_taken_at')
+                      or p.get('created_at'))
+        day = ts[:10] if ts else ''
+        if day != last_day or not margin_groups:
+            margin_groups.append({
+                'day': day,
+                'label': _format_day_fr(day) if day else 'Sans date',
+                'pages': [],
+            })
+            last_day = day
+        margin_groups[-1]['pages'].append(p)
     return render_template('album.html', carnet=c,
         main_pages=pages['main'], margin_pages=pages['margin'],
+        margin_groups=margin_groups,
         structured=pages.get('structured', []),
         orphans=pages.get('orphans', []),
         geo_photos=geo_photos, types=CARNET_TYPES, sort_mode=sort_mode)
@@ -3031,6 +3067,35 @@ def page_update_text(page_id):
         (text, page_id)
     )
     return jsonify({'ok': True, 'text_content': text})
+
+
+@app.route('/album_page/<int:page_id>/taken_at', methods=['POST'])
+@couple_required
+def page_update_taken_at(page_id):
+    """Saisie manuelle de la date sur une photo sans EXIF (orphelin)."""
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    page = query("SELECT ap.*, c.couple_id FROM album_pages ap "
+                 "JOIN carnets c ON c.id=ap.carnet_id WHERE ap.id=?",
+                 (page_id,), one=True)
+    if not page or page['couple_id'] != current_espace_id():
+        return jsonify({'ok': False, 'error': '404'}), 404
+    if not page['photo_id']:
+        return jsonify({'ok': False, 'error': 'no_photo'}), 400
+    raw = (request.form.get('taken_at') or '').strip()
+    # datetime-local renvoie "YYYY-MM-DDTHH:MM" — on normalise vers ISO complet.
+    iso = None
+    if raw:
+        try:
+            iso = datetime.strptime(raw, '%Y-%m-%dT%H:%M').isoformat()
+        except ValueError:
+            try:
+                iso = datetime.strptime(raw, '%Y-%m-%dT%H:%M:%S').isoformat()
+            except ValueError:
+                return jsonify({'ok': False, 'error': 'bad_date'}), 400
+    execute("UPDATE photos SET taken_at=? WHERE id=?", (iso, page['photo_id']))
+    execute("UPDATE album_pages SET updated_at=CURRENT_TIMESTAMP WHERE id=?", (page_id,))
+    return jsonify({'ok': True, 'taken_at': iso})
 
 
 @app.route('/carnet/<int:cid_carnet>/margin_note', methods=['POST'])
@@ -3994,11 +4059,12 @@ def _recompute_sections(carnet_id):
     items = []
     for r in photos:
         r = dict(r)
-        ts = r.get('taken_at') or r.get('video_taken_at')
+        # v3.4 : normalisation du timestamp (formats mixtes T/espace/Z)
+        ts = _norm_ts(r.get('taken_at') or r.get('video_taken_at'))
         if not ts:
             continue
-        # Date locale (simplification : on prend les 10 premiers chars)
-        day = str(ts)[:10]
+        # Date locale (cle normalisee : 10 premiers chars)
+        day = ts[:10]
         if not day or len(day) != 10:
             continue
         items.append({

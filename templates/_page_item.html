@@ -46,9 +46,15 @@
           {{ p.photo_taken_at|replace('T',' ') }}
         </div>
       {% else %}
-        <div class="page-date page-date-fallback" title="Date d'ajout">
-          ajoutée <span data-iso="{{ p.created_at }}" data-fmt="datetime">{{ (p.created_at or '')|replace('T',' ') }}</span>
-        </div>
+        <form class="page-date-edit" data-page-id="{{ p.id }}" onsubmit="return submitTakenAt(event)">
+          <span class="page-date-edit-label">📅 Date inconnue —</span>
+          <input type="datetime-local" name="taken_at" class="page-date-input" required
+                 title="Definir la date de prise (la photo sera reclassee dans son mois)">
+          <button type="submit" class="page-date-save" title="Enregistrer">✓</button>
+          <span class="page-date page-date-fallback" title="Date d'ajout">
+            ajoutée <span data-iso="{{ p.created_at }}" data-fmt="datetime">{{ (p.created_at or '')|replace('T',' ') }}</span>
+          </span>
+        </form>
       {% endif %}
       {% if p.photo_gps_lat is not none and p.photo_gps_lng is not none %}
         <a class="page-gps" target="_blank" rel="noopener"

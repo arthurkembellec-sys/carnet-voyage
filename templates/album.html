@@ -157,8 +157,11 @@
       <span class="section-hint">Photos de contexte (lieux, plans, billets) · separees a l'impression</span>
     </h2>
     <ul class="pages-list pages-list-margin" id="pages-margin">
-      {% for p in margin_pages %}
-        {% include '_page_item.html' %}
+      {% for g in margin_groups %}
+        <li class="margin-day-sep" data-day="{{ g.day }}">{{ g.label }}</li>
+        {% for p in g.pages %}
+          {% include '_page_item.html' %}
+        {% endfor %}
       {% endfor %}
     </ul>
     {% if not margin_pages %}
@@ -515,12 +518,17 @@
     return li;
   }
 
+  // v3.4 : comparaison sur cle normalisee (T/espace/Z mixtes sinon)
+  function normTs(s) {
+    return String(s || '').replace('T', ' ').replace(/Z$/, '').slice(0, 19);
+  }
   function insertChronological(list, newLi, takenAt) {
-    if (!takenAt) { list.appendChild(newLi); return; }
+    var key = normTs(takenAt);
+    if (!key) { list.appendChild(newLi); return; }
     const items = Array.from(list.querySelectorAll('.page-item'));
     for (const existing of items) {
-      const t = existing.dataset.takenAt || '';
-      if (!t || t > takenAt) {
+      const t = normTs(existing.dataset.takenAt);
+      if (!t || t > key) {
         list.insertBefore(newLi, existing);
         return;
       }
@@ -693,19 +701,33 @@
   window.uploadVideo = uploadVideo;
 
   // ── Drag & drop : reorder pages (SortableJS) ──────────────────
-  function initSortable(listEl) {
+  // v3.4 : Sortable est initialise sur TOUTES les listes visibles (sections
+  // auto comprises — avant, seule la liste plate cachee etait sortable, le
+  // drag & drop ne marchait donc jamais des que les sections existaient).
+  // L'ordre envoye au serveur = ordre DOM global de l'album principal, pour
+  // que les positions restent coherentes entre sections.
+  function collectMainIds() {
+    return Array.from(document.querySelectorAll(
+      '.album-section:not(.album-section-margin) .page-item'
+    )).map(function(li){ return li.dataset.pageId; });
+  }
+  function initSortable(listEl, isMargin) {
     if (!listEl || !window.Sortable) return;
     new Sortable(listEl, {
       animation: 150,
       handle: '.drag-handle',
       ghostClass: 'page-ghost',
       dragClass: 'page-dragging',
+      draggable: '.page-item',
+      filter: '.margin-day-sep',
       delay: 50,
       delayOnTouchOnly: true,
       onEnd: async function(){
-        var ids = Array.from(listEl.querySelectorAll('.page-item')).map(function(li){
-          return li.dataset.pageId;
-        });
+        var ids = isMargin
+          ? Array.from(listEl.querySelectorAll('.page-item')).map(function(li){
+              return li.dataset.pageId;
+            })
+          : collectMainIds();
         setSaving('Reorganisation...');
         var fd = new FormData(); fd.append('_csrf', CSRF);
         ids.forEach(function(id){ fd.append('page_id', id); });
@@ -747,8 +769,12 @@
   }
 
   function bootSortable() {
-    initSortable(document.getElementById('pages-main'));
-    initSortable(document.getElementById('pages-margin'));
+    initSortable(document.getElementById('pages-main'), false);
+    // v3.4 : les listes des sections auto (et orphelins) sont sortables aussi
+    document.querySelectorAll('.pages-list-sub').forEach(function(el){
+      initSortable(el, false);
+    });
+    initSortable(document.getElementById('pages-margin'), true);
     var chronoBtn = document.getElementById('btn-sort-chrono');
     if (chronoBtn) chronoBtn.addEventListener('click', resortChrono);
   }
@@ -810,6 +836,25 @@
     document.querySelectorAll('.page-text').forEach(attachTextAutosave);
   }
   attachAllAutosaves();
+
+  // ── Saisie manuelle de la date sur orphelins (photos sans EXIF) ──
+  window.submitTakenAt = async function(ev) {
+    ev.preventDefault();
+    const form = ev.target;
+    const input = form.querySelector('input[name="taken_at"]');
+    if (!input || !input.value) return false;
+    setSaving();
+    const fd = new FormData();
+    fd.append('_csrf', CSRF);
+    fd.append('taken_at', input.value);
+    try {
+      const r = await fetch(`/album_page/${form.dataset.pageId}/taken_at`, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (d.ok) { setSaved(); window.location.reload(); }
+      else { setError(d.error || ''); }
+    } catch (e) { setError('Reseau'); }
+    return false;
+  };
 
   // ── Bloc texte ────────────────────────────────────────────────
   async function addTextBlock(asMargin) {
