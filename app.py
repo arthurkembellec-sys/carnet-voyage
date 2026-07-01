@@ -1664,10 +1664,19 @@ def carnet_apercu(cid_carnet):
                 geo_count = gs['count']
     except Exception:
         pass
+    # v3.4.1 : plan d'alignement des notes de marge par date (partage avec le PDF)
+    margin_plan = []
+    if margin_pos != 'end' and pages_data['margin'] and _PDF_BOOK_OK and _pdf_book is not None:
+        try:
+            margin_plan = _pdf_book.build_margin_plan(
+                pages_data['main'], pages_data['margin'], int(layout))
+        except Exception as _e:
+            log.warning("build_margin_plan fail: %s", _e)
     return render_template('apercu.html',
         carnet=c,
         main_pages=pages_data['main'],
         margin_pages=pages_data['margin'],
+        margin_plan=margin_plan,
         format=fmt, layout=layout, margin_pos=margin_pos,
         formats=PDF_FORMATS, layouts=PDF_LAYOUTS, margin_positions=PDF_MARGIN_POSITIONS,
         cover_item=cover_item,

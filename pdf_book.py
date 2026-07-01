@@ -48,6 +48,65 @@ def _full_bleed_mode(item):
     return 'normal'
 
 
+def _item_ts(it):
+    """Cle chrono normalisee 'YYYY-MM-DD HH:MM:SS' d'une page d'album
+    (photo > video > date d'ajout). Neutralise les formats mixtes T/espace/Z."""
+    s = str(it.get('photo_taken_at') or it.get('video_taken_at')
+            or it.get('created_at') or '').strip().replace('T', ' ')
+    if s.endswith('Z'):
+        s = s[:-1]
+    return s[:19]
+
+
+def build_margin_plan(pages_main, margin_pool, n_per_page):
+    """v3.4.1 : distribution des notes de marge par page composite, alignee
+    sur les dates (fusion chronologique) au lieu de la repartition uniforme.
+
+    Une note est placee sur la premiere page composite dont les photos
+    couvrent sa date/heure. Plafond par page (lisibilite de la zone marge) ;
+    l'excedent deborde sur les pages suivantes ; le reliquat va sur la
+    derniere page composite. Retourne plan[i] = notes de la i-eme page
+    composite — meme decoupage en chunks que le program PDF et que
+    apercu.html (chunks de n_per_page, coupes par les pleines pages/spreads).
+    """
+    chunks = []
+    cur = []
+    for p in pages_main:
+        if _full_bleed_mode(p) != 'normal':
+            if cur:
+                chunks.append(cur)
+                cur = []
+        else:
+            cur.append(p)
+            if len(cur) >= n_per_page:
+                chunks.append(cur)
+                cur = []
+    if cur:
+        chunks.append(cur)
+    n = len(chunks)
+    plan = [[] for _ in range(n)]
+    pool = list(margin_pool or [])
+    if not n or not pool:
+        return plan
+    cap = max(3, -(-len(pool) // n))  # au moins l'ancien "per" uniforme
+    idx = 0
+    for k, chunk in enumerate(chunks):
+        if idx >= len(pool):
+            break
+        chunk_max = max((_item_ts(p) for p in chunk), default='')
+        while idx < len(pool) and len(plan[k]) < cap:
+            m_ts = _item_ts(pool[idx])
+            # Note plus tardive que les photos de la page -> page suivante
+            # (sauf derniere page : on y pose tout ce qui reste)
+            if k < n - 1 and m_ts and chunk_max and m_ts > chunk_max:
+                break
+            plan[k].append(pool[idx])
+            idx += 1
+    if idx < len(pool):
+        plan[-1].extend(pool[idx:])
+    return plan
+
+
 def render_carnet_pdf(
     *,
     carnet,
@@ -535,14 +594,16 @@ def render_carnet_pdf(
     program.append({'kind': 'colophon'})
 
     # Distribution des margin items au fil des pages composites ─────────────
+    # v3.4.1 : alignement par date (build_margin_plan) — une note tombe sur
+    # la page dont les photos couvrent sa date, plus de repartition aveugle.
     if margin_pos != 'end' and margin_items_pool:
-        composite_count = sum(1 for e in program if e['kind'] == 'composite')
-        per = max(1, (len(margin_items_pool) + composite_count - 1) // max(composite_count, 1))
-        idx = 0
+        plan = build_margin_plan(pages_main, margin_items_pool, n_per_page)
+        ci = 0
         for e in program:
-            if e['kind'] == 'composite' and idx < len(margin_items_pool):
-                e['margin_items'] = margin_items_pool[idx:idx + per]
-                idx += len(e['margin_items'])
+            if e['kind'] == 'composite':
+                if ci < len(plan) and plan[ci]:
+                    e['margin_items'] = plan[ci]
+                ci += 1
 
     # Drawers ───────────────────────────────────────────────────────────────
     def _draw_cover():

@@ -449,10 +449,10 @@
   {# Lettres pour cross-réf photos↔légendes en marge #}
   {% set letters = ['a','b','c','d','e','f','g','h'] %}
 
-  {# Distribution des notes en marge sur les pages composites #}
-  {% set composite_count = ns.blocks|selectattr('kind','equalto','composite')|list|length %}
-  {% set margin_active = margin_pages if margin_pos != 'end' else [] %}
-  {% set per_page_margin = ((margin_active|length + composite_count - 1) // composite_count) if (margin_active and composite_count) else 0 %}
+  {# Distribution des notes en marge sur les pages composites.
+     v3.4.1 : margin_plan (calcule cote serveur, partage avec le PDF) aligne
+     chaque note sur la page dont les photos couvrent sa date. #}
+  {% set margin_plan = margin_plan or [] %}
 
   <div class="book-stage">
     <div class="book-stage-inner">
@@ -573,8 +573,8 @@
             {% set recto_block = block %}
             {% set verso_idx = state.composite_seen %}
             {% set recto_idx = state.composite_seen + 1 %}
-            {% set verso_margins = margin_active[verso_idx*per_page_margin:(verso_idx+1)*per_page_margin] if per_page_margin else [] %}
-            {% set recto_margins = margin_active[recto_idx*per_page_margin:(recto_idx+1)*per_page_margin] if per_page_margin else [] %}
+            {% set verso_margins = margin_plan[verso_idx] if verso_idx < margin_plan|length else [] %}
+            {% set recto_margins = margin_plan[recto_idx] if recto_idx < margin_plan|length else [] %}
 
             {# Marge dynamique : zone visible uniquement si contenu #}
             {% set verso_has_caps = namespace(v=false) %}
@@ -700,7 +700,7 @@
       {% if state.pending != None %}
         {% set state.page_num = state.page_num + 1 %}
         {% set verso_idx = state.composite_seen %}
-        {% set verso_margins = margin_active[verso_idx*per_page_margin:(verso_idx+1)*per_page_margin] if per_page_margin else [] %}
+        {% set verso_margins = margin_plan[verso_idx] if verso_idx < margin_plan|length else [] %}
         <div class="book-spread book-fmt-{{ format }}">
           <div class="book-page-l">
             <div class="book-inner is-verso mp-{{ margin_pos if margin_pos in ('outer','inner','bottom','end') else 'outer' }}">
