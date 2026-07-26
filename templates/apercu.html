@@ -129,6 +129,22 @@
 .book-cell img{
   max-width:100%; max-height:100%; object-fit:contain;
 }
+.book-cell-play{
+  position:absolute; top:50%; left:50%;
+  transform:translate(-50%,-50%);
+  width:26px; height:26px; line-height:26px;
+  background:rgba(23,24,26,0.55); color:#fff;
+  border-radius:50%; text-align:center; font-size:10px;
+  pointer-events:none;
+}
+.book-cell-qr{
+  position:absolute; bottom:3px; right:3px;
+  width:30px; height:30px;
+  background:#fff; border-radius:3px; padding:2px;
+  box-shadow:0 1px 4px rgba(23,24,26,0.25);
+  pointer-events:none;
+}
+.book-cell-qr svg{ width:100%; height:100%; display:block; }
 .book-cell-letter{
   position:absolute; top:3px; left:3px;
   background:rgba(251,251,250,0.92);
@@ -614,6 +630,10 @@
                       {% if it.caption %}<span class="book-cell-letter">{{ letter }}</span>{% endif %}
                       {% if it.video_path %}
                         <img src="{{ url_for('serve_upload', filename=it.video_poster) }}" alt="">
+                        <span class="book-cell-play" aria-hidden="true">▶</span>
+                        {% if video_qrs and video_qrs.get(it.id) %}
+                        <span class="book-cell-qr" title="Dans le livre imprimé : scanne pour lancer la vidéo">{{ video_qrs[it.id]|safe }}</span>
+                        {% endif %}
                       {% elif it.photo_path %}
                         <img src="{{ url_for('serve_upload', filename=it.photo_path) }}" alt="">
                       {% elif it.type == 'text' %}
@@ -664,6 +684,10 @@
                       {% if it.caption %}<span class="book-cell-letter">{{ letter }}</span>{% endif %}
                       {% if it.video_path %}
                         <img src="{{ url_for('serve_upload', filename=it.video_poster) }}" alt="">
+                        <span class="book-cell-play" aria-hidden="true">▶</span>
+                        {% if video_qrs and video_qrs.get(it.id) %}
+                        <span class="book-cell-qr" title="Dans le livre imprimé : scanne pour lancer la vidéo">{{ video_qrs[it.id]|safe }}</span>
+                        {% endif %}
                       {% elif it.photo_path %}
                         <img src="{{ url_for('serve_upload', filename=it.photo_path) }}" alt="">
                       {% elif it.type == 'text' %}

@@ -7,8 +7,8 @@
     <p class="kicker">{{ couple.name or 'Notre compte' }}</p>
     <h1 class="display"><em>Invite l'autre.</em></h1>
     <p class="lead">
-      Envoie ce lien a la personne avec qui tu vas partager ce compte.
-      Le lien expire dans 14 jours.
+      Envoie ce lien à toutes les personnes que tu veux inviter dans cet espace —
+      il est <strong>utilisable plusieurs fois</strong>{% if expires_at %}, jusqu'au {{ expires_at }}{% endif %}.
     </p>
 
     <div class="invite-card">
@@ -21,6 +21,14 @@
         <button type="button" class="btn btn-secondary btn-block" id="copy-btn">Copier le lien</button>
       </div>
     </div>
+
+    <form method="POST" action="{{ url_for('invite_regenerer') }}" class="invite-regen">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-ghost btn-sm"
+              title="Génère un nouveau lien et invalide les anciens">
+        ↻ Nouveau lien (invalide l'ancien)
+      </button>
+    </form>
 
     <div class="auth-after">
       <a href="{{ url_for('home') }}" class="btn btn-ghost">Continuer sans inviter</a>

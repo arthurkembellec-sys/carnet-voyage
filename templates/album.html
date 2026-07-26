@@ -71,6 +71,28 @@
   </section>
   {% endif %}
 
+  {# ────── VIDÉOS RETROUVÉES (uploads anciens jamais rattachés) ────── #}
+  {% if orphan_videos %}
+  <section class="orphan-videos">
+    <h2 class="section-title">Vidéos retrouvées
+      <span class="section-hint">Envoyées mais jamais placées dans un album — un geste et elles rejoignent celui-ci (avec leur QR code dans le livre)</span>
+    </h2>
+    <div class="orphan-videos-row">
+      {% for v in orphan_videos %}
+      <div class="orphan-video" data-video-id="{{ v.id }}">
+        <img src="{{ url_for('serve_upload', filename=v.poster_path) }}" alt="" loading="lazy">
+        <div class="orphan-video-meta">
+          {% if v.duration_s %}<span>{{ '%.0f'|format(v.duration_s) }} s</span>{% endif %}
+          <span>{{ (v.added_at or '')[:10] }}</span>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm"
+                onclick="reclaimVideo({{ v.id }}, this)">＋ Ajouter à l'album</button>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
   {# ────── ALBUM PRINCIPAL : sections auto + rail de marge aligné ────── #}
   <section class="album-section">
 
@@ -788,6 +810,7 @@
     finFd.append('upload_id', uploadId);
     if (meta.poster) finFd.append('poster', meta.poster, 'poster.jpg');
     finFd.append('duration_s', String(meta.duration));
+    if (file.lastModified) finFd.append('taken_at', new Date(file.lastModified).toISOString());
     finFd.append('width', String(meta.width));
     finFd.append('height', String(meta.height));
     finFd.append('is_margin', '0');
@@ -1112,6 +1135,22 @@
       startX = null;
     });
   })();
+
+  // v4.4 : rattacher une vidéo retrouvée à cet album
+  async function reclaimVideo(videoId, btn) {
+    btn.disabled = true; btn.textContent = 'Ajout…';
+    const fd = new FormData();
+    fd.append('_csrf', CSRF);
+    fd.append('video_id', videoId);
+    try {
+      const r = await fetch("{{ url_for('carnet_video_reclaim', cid_carnet=carnet.id) }}", { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!d.ok) { setError(d.error || 'Erreur'); btn.disabled = false; btn.textContent = "＋ Ajouter à l'album"; return; }
+      setSaved('Vidéo ajoutée à l\'album');
+      setTimeout(function(){ reloadKeepScroll(); }, 400);
+    } catch(e) { setError('Réseau'); btn.disabled = false; }
+  }
+  window.reclaimVideo = reclaimVideo;
 
   window.openViewer = openViewer; window.closeViewer = closeViewer; window.viewerNav = viewerNav;
   window.deletePage = deletePage; window.addTextBlock = addTextBlock; window.toggleMargin = toggleMargin;

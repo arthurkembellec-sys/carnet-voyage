@@ -103,6 +103,46 @@ def get_db():
     return conn
 
 
+def _migrate_album_pages_video(conn):
+    """v4.4 — recree album_pages pour autoriser type='video'.
+    C'etait LE bug des videos invisibles : le CHECK type IN ('photo','text')
+    faisait echouer l'INSERT de la page a la fin de chaque upload video
+    (la video etait sauvee, sa page jamais creee). Idempotente, dynamique :
+    reprend le schema live (colonnes ajoutees par ALTER comprises)."""
+    try:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='album_pages'"
+        ).fetchone()
+        if not row or not row[0]:
+            return
+        sql = row[0]
+        if "'video'" in sql:
+            return  # deja migre
+        if "('photo','text')" not in sql:
+            log.warning("album_pages : CHECK inattendu, migration video sautee")
+            return
+        log.info("v4.4 migration album_pages : ajout type 'video'")
+        new_sql = sql.replace("('photo','text')", "('photo','text','video')")
+        import re as _re
+        new_sql = _re.sub(r'CREATE TABLE (IF NOT EXISTS )?"?album_pages"?',
+                          'CREATE TABLE album_pages_new', new_sql, count=1)
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(album_pages)")]
+        col_list = ', '.join(f'"{c}"' for c in cols)
+        conn.executescript(f"""
+            PRAGMA foreign_keys=OFF;
+            {new_sql};
+            INSERT INTO album_pages_new ({col_list})
+                SELECT {col_list} FROM album_pages;
+            DROP TABLE album_pages;
+            ALTER TABLE album_pages_new RENAME TO album_pages;
+            CREATE INDEX IF NOT EXISTS idx_pages_carnet ON album_pages(carnet_id, position);
+            PRAGMA foreign_keys=ON;
+        """)
+        conn.commit()
+    except Exception as e:
+        log.error("migration album_pages video: %s", e)
+
+
 def _migrate_carnets_souhait(conn):
     """v1.4 — recree la table carnets pour autoriser type='souhait'
     et ajouter la colonne parent_souhait_id. Idempotente."""
@@ -163,6 +203,8 @@ def init_db():
 
     # v1.4 — migration speciale carnets (CHECK strict + ajout colonne)
     _migrate_carnets_souhait(conn)
+    # v4.4 — migration speciale album_pages (CHECK -> autorise 'video')
+    _migrate_album_pages_video(conn)
 
     migrations = [
         # ── v1.0 — couple : users + couples + invitations ─────────────
@@ -1716,6 +1758,15 @@ def carnet_apercu(cid_carnet):
                 break
     if cover_item is None:
         cover_item = next((p for p in pages_data['main'] if p.get('photo_path')), None)
+    # v4.4 : QR codes des videos (scanne le livre -> la video se lance)
+    video_qrs = {}
+    for p in pages_data['main']:
+        if p.get('video_token'):
+            try:
+                video_qrs[p['id']] = qr_svg(
+                    url_for('video_public', token=p['video_token'], _external=True))
+            except Exception as e:
+                log.warning("qr video %s: %s", p.get('id'), e)
     # Géo : présence de coordonnées sur le carnet
     geo_count = 0
     try:
@@ -1742,6 +1793,7 @@ def carnet_apercu(cid_carnet):
         margin_pages=pages_data['margin'],
         margin_plan=margin_plan,
         format=fmt, layout=layout, margin_pos=margin_pos,
+        video_qrs=video_qrs,
         formats=PDF_FORMATS, layouts=PDF_LAYOUTS, margin_positions=PDF_MARGIN_POSITIONS,
         cover_item=cover_item,
         geo_count=geo_count,
@@ -3036,7 +3088,16 @@ def carnet_album(cid_carnet):
             margin_by_day.setdefault(g['day'], []).extend(g['pages'])
         else:
             margin_rest.append(g)
+    # v4.4 : videos de l'espace jamais rattachees a un album (bug historique
+    # d'upload) -> proposees a la recuperation en tete d'album
+    orphan_videos = [dict(r) for r in query("""
+        SELECT v.* FROM videos v
+        WHERE v.couple_id = ?
+          AND NOT EXISTS (SELECT 1 FROM album_pages ap WHERE ap.video_id = v.id)
+        ORDER BY v.added_at ASC
+    """, (c['couple_id'],))]
     return render_template('album.html', carnet=c,
+        orphan_videos=orphan_videos,
         main_pages=pages['main'], margin_pages=pages['margin'],
         margin_groups=margin_groups,
         margin_by_day=margin_by_day, margin_rest=margin_rest,
@@ -3729,11 +3790,13 @@ def carnet_video_finalize(cid_carnet):
     rel_video = f"{c['couple_id']}/{final_name}"
     rel_poster = f"{c['couple_id']}/{poster_name}"
 
+    # v4.4 : date de la video (lastModified cote client) -> classement chrono
+    v_taken = (request.form.get('taken_at') or '').strip() or None
     vid = execute(
         "INSERT INTO videos (couple_id, file_path, poster_path, duration_s, "
-        "width, height, scan_token, added_by) VALUES (?,?,?,?,?,?,?,?)",
+        "width, height, taken_at, scan_token, added_by) VALUES (?,?,?,?,?,?,?,?,?)",
         (c['couple_id'], rel_video, rel_poster, duration_s, width, height,
-         token, session['uid'])
+         v_taken, token, session['uid'])
     )
     pos = _next_page_position(cid_carnet)
     page_id = execute(
@@ -3755,6 +3818,39 @@ def carnet_video_finalize(cid_carnet):
         'duration_s': duration_s,
         'is_margin': is_margin,
     })
+
+
+@app.route('/carnet/<int:cid_carnet>/video_reclaim', methods=['POST'])
+@couple_required
+def carnet_video_reclaim(cid_carnet):
+    """v4.4 : rattache a CET album une video orpheline de l'espace."""
+    c = _get_carnet_or_404(cid_carnet)
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    vid = request.form.get('video_id')
+    if not vid or not str(vid).isdigit():
+        return jsonify({'ok': False, 'error': 'video_id'}), 400
+    v = query("SELECT * FROM videos WHERE id=? AND couple_id=?",
+              (int(vid), c['couple_id']), one=True)
+    if not v:
+        return jsonify({'ok': False, 'error': 'Video introuvable'}), 404
+    exists = query("SELECT id FROM album_pages WHERE video_id=?", (v['id'],), one=True)
+    if exists:
+        return jsonify({'ok': False, 'error': 'Deja dans un album'}), 409
+    # Sans date de prise, on approxime avec la date d'upload (classement chrono)
+    if not v['taken_at'] and v['added_at']:
+        execute("UPDATE videos SET taken_at=? WHERE id=?", (v['added_at'], v['id']))
+    pos = _next_page_position(cid_carnet)
+    page_id = execute(
+        "INSERT INTO album_pages (carnet_id, type, position, video_id, "
+        "is_margin, added_by) VALUES (?,?,?,?,0,?)",
+        (cid_carnet, 'video', pos, v['id'], session['uid'])
+    )
+    try:
+        _recompute_sections(cid_carnet)
+    except Exception as e:
+        log.warning("recompute apres reclaim: %s", e)
+    return jsonify({'ok': True, 'page_id': page_id})
 
 
 @app.route('/v/<token>')
@@ -3998,8 +4094,10 @@ def espace_membres():
 def invite_share():
     """Genere (si besoin) un lien d'invitation pour l'espace courant."""
     cid = current_espace_id()
+    # v4.4 : lien GENERAL multi-usage — reste valable jusqu'a expiration,
+    # peu importe combien de personnes l'ont deja utilise.
     inv = query(
-        "SELECT * FROM invitations WHERE couple_id=? AND utilise=0 AND expires_at > ? "
+        "SELECT * FROM invitations WHERE couple_id=? AND expires_at > ? "
         "ORDER BY created_at DESC LIMIT 1",
         (cid, datetime.utcnow().isoformat()),
         one=True
@@ -4014,12 +4112,32 @@ def invite_share():
     else:
         token = inv['token']
     invite_url = url_for('invite_accept', token=token, _external=True)
+    exp_row = query("SELECT expires_at FROM invitations WHERE token=?", (token,), one=True)
     return render_template(
         'invite_share.html',
         invite_url=invite_url,
         qr=qr_svg(invite_url),
+        expires_at=(exp_row['expires_at'] if exp_row else '')[:10],
         couple=query("SELECT * FROM couples WHERE id=?", (cid,), one=True),
     )
+
+
+@app.route('/invite/regenerer', methods=['POST'])
+@couple_required
+def invite_regenerer():
+    """v4.4 : genere un NOUVEAU lien et invalide les anciens (securite)."""
+    if not csrf_check():
+        flash("Session expiree.", "err")
+        return redirect(url_for('invite_share'))
+    cid = current_espace_id()
+    execute("UPDATE invitations SET expires_at=? WHERE couple_id=?",
+            (datetime.utcnow().isoformat(), cid))
+    token = secrets.token_urlsafe(20)
+    expires = (datetime.utcnow() + timedelta(days=INVITATION_TTL_DAYS)).isoformat()
+    execute("INSERT INTO invitations (token, couple_id, expires_at) VALUES (?,?,?)",
+            (token, cid, expires))
+    flash("Nouveau lien genere — les anciens ne fonctionnent plus.", "ok")
+    return redirect(url_for('invite_share'))
 
 
 @app.route('/invite/<token>', methods=['GET', 'POST'])
@@ -4029,8 +4147,9 @@ def invite_accept(token):
     Multi-espaces : un user peut etre membre de plusieurs espaces, donc
     on l'AJOUTE comme membre (pas de blocage si deja dans un autre).
     """
+    # v4.4 : multi-usage — seule l'expiration invalide le lien
     inv = query(
-        "SELECT * FROM invitations WHERE token=? AND utilise=0 AND expires_at > ?",
+        "SELECT * FROM invitations WHERE token=? AND expires_at > ?",
         (token, datetime.utcnow().isoformat()),
         one=True
     )
@@ -4051,7 +4170,7 @@ def invite_accept(token):
         else:
             execute("INSERT OR IGNORE INTO espace_members (espace_id, user_id, role) VALUES (?,?,?)",
                     (eid, user['id'], 'member'))
-            execute("UPDATE invitations SET utilise=1 WHERE id=?", (inv['id'],))
+            # v4.4 : on ne grille plus le lien — il sert a inviter d'autres membres
         session['espace_id'] = eid
         session['couple_id'] = eid
         return redirect(url_for('home'))
@@ -4083,7 +4202,7 @@ def invite_accept(token):
             )
         execute("INSERT OR IGNORE INTO espace_members (espace_id, user_id, role) VALUES (?,?,?)",
                 (eid, uid, 'member'))
-        execute("UPDATE invitations SET utilise=1 WHERE id=?", (inv['id'],))
+        # v4.4 : lien multi-usage, on ne le grille plus
         session['uid'] = uid
         session['espace_id'] = eid
         session['couple_id'] = eid
