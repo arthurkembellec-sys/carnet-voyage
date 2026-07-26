@@ -1136,7 +1136,7 @@
     var bounds = [];
     pts.forEach(function(p){
       var marker = L.marker([p.lat, p.lng]).addTo(map);
-      marker.bindPopup('<img src="' + p.thumb + '" style="max-width:160px;display:block;margin-bottom:6px"><div style="font-size:11px;color:#6B6963">' + p.date + '</div>');
+      marker.bindPopup('<img src="' + p.thumb + '" style="max-width:160px;display:block;margin-bottom:6px"><div style="font-size:11px;color:#6C6E71">' + p.date + '</div>');
       bounds.push([p.lat, p.lng]);
     });
     if (bounds.length) map.fitBounds(bounds, { padding: [24, 24], maxZoom: 14 });

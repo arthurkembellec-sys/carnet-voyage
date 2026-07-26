@@ -11,7 +11,7 @@
 .activity-item{
   display: flex; gap: 12px; align-items: flex-start;
   padding: 14px 16px;
-  background: #FAF8F4;
+  background: #FBFBFA;
   border: 1px solid #ece6d9;
   border-radius: 10px;
 }
@@ -26,12 +26,12 @@
 .activity-text{
   margin: 0 0 4px;
   font-size: 14px; line-height: 1.45;
-  color: #1C1A17;
+  color: #17181A;
 }
 .activity-text strong{ font-weight: 600 }
 .activity-meta{
   font-size: 11px; letter-spacing: 0.04em;
-  color: #6A6357;
+  color: #6C6E71;
 }
 .activity-link{
   display: inline-block; margin-top: 6px;
@@ -42,7 +42,7 @@
 .activity-link:hover{ border-bottom-style: solid }
 .activity-empty{
   padding: 60px 20px; text-align: center;
-  color: #6A6357;
+  color: #6C6E71;
 }
 .activity-empty-icon{ font-size: 48px; margin-bottom: 12px }
 </style>
@@ -87,11 +87,11 @@
           {%- elif ev.kind == 'caption_updated' %}
             a modifié une légende
             {% if ev.carnet_title %}dans <strong>{{ ev.carnet_title }}</strong>{% endif %}
-            {% if p.preview %}<br><em style="color:#6A6357;font-size:13px">« {{ p.preview }} »</em>{% endif %}
+            {% if p.preview %}<br><em style="color:#6C6E71;font-size:13px">« {{ p.preview }} »</em>{% endif %}
           {%- elif ev.kind == 'margin_note_added' %}
             a ajouté une note de marge
             {% if ev.carnet_title %}à <strong>{{ ev.carnet_title }}</strong>{% endif %}
-            {% if p.caption %}<br><em style="color:#6A6357;font-size:13px">« {{ p.caption }} »</em>{% endif %}
+            {% if p.caption %}<br><em style="color:#6C6E71;font-size:13px">« {{ p.caption }} »</em>{% endif %}
           {%- elif ev.kind == 'carnet_transformed' %}
             a transformé une rêverie en voyage : <strong>{{ ev.carnet_title or p.title or '?' }}</strong>
           {%- elif ev.kind == 'member_joined' %}

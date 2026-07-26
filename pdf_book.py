@@ -29,7 +29,7 @@ GUTTER_BOTTOM_MM = 14.0
 SAFETY_MM = 5.0  # marge texte minimum
 
 # Couleurs de la charte (sRGB 0..1)
-CREAM_RGB = (0.980, 0.972, 0.957)
+CREAM_RGB = (0.988, 0.988, 0.985)  # v4.3 : blanc neutre (fini le parchemin)
 INK_RGB = (0.110, 0.102, 0.090)
 INK_SOFT_RGB = (0.240, 0.227, 0.207)
 INK_FAINT_RGB = (0.420, 0.410, 0.380)
@@ -287,7 +287,7 @@ def render_carnet_pdf(
             pdf.setFont('Helvetica-Bold', 8)
             pdf.setFillColorRGB(*ACCENT_RGB)
             # petit cartouche crème pour lisibilité sur photo sombre
-            pdf.setFillColorRGB(0.98, 0.972, 0.957, alpha=0.85)
+            pdf.setFillColorRGB(0.988, 0.988, 0.985, alpha=0.85)
             pdf.rect(cx + 2, cy + 2, 12, 12, fill=1, stroke=0)
             pdf.setFillColorRGB(*ACCENT_RGB)
             pdf.drawCentredString(cx + 8, cy + 5, with_letter)
@@ -381,7 +381,7 @@ def render_carnet_pdf(
             except Exception:
                 pass
         if with_letter and show_letters:
-            pdf.setFillColorRGB(0.98, 0.972, 0.957, alpha=0.85)
+            pdf.setFillColorRGB(0.988, 0.988, 0.985, alpha=0.85)
             pdf.rect(cx + 2, cy + 2, 12, 12, fill=1, stroke=0)
             pdf.setFillColorRGB(*ACCENT_RGB)
             pdf.setFont('Helvetica-Bold', 8)

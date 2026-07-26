@@ -7,7 +7,7 @@
    Aperçu livre — double-page, picker couverture, menu plein-page
    ───────────────────────────────────────────────────────────────────── */
 .book-stage{
-  background:linear-gradient(180deg, #efe9df 0%, #e5dfd3 100%);
+  background:linear-gradient(180deg, #ECECEB 0%, #E4E4E3 100%);
   padding:40px 16px 80px;
   min-height:100vh;
   margin:0 -20px;
@@ -21,7 +21,7 @@
   filter:drop-shadow(0 14px 30px rgba(0,0,0,0.18));
 }
 .book-page-l, .book-page-r{
-  background:#FAF8F4; position:relative; overflow:hidden;
+  background:#FBFBFA; position:relative; overflow:hidden;
   box-sizing:border-box;
 }
 .book-page-l{
@@ -69,7 +69,7 @@
 .book-cover-title{
   font-family:Fraunces, Georgia, serif; font-style:italic; font-weight:500;
   font-size:22px; line-height:1.15; margin:14px 0 6px;
-  color:#1C1A17; text-align:center;
+  color:#17181A; text-align:center;
   max-width:92%; word-wrap:break-word; overflow-wrap:break-word;
   hyphens:auto;
 }
@@ -77,7 +77,7 @@
 .book-cover-title.is-very-long{ font-size:15px; }
 .book-cover-sub{
   font-size:10px; letter-spacing:0.04em;
-  color:#6A6357; text-align:center; margin:0;
+  color:#6C6E71; text-align:center; margin:0;
 }
 .book-cover-rule{
   width:30px; height:1px; background:#C4654A; margin:8px auto;
@@ -85,9 +85,9 @@
 .book-cover-edit-hint{
   position:absolute; bottom:8px; right:10px;
   font-size:9px; letter-spacing:0.04em; text-transform:uppercase;
-  color:#6A6357; opacity:0; transition:opacity .15s;
-  background:#FAF8F4; padding:3px 7px; border-radius:3px;
-  border:1px solid #d8d2c5;
+  color:#6C6E71; opacity:0; transition:opacity .15s;
+  background:#FBFBFA; padding:3px 7px; border-radius:3px;
+  border:1px solid #DDDDDB;
 }
 .book-cover:hover .book-cover-edit-hint{ opacity:1; }
 
@@ -131,14 +131,14 @@
 }
 .book-cell-letter{
   position:absolute; top:3px; left:3px;
-  background:rgba(250,248,244,0.92);
+  background:rgba(251,251,250,0.92);
   color:#C4654A; font-weight:700; font-size:9px;
   width:14px; height:14px; line-height:14px;
   text-align:center; border-radius:2px;
 }
 .book-cell-fullbtn{
   position:absolute; top:3px; right:3px;
-  background:rgba(28,26,23,0.62); color:#fff;
+  background:rgba(23,24,26,0.62); color:#fff;
   border:none; cursor:pointer;
   width:18px; height:18px; line-height:18px;
   font-size:11px; border-radius:50%;
@@ -156,7 +156,7 @@
 
 .book-text{
   font-family:Fraunces, Georgia, serif; font-style:italic;
-  font-size:13px; line-height:1.5; color:#1C1A17;
+  font-size:13px; line-height:1.5; color:#17181A;
   text-align:center; padding:6px;
   display:flex; align-items:center; justify-content:center;
   height:100%;
@@ -165,35 +165,35 @@
 /* ─ Margin zone ─ */
 .book-margin{
   flex:0 0 28%; min-width:0;
-  border-left:1px dashed #d8d2c5;
+  border-left:1px dashed #DDDDDB;
   padding:0 4px 0 8px;
-  font-size:9px; line-height:1.35; color:#3D3830;
+  font-size:9px; line-height:1.35; color:#3B3D40;
   overflow:hidden;
 }
 .book-inner.mp-outer.is-verso .book-margin,
 .book-inner.mp-inner.is-recto .book-margin{
-  border-left:none; border-right:1px dashed #d8d2c5;
+  border-left:none; border-right:1px dashed #DDDDDB;
   padding:0 8px 0 4px;
 }
 .book-inner.mp-bottom .book-margin{
-  flex:0 0 22%; border-left:none; border-top:1px dashed #d8d2c5;
+  flex:0 0 22%; border-left:none; border-top:1px dashed #DDDDDB;
   padding:6px 4px 0; max-width:100%;
   display:flex; gap:6px; flex-wrap:wrap;
 }
 
 .book-margin-minimap{
   margin:0 auto 6px; width:90%; aspect-ratio:1.3 / 1;
-  background:#e9e2d3 url('') center / cover;
-  border:1px solid #d8d2c5;
+  background:#EBEBEA url('') center / cover;
+  border:1px solid #DDDDDB;
   position:relative; overflow:hidden;
 }
 .book-margin-minimap-label{
-  font-size:7px; letter-spacing:0.06em; color:#6A6357;
+  font-size:7px; letter-spacing:0.06em; color:#6C6E71;
   text-align:center; margin:2px 0 5px; text-transform:uppercase;
 }
 
 .book-margin-section-label{
-  font-size:7px; letter-spacing:0.06em; color:#6A6357;
+  font-size:7px; letter-spacing:0.06em; color:#6C6E71;
   font-weight:700; margin:0 0 3px;
 }
 .book-margin-rule{
@@ -201,7 +201,7 @@
 }
 .book-margin-item{
   margin:0 0 6px; padding-bottom:4px;
-  border-bottom:0.5px solid #e8e3d6;
+  border-bottom:0.5px solid #E8E8E6;
 }
 .book-margin-item:last-child{ border-bottom:none; }
 .book-margin-item-letter{
@@ -209,7 +209,7 @@
   margin-right:3px; font-size:9px;
 }
 .book-margin-item-text{
-  font-style:italic; color:#3D3830;
+  font-style:italic; color:#3B3D40;
 }
 .book-margin-thumb{
   width:100%; max-width:60px; height:auto;
@@ -217,7 +217,7 @@
 }
 
 .book-page-num{
-  position:absolute; bottom:6px; font-size:8px; color:#9B9286;
+  position:absolute; bottom:6px; font-size:8px; color:#A0A2A5;
   font-family:Geist, sans-serif;
 }
 .book-page-l .book-page-num{ left:14px; }
@@ -250,17 +250,17 @@
 }
 .cover-modal.open{ display:flex; }
 .cover-modal-card{
-  background:#FAF8F4; max-width:760px; width:100%;
+  background:#FBFBFA; max-width:760px; width:100%;
   max-height:85vh; overflow-y:auto;
   border-radius:14px; padding:24px;
-  box-shadow:0 2px 6px rgba(28,26,23,0.08), 0 16px 40px rgba(28,26,23,0.14);
+  box-shadow:0 2px 6px rgba(23,24,26,0.08), 0 16px 40px rgba(23,24,26,0.14);
 }
 .cover-modal-title{
   font-family:Fraunces, serif; font-style:italic; margin:0 0 6px;
   font-size:22px;
 }
 .cover-modal-sub{
-  font-size:12px; color:#6A6357; margin:0 0 16px;
+  font-size:12px; color:#6C6E71; margin:0 0 16px;
 }
 .cover-modal-grid{
   display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr));
@@ -270,30 +270,30 @@
   position:relative; cursor:pointer;
   border:2px solid transparent;
   aspect-ratio:1 / 1; overflow:hidden;
-  background:#e9e2d3; border-radius:8px;
+  background:#EBEBEA; border-radius:8px;
 }
 .cover-modal-item img{
   width:100%; height:100%; object-fit:cover;
 }
 .cover-modal-item:hover{ border-color:#C4654A; }
-.cover-modal-item.is-current{ border-color:#1C1A17; }
+.cover-modal-item.is-current{ border-color:#17181A; }
 .cover-modal-item.is-current::after{
   content:'✓'; position:absolute; top:4px; right:4px;
-  background:#1C1A17; color:#FAF8F4;
+  background:#17181A; color:#FBFBFA;
   width:18px; height:18px; line-height:18px;
   font-size:11px; text-align:center; border-radius:50%;
 }
 .cover-modal-close{
   background:transparent; border:none; cursor:pointer;
   font-size:22px; line-height:1; float:right; padding:0;
-  color:#6A6357;
+  color:#6C6E71;
 }
 
 /* ─ Menu contextuel plein-page ─ */
 .fullmode-menu{
-  position:fixed; background:#FAF8F4;
+  position:fixed; background:#FBFBFA;
   border:none; border-radius:12px;
-  box-shadow:0 2px 6px rgba(28,26,23,0.08), 0 16px 40px rgba(28,26,23,0.18);
+  box-shadow:0 2px 6px rgba(23,24,26,0.08), 0 16px 40px rgba(23,24,26,0.18);
   padding:6px; display:none; z-index:9100;
   font-size:12px; min-width:160px;
 }
@@ -303,15 +303,15 @@
   background:transparent; border:none; cursor:pointer;
   padding:8px 10px; border-radius:4px;
   font-family:Geist, sans-serif; font-size:12px;
-  color:#1C1A17;
+  color:#17181A;
 }
-.fullmode-menu button:hover{ background:#efe9df; }
+.fullmode-menu button:hover{ background:#ECECEB; }
 .fullmode-menu button.is-active{ color:#C4654A; font-weight:600; }
 
 /* ─ Toast ─ */
 .book-toast{
   position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
-  background:rgba(28,26,23,0.92); color:#FAF8F4;
+  background:rgba(23,24,26,0.92); color:#FBFBFA;
   padding:10px 18px; border-radius:999px;
   font-size:13px; opacity:0; transition:opacity .2s;
   pointer-events:none; z-index:9200;
@@ -323,18 +323,18 @@
   position:fixed; left:50%; transform:translateX(-50%);
   bottom:18px; z-index:9000;
   display:flex; gap:4px;
-  background:rgba(250,248,244,0.9);
+  background:rgba(251,251,250,0.9);
   -webkit-backdrop-filter:blur(14px);
   backdrop-filter:blur(14px);
   border-radius:30px;
   padding:5px;
-  box-shadow:0 10px 34px rgba(28,26,23,0.18);
-  border:1px solid rgba(28,26,23,0.12);
+  box-shadow:0 10px 34px rgba(23,24,26,0.18);
+  border:1px solid rgba(23,24,26,0.12);
 }
 .fab-bar button, .fab-bar a{
   display:flex; align-items:center; gap:6px;
   padding:10px 18px; border-radius:24px;
-  background:transparent; color:#3D3A35;
+  background:transparent; color:#3B3D40;
   border:none; cursor:pointer;
   font-family:Geist, system-ui, sans-serif; font-size:13px; font-weight:500;
   letter-spacing:0.02em; text-decoration:none;
@@ -346,7 +346,7 @@
 .fab-bar.is-loading .fab-status{
   display:inline-block; width:12px; height:12px;
   margin-left:6px; vertical-align:middle;
-  border:2px solid #3D3A35; border-top-color:transparent;
+  border:2px solid #3B3D40; border-top-color:transparent;
   border-radius:50%; animation:fab-spin .7s linear infinite;
 }
 .fab-status{ display:none }
@@ -747,7 +747,7 @@
           <div class="book-inner is-recto" style="display:flex;align-items:center;justify-content:center;flex-direction:column">
             <h2 style="font-family:Fraunces,serif;font-style:italic;font-size:24px;margin:0">Notes en marge</h2>
             <div style="width:30px;height:1px;background:#C4654A;margin:8px 0"></div>
-            <p style="font-size:9px;letter-spacing:0.06em;color:#6A6357">PHOTOS DE CONTEXTE · LIEUX · BILLETS</p>
+            <p style="font-size:9px;letter-spacing:0.06em;color:#6C6E71">PHOTOS DE CONTEXTE · LIEUX · BILLETS</p>
           </div>
         </div>
       </div>
@@ -797,7 +797,7 @@
   {# Menu contextuel plein-page + édition légende #}
   <div class="fullmode-menu" id="fullmode-menu">
     <button type="button" onclick="editCaption()">✎ Modifier la légende</button>
-    <div style="height:1px;background:#e8e3d6;margin:4px 6px"></div>
+    <div style="height:1px;background:#E8E8E6;margin:4px 6px"></div>
     <button type="button" data-mode="normal" onclick="setFullMode('normal')">Format normal</button>
     <button type="button" data-mode="full" onclick="setFullMode('full')">Pleine page</button>
     <button type="button" data-mode="spread" onclick="setFullMode('spread')">Double page (panorama)</button>
@@ -810,7 +810,7 @@
       <h3 class="cover-modal-title">Légende de la photo</h3>
       <p class="cover-modal-sub">Le texte qui apparaît sous la photo (ou en marge dans le livre).</p>
       <textarea id="caption-input" rows="4"
-                style="width:100%;padding:10px;border:1px solid #d8d2c5;border-radius:4px;font-family:Fraunces,serif;font-style:italic;font-size:14px;resize:vertical"
+                style="width:100%;padding:10px;border:1px solid #DDDDDB;border-radius:4px;font-family:Fraunces,serif;font-style:italic;font-size:14px;resize:vertical"
                 placeholder="Une phrase, un souvenir, un nom de lieu…"></textarea>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
         <button type="button" class="btn btn-secondary" onclick="closeCaption()">Annuler</button>

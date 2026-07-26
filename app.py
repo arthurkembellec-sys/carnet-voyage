@@ -2601,6 +2601,107 @@ def geo_search():
     return jsonify({'ok': True, 'results': _forward_geocode(q)})
 
 
+def _osrm_route(coords, profile='car'):
+    """v4.3 : itineraire reel via OSRM (instances FOSSGIS, fair use).
+    coords = [(lat, lng), ...] ordonnees. profile 'car' ou 'foot'.
+    Renvoie {duration_s, distance_m, legs, geometry:[[lat,lng],...]} ou None."""
+    import json as _json
+    if not coords or len(coords) < 2:
+        return None
+    profile = 'foot' if profile == 'foot' else 'car'
+    path = ';'.join(f"{lng:.6f},{lat:.6f}" for lat, lng in coords)
+    url = (f"https://routing.openstreetmap.de/routed-{profile}/route/v1/driving/"
+           f"{path}?overview=full&geometries=geojson&steps=false")
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': _GEO_UA})
+        with urllib.request.urlopen(req, timeout=9) as resp:
+            data = _json.loads(resp.read())
+        if data.get('code') != 'Ok' or not data.get('routes'):
+            return None
+        r = data['routes'][0]
+        return {
+            'duration_s': round(r.get('duration') or 0),
+            'distance_m': round(r.get('distance') or 0),
+            'legs': [{'duration_s': round(l.get('duration') or 0),
+                      'distance_m': round(l.get('distance') or 0)}
+                     for l in (r.get('legs') or [])],
+            'geometry': [[c[1], c[0]] for c in
+                         (r.get('geometry') or {}).get('coordinates') or []],
+        }
+    except Exception as e:
+        log.warning("osrm route fail (%s): %s", profile, e)
+        return None
+
+
+@app.route('/geo/route')
+@couple_required
+def geo_route():
+    """Itineraire du parcours reverie : ?coords=lat,lng;lat,lng&profile=car|foot"""
+    raw = (request.args.get('coords') or '').strip()
+    profile = request.args.get('profile') or 'car'
+    coords = []
+    for part in raw.split(';'):
+        bits = part.split(',')
+        if len(bits) != 2:
+            continue
+        lat, lng = _safe_float(bits[0]), _safe_float(bits[1])
+        if lat is None or lng is None:
+            continue
+        coords.append((lat, lng))
+    if len(coords) < 2 or len(coords) > 25:
+        return jsonify({'ok': False, 'error': '2 a 25 etapes'}), 400
+    route = _osrm_route(coords, profile)
+    if not route:
+        return jsonify({'ok': False, 'error': 'itineraire indisponible'})
+    return jsonify({'ok': True, **route})
+
+
+@app.route('/geo/sleep')
+@couple_required
+def geo_sleep():
+    """v4.3 : calque « Ou dormir » — hebergements OSM (Overpass) dans la zone.
+    ?bbox=sud,ouest,nord,est — zone limitee pour rester rapide et poli."""
+    import json as _json
+    raw = (request.args.get('bbox') or '').split(',')
+    if len(raw) != 4:
+        return jsonify({'ok': False, 'error': 'bbox invalide'}), 400
+    try:
+        s, w, n, e = (float(x) for x in raw)
+    except ValueError:
+        return jsonify({'ok': False, 'error': 'bbox invalide'}), 400
+    if not (n > s and e > w) or (n - s) > 1.2 or (e - w) > 1.6:
+        return jsonify({'ok': False, 'error': 'Zoome un peu pour chercher ou dormir'})
+    kinds = 'hotel|guest_house|hostel|chalet|camp_site|alpine_hut|wilderness_hut|apartment|motel'
+    q = (f'[out:json][timeout:10];('
+         f'node[tourism~"^({kinds})$"]({s},{w},{n},{e});'
+         f'way[tourism~"^({kinds})$"]({s},{w},{n},{e});'
+         f');out center 40;')
+    try:
+        req = urllib.request.Request(
+            'https://overpass-api.de/api/interpreter',
+            data=('data=' + urllib.parse.quote(q)).encode(),
+            headers={'User-Agent': _GEO_UA,
+                     'Content-Type': 'application/x-www-form-urlencoded'})
+        with urllib.request.urlopen(req, timeout=14) as resp:
+            data = _json.loads(resp.read())
+        out = []
+        for el in (data.get('elements') or [])[:40]:
+            lat = el.get('lat') or (el.get('center') or {}).get('lat')
+            lng = el.get('lon') or (el.get('center') or {}).get('lon')
+            if lat is None or lng is None:
+                continue
+            tags = el.get('tags') or {}
+            out.append({
+                'lat': lat, 'lng': lng,
+                'name': tags.get('name') or '',
+                'kind': tags.get('tourism') or '',
+            })
+        return jsonify({'ok': True, 'results': out})
+    except Exception as e:
+        log.warning("overpass sleep fail: %s", e)
+        return jsonify({'ok': False, 'error': 'recherche indisponible'})
+
+
 def _reverse_geocode(lat, lng):
     """Resoud des coordonnees GPS en {country, state, city, road, full}.
 

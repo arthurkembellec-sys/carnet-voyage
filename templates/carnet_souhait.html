@@ -24,6 +24,10 @@
                placeholder="Chercher un lieu à épingler…" autocomplete="off">
         <div class="reverie-search-results" id="geo-results" hidden></div>
       </div>
+      <button type="button" class="btn btn-secondary btn-sm" id="btn-sleep"
+              title="Voir où dormir dans la zone (hôtels, gîtes, campings, refuges)">
+        🛏
+      </button>
       <button type="button" class="btn btn-primary btn-sm" id="btn-route-mode">
         🧭 Tracer le parcours
       </button>
@@ -37,7 +41,12 @@
       <span class="route-bar-label">
         Tape les épingles dans l'ordre du voyage —
         <strong id="route-count">0</strong> étape(s)
+        <span class="route-time" id="route-time"></span>
       </span>
+      <div class="route-profile" id="route-profile">
+        <button type="button" data-profile="car" class="is-active" title="Temps en voiture">🚗</button>
+        <button type="button" data-profile="foot" title="Temps à pied">🚶</button>
+      </div>
       <div class="route-bar-actions">
         <button type="button" class="btn btn-secondary btn-sm" id="btn-route-cancel">Annuler</button>
         <button type="button" class="btn btn-primary btn-sm" id="btn-route-validate" disabled>
@@ -182,7 +191,12 @@
           <input type="date" name="date_end">
         </label>
       </div>
+      <p class="route-total" id="route-total"></p>
+      <div class="route-days" id="route-days"></div>
       <ol class="route-steps" id="route-steps"></ol>
+      <p class="route-days-hint" id="route-days-hint" hidden>
+        Esquisse indicative — glisse une étape d'un jour à l'autre si tu préfères. Rien n'est figé.
+      </p>
       <div class="form-actions">
         <button type="button" class="btn btn-ghost" onclick="closeRouteModal()">Retour à la carte</button>
         <button type="submit" class="btn btn-primary">✨ Créer le voyage</button>
@@ -214,6 +228,23 @@
       if (y !== null) { sessionStorage.removeItem(SCROLL_KEY); window.scrollTo(0, parseInt(y,10)||0); }
     } catch(e) {}
   });
+
+  /* ─ Petit toast discret (statuts de la page rêverie) ─ */
+  function _toast(msg) {
+    var t = document.getElementById('rev-toast');
+    if (!t) {
+      t = document.createElement('div');
+      t.id = 'rev-toast'; t.className = 'rev-toast';
+      document.body.appendChild(t);
+    }
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._tm);
+    t._tm = setTimeout(function(){ t.classList.remove('show'); }, 2400);
+  }
+  function setSaving(m) { if (m) _toast(m); }
+  function setSaved(m) { if (m) _toast(m); }
+  function setError(m) { _toast(m || 'Erreur'); }
 
   /* ─ Confirmation inline (pas de confirm() bloquant) ─ */
   function armAction(btn, label, fn) {
@@ -304,7 +335,7 @@
 
   if (!window.L) {
     document.getElementById('reverie-map').innerHTML =
-      '<p style="padding:40px;text-align:center;color:#A39C92;font-style:italic">Carte indisponible pour le moment.</p>';
+      '<p style="padding:40px;text-align:center;color:#A6A8AB;font-style:italic">Carte indisponible pour le moment.</p>';
   }
   var map = window.L ? L.map('reverie-map', { scrollWheelZoom: false }) : null;
   if (map) L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
@@ -331,11 +362,139 @@
     });
     var line = routeOrder.map(function(id){ return [routePins[id].data.lat, routePins[id].data.lng]; });
     if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
-    if (line.length >= 2) {
-      routeLine = L.polyline(line, { color: '#A8503D', weight: 2.5, dashArray: '6 7', opacity: 0.8 }).addTo(map);
+    if (line.length >= 2 && !lastRoute) {
+      routeLine = L.polyline(line, { color: '#A8503D', weight: 2.5, dashArray: '6 7', opacity: 0.7 }).addTo(map);
     }
     document.getElementById('route-count').textContent = routeOrder.length;
     document.getElementById('btn-route-validate').disabled = routeOrder.length < 1;
+    scheduleRouteFetch();
+  }
+
+  /* ─ Itinéraire réel (OSRM via /geo/route) : temps voiture / à pied ─ */
+  var routeProfile = 'car';
+  var lastRoute = null;      // {duration_s, legs, geometry} pour routeOrder courant
+  var routeGeomLine = null;
+  var routeFetchTimer = null;
+  var routeFetchSeq = 0;
+
+  function fmtDur(s) {
+    if (s == null) return '';
+    var m = Math.round(s / 60);
+    if (m < 60) return m + ' min';
+    var h = Math.floor(m / 60), mm = m % 60;
+    return h + ' h' + (mm ? ' ' + String(mm).padStart(2, '0') : '');
+  }
+  function clearRouteGeom() {
+    if (routeGeomLine) { map.removeLayer(routeGeomLine); routeGeomLine = null; }
+  }
+  function updateRouteTimeLabel() {
+    var el = document.getElementById('route-time');
+    if (!el) return;
+    if (routeOrder.length < 2) { el.textContent = ''; return; }
+    el.textContent = lastRoute
+      ? '· ≈ ' + fmtDur(lastRoute.duration_s) + (routeProfile === 'car' ? ' 🚗' : ' 🚶')
+      : '· calcul…';
+  }
+  function scheduleRouteFetch() {
+    clearTimeout(routeFetchTimer);
+    lastRoute = null;
+    clearRouteGeom();
+    updateRouteTimeLabel();
+    if (routeOrder.length < 2) return;
+    routeFetchTimer = setTimeout(fetchRoute, 650);
+  }
+  async function fetchRoute() {
+    var seq = ++routeFetchSeq;
+    var coords = routeOrder.map(function(id){
+      var d = routePins[id].data;
+      return d.lat.toFixed(6) + ',' + d.lng.toFixed(6);
+    }).join(';');
+    try {
+      var d = await fetch('/geo/route?coords=' + encodeURIComponent(coords) + '&profile=' + routeProfile)
+        .then(function(r){ return r.json(); });
+      if (seq !== routeFetchSeq) return;      // une sélection plus récente est partie
+      if (!d.ok) { updateRouteTimeLabel(); return; }
+      lastRoute = d;
+      if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+      clearRouteGeom();
+      if (d.geometry && d.geometry.length >= 2) {
+        routeGeomLine = L.polyline(d.geometry, { color: '#A8503D', weight: 3.5, opacity: 0.85 }).addTo(map);
+      }
+      updateRouteTimeLabel();
+      if (!document.getElementById('route-modal').hidden) buildPlanning();
+    } catch(e) { console.warn('route', e); }
+  }
+  document.querySelectorAll('#route-profile button').forEach(function(b){
+    b.addEventListener('click', function(){
+      routeProfile = b.dataset.profile;
+      document.querySelectorAll('#route-profile button').forEach(function(x){
+        x.classList.toggle('is-active', x === b);
+      });
+      scheduleRouteFetch();
+    });
+  });
+
+  /* ─ Calque « Où dormir » (hébergements OSM) ─ */
+  var sleepOn = false, sleepLayer = null, sleepTimer = null;
+  var SLEEP_LABELS = { hotel:'Hôtel', guest_house:'Gîte / chambre d\'hôtes', hostel:'Auberge',
+    chalet:'Chalet', camp_site:'Camping', alpine_hut:'Refuge', wilderness_hut:'Cabane',
+    apartment:'Appartement', motel:'Motel' };
+  function sleepIcon() {
+    return L.divIcon({ className: 'sleep-icon', html: '🛏', iconSize: [24, 24], iconAnchor: [12, 12] });
+  }
+  async function fetchSleep() {
+    if (!sleepOn || !map) return;
+    var b = map.getBounds();
+    var bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()]
+      .map(function(x){ return x.toFixed(5); }).join(',');
+    try {
+      var d = await fetch('/geo/sleep?bbox=' + bbox).then(function(r){ return r.json(); });
+      if (!sleepOn) return;
+      if (sleepLayer) { map.removeLayer(sleepLayer); sleepLayer = null; }
+      if (!d.ok) { setError(d.error || 'Où dormir indisponible'); return; }
+      sleepLayer = L.layerGroup();
+      d.results.forEach(function(h){
+        var m = L.marker([h.lat, h.lng], { icon: sleepIcon(), opacity: 0.92 });
+        var name = h.name || SLEEP_LABELS[h.kind] || 'Hébergement';
+        var safe = name.replace(/</g, '&lt;').replace(/"/g, '&quot;');
+        m.bindPopup('<div class="sleep-pop"><strong>' + safe + '</strong>' +
+          '<span>' + (SLEEP_LABELS[h.kind] || '') + '</span>' +
+          '<button type="button" class="btn btn-primary btn-sm" onclick="pinSleep(' +
+          h.lat + ',' + h.lng + ',&quot;' + safe + '&quot;)">📍 Épingler</button></div>');
+        sleepLayer.addLayer(m);
+      });
+      sleepLayer.addTo(map);
+      setSaved(d.results.length + ' hébergement(s) dans la zone');
+    } catch(e) { console.warn('sleep', e); }
+  }
+  window.pinSleep = async function(lat, lng, name) {
+    var fd = new FormData();
+    fd.append('_csrf', CSRF);
+    fd.append('kind', 'location');
+    fd.append('title', '🛏 ' + name);
+    fd.append('address', name);
+    fd.append('geo_lat', String(lat));
+    fd.append('geo_lng', String(lng));
+    try {
+      var r = await fetch(URL_ADD_ITEM, { method: 'POST', body: fd });
+      var d = await r.json();
+      if (!d.ok) { setError(d.error || 'Erreur'); return; }
+      reloadKeepScroll();
+    } catch(e) { setError('Réseau'); }
+  };
+  var btnSleep = document.getElementById('btn-sleep');
+  if (btnSleep && map) {
+    btnSleep.addEventListener('click', function(){
+      sleepOn = !sleepOn;
+      btnSleep.classList.toggle('is-on', sleepOn);
+      if (sleepOn) { setSaving('Recherche des hébergements…'); fetchSleep(); }
+      else if (sleepLayer) { map.removeLayer(sleepLayer); sleepLayer = null; }
+    });
+    map.on('moveend', function(){
+      if (!sleepOn) return;
+      clearTimeout(sleepTimer);
+      sleepTimer = setTimeout(fetchSleep, 900);
+    });
   }
 
   function routeToggle(itemId) {
@@ -481,23 +640,176 @@
   });
   document.getElementById('btn-route-cancel').addEventListener('click', function(){ setRouteMode(false); });
 
-  document.getElementById('btn-route-validate').addEventListener('click', function(){
-    if (!routeOrder.length) return;
+  /* ─ Esquisse de journées : répartition auto par temps de route, ajustable ─ */
+  var dayGroups = [];   // [[itemId,...], ...] — un tableau par jour
+
+  function splitByTime(order, legs, nbDays) {
+    // Répartition contiguë équilibrée : leg[i] relie order[i] -> order[i+1],
+    // attribué au jour de l'étape d'arrivée (on roule le matin).
+    if (nbDays <= 1 || order.length <= 1) return [order.slice()];
+    nbDays = Math.min(nbDays, order.length);
+    var total = (legs || []).reduce(function(a, l){ return a + (l.duration_s || 0); }, 0);
+    if (!total) {
+      // Pas de temps connus : répartition égale en nombre d'étapes
+      var per = Math.ceil(order.length / nbDays), gs = [];
+      for (var i = 0; i < order.length; i += per) gs.push(order.slice(i, i + per));
+      return gs;
+    }
+    var groups = [], cur = [order[0]], acc = 0;
+    for (var i = 1; i < order.length; i++) {
+      var legT = legs[i-1] ? (legs[i-1].duration_s || 0) : 0;
+      var remainingSteps = order.length - i;
+      var remainingDays = nbDays - groups.length - 1;
+      var target = total * (groups.length + 1) / nbDays;
+      if (groups.length < nbDays - 1 &&
+          (acc + legT > target || remainingSteps <= remainingDays)) {
+        groups.push(cur); cur = [];
+      }
+      acc += legT;
+      cur.push(order[i]);
+    }
+    groups.push(cur);
+    return groups;
+  }
+
+  function dayDriveTime(groups, k, legs) {
+    // Temps du jour k = tous les tronçons dont l'étape d'ARRIVÉE est dans ce jour
+    if (!legs || !legs.length) return null;
+    var flat = [].concat.apply([], groups);
+    var start = 0;
+    for (var i = 0; i < k; i++) start += groups[i].length;
+    var t = 0;
+    for (var j = 0; j < groups[k].length; j++) {
+      var idx = start + j;             // position globale de l'étape
+      if (idx === 0) continue;         // la 1re étape du voyage n'arrive de nulle part
+      t += legs[idx-1] ? (legs[idx-1].duration_s || 0) : 0;
+    }
+    return t;
+  }
+
+  function fmtDayLabel(dateStart, k) {
+    try {
+      var d = new Date(dateStart + 'T12:00:00');
+      d.setDate(d.getDate() + k);
+      return d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
+    } catch(e) { return 'Jour ' + (k+1); }
+  }
+
+  function currentOrder() {
+    return dayGroups.length ? [].concat.apply([], dayGroups) : routeOrder.slice();
+  }
+
+  function syncFormIds() {
     var idsDiv = document.getElementById('route-form-ids');
     idsDiv.innerHTML = '';
-    var steps = document.getElementById('route-steps');
-    steps.innerHTML = '';
-    routeOrder.forEach(function(id){
+    currentOrder().forEach(function(id){
       var inp = document.createElement('input');
       inp.type = 'hidden'; inp.name = 'item_ids'; inp.value = id;
       idsDiv.appendChild(inp);
-      var li = document.createElement('li');
-      li.textContent = routePins[id].data.title;
-      steps.appendChild(li);
     });
+  }
+
+  function buildPlanning() {
+    var ds = document.querySelector('#route-form input[name="date_start"]').value;
+    var de = document.querySelector('#route-form input[name="date_end"]').value;
+    var daysEl = document.getElementById('route-days');
+    var stepsEl = document.getElementById('route-steps');
+    var totalEl = document.getElementById('route-total');
+    var hintEl = document.getElementById('route-days-hint');
+    var legs = lastRoute ? lastRoute.legs : null;
+    totalEl.textContent = lastRoute
+      ? '≈ ' + fmtDur(lastRoute.duration_s) + (routeProfile === 'car' ? ' de route' : ' de marche') + ' au total'
+      : (routeOrder.length >= 2 ? 'Temps de trajet en cours de calcul…' : '');
+    // Sans dates : simple liste ordonnée
+    if (!ds || !de || de < ds) {
+      dayGroups = [];
+      daysEl.innerHTML = ''; hintEl.hidden = true; stepsEl.hidden = false;
+      stepsEl.innerHTML = '';
+      routeOrder.forEach(function(id){
+        var li = document.createElement('li');
+        li.textContent = routePins[id].data.title;
+        stepsEl.appendChild(li);
+      });
+      syncFormIds();
+      return;
+    }
+    // Avec dates : cartes par jour, glissables
+    var nbDays = Math.min(21, Math.round((new Date(de) - new Date(ds)) / 86400000) + 1);
+    dayGroups = splitByTime(currentOrder(), legs, nbDays);
+    stepsEl.hidden = true; hintEl.hidden = false;
+    daysEl.innerHTML = '';
+    dayGroups.forEach(function(g, k){
+      var card = document.createElement('div');
+      card.className = 'day-card';
+      var t = dayDriveTime(dayGroups, k, legs);
+      card.innerHTML = '<div class="day-card-head"><span class="day-card-date">' +
+        fmtDayLabel(ds, k) + '</span><span class="day-card-time">' +
+        (t != null && t > 0 ? '≈ ' + fmtDur(t) + (routeProfile === 'car' ? ' 🚗' : ' 🚶') : (t === 0 ? 'sur place' : '')) +
+        '</span></div>';
+      var ul = document.createElement('ul');
+      ul.className = 'day-card-steps';
+      ul.dataset.day = k;
+      g.forEach(function(id){
+        var li = document.createElement('li');
+        li.className = 'day-step';
+        li.dataset.itemId = id;
+        li.textContent = routePins[id].data.title;
+        ul.appendChild(li);
+      });
+      card.appendChild(ul);
+      daysEl.appendChild(card);
+    });
+    syncFormIds();
+    // Glisser une étape d'un jour à l'autre
+    if (window.Sortable) {
+      daysEl.querySelectorAll('.day-card-steps').forEach(function(ul){
+        new Sortable(ul, {
+          group: 'jours', animation: 150,
+          onEnd: function(){
+            dayGroups = Array.from(daysEl.querySelectorAll('.day-card-steps')).map(function(u){
+              return Array.from(u.querySelectorAll('.day-step')).map(function(li){
+                return Number(li.dataset.itemId);
+              });
+            }).filter(function(g){ return true; });
+            var newOrder = currentOrder();
+            var changed = JSON.stringify(newOrder) !== JSON.stringify(routeOrder);
+            syncFormIds();
+            if (changed) {
+              routeOrder = newOrder;
+              refreshPinIcons();          // renumérote + re-calcule l'itinéraire
+            } else {
+              rerenderDayTimes();
+            }
+          }
+        });
+      });
+    }
+  }
+  function rerenderDayTimes() {
+    var legs = lastRoute ? lastRoute.legs : null;
+    document.querySelectorAll('#route-days .day-card').forEach(function(card, k){
+      var t = dayDriveTime(dayGroups, k, legs);
+      var el = card.querySelector('.day-card-time');
+      if (el) el.textContent = t != null && t > 0
+        ? '≈ ' + fmtDur(t) + (routeProfile === 'car' ? ' 🚗' : ' 🚶')
+        : (t === 0 ? 'sur place' : '');
+    });
+  }
+
+  document.getElementById('btn-route-validate').addEventListener('click', function(){
+    if (!routeOrder.length) return;
+    dayGroups = [];
     document.getElementById('route-modal-count').textContent = routeOrder.length;
+    buildPlanning();
     document.getElementById('route-modal').hidden = false;
     document.body.style.overflow = 'hidden';
+  });
+  ['date_start', 'date_end'].forEach(function(n){
+    document.querySelector('#route-form input[name="' + n + '"]')
+      .addEventListener('change', function(){ dayGroups = []; buildPlanning(); });
+  });
+  document.getElementById('route-form').addEventListener('submit', function(){
+    syncFormIds();   // l'ordre final = concaténation des jours ajustés
   });
   function closeRouteModal() {
     document.getElementById('route-modal').hidden = true;
