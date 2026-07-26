@@ -14,26 +14,38 @@
     <p class="kicker">Rêverie</p>
     <h1 class="display"><em>{{ carnet.title }}</em></h1>
     {% if carnet.location %}<p class="lead">{{ carnet.location }}</p>{% endif %}
-    <div class="cta-row">
-      <a href="{{ url_for('carnet_transformer', cid_carnet=carnet.id) }}" class="btn btn-primary">
-        ✨ Transformer en voyage
-      </a>
-      <a href="{{ url_for('carnet_apercu', cid_carnet=carnet.id) }}" class="btn btn-secondary">
-        📖 Aperçu livre
-      </a>
-    </div>
   </section>
 
-  {# ────── Carte des lieux (Brief 07) ────── #}
-  {% if geo_items %}
-  <section class="album-map-wrap">
-    <div class="album-map-head">
-      <span class="kicker">Sur la carte</span>
-      <span class="map-count">{{ geo_items|length }} lieu(x) repéré(s)</span>
+  {# ────── LA CARTE DES IDÉES (v4.1) ────── #}
+  <section class="reverie-map-card">
+    <div class="reverie-map-head">
+      <div class="reverie-search-wrap">
+        <input type="search" id="geo-search" class="reverie-search"
+               placeholder="Chercher un lieu à épingler…" autocomplete="off">
+        <div class="reverie-search-results" id="geo-results" hidden></div>
+      </div>
+      <button type="button" class="btn btn-primary btn-sm" id="btn-route-mode">
+        🧭 Tracer le parcours
+      </button>
     </div>
-    <div id="reverie-map" class="album-map"></div>
+    <div id="reverie-map" class="reverie-map"></div>
+    <p class="reverie-map-hint" id="map-hint">
+      Touche la carte pour épingler une idée · glisse une épingle pour la déplacer
+    </p>
+    {# Barre du mode parcours #}
+    <div class="route-bar" id="route-bar" hidden>
+      <span class="route-bar-label">
+        Tape les épingles dans l'ordre du voyage —
+        <strong id="route-count">0</strong> étape(s)
+      </span>
+      <div class="route-bar-actions">
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-route-cancel">Annuler</button>
+        <button type="button" class="btn btn-primary btn-sm" id="btn-route-validate" disabled>
+          ✨ Valider ce parcours
+        </button>
+      </div>
+    </div>
   </section>
-  {% endif %}
 
   {% if voyages %}
   <section class="voyages-issus">
@@ -41,7 +53,7 @@
     <ul class="member-list">
       {% for v in voyages %}
       <li class="member-item">
-        <div class="member-avatar" style="background:#A8503D">✈</div>
+        <div class="member-avatar" style="background:var(--accent)">✈</div>
         <div class="member-info">
           <a href="{{ url_for('carnet_view', cid_carnet=v.id) }}" class="member-name" style="color:var(--ink)">
             {{ v.title }}
@@ -55,7 +67,9 @@
   {% endif %}
 
   <section class="souhait-items">
-    <h2 class="section-title">Items <span class="section-hint">Liens, photos, lieux, budget — pour preparer le voyage</span></h2>
+    <h2 class="section-title">Les idées
+      <span class="section-hint">Liens, photos, lieux, notes, budget — tout ce qui fait rêver</span>
+    </h2>
 
     <ul class="items-grid" id="items-grid">
       {% for it in items %}
@@ -65,20 +79,25 @@
 
     {% if not items %}
     <div class="empty-state empty-section" id="empty-items">
-      <p class="empty-display"><em>Pas encore d'idee.</em></p>
-      <p class="empty-lead">Ajoute des liens, photos, lieux, budget — tout ce qui fait rever vers ce voyage.</p>
+      <p class="empty-display"><em>Pas encore d'idée.</em></p>
+      <p class="empty-lead">Épingle un lieu sur la carte, ou ajoute liens, photos et notes.</p>
     </div>
     {% endif %}
+
+    <p class="souhait-transformer-link">
+      Besoin d'une sélection fine (liens, notes, budget) ?
+      <a href="{{ url_for('carnet_transformer', cid_carnet=carnet.id) }}">Transformer en voyage — mode détaillé</a>
+    </p>
   </section>
 
 </main>
 
 <!-- Footer flottant : actions ajout -->
 <div class="album-footer">
+  <button type="button" class="fab-btn" onclick="showAddModal('location')"><span class="fab-icon">📍</span> Lieu</button>
   <button type="button" class="fab-btn" onclick="showAddModal('link')"><span class="fab-icon">🔗</span> Lien</button>
   <button type="button" class="fab-btn" onclick="showAddModal('photo')"><span class="fab-icon">📷</span> Photo</button>
   <button type="button" class="fab-btn" onclick="showAddModal('note')"><span class="fab-icon">¶</span> Note</button>
-  <button type="button" class="fab-btn" onclick="showAddModal('location')"><span class="fab-icon">📍</span> Lieu</button>
   <button type="button" class="fab-btn" onclick="showAddModal('budget')"><span class="fab-icon">€</span> Budget</button>
 </div>
 
@@ -105,12 +124,13 @@
 
       {# Note #}
       <label class="field" data-kind="note"><span class="label">Note</span>
-        <textarea name="body" id="modal-input-note" rows="4" placeholder="Une idee, une envie..."></textarea>
+        <textarea name="body" id="modal-input-note" rows="4" placeholder="Une idée, une envie..."></textarea>
       </label>
 
       {# Lieu #}
       <label class="field" data-kind="location"><span class="label">Adresse</span>
         <input type="text" name="address" id="modal-input-address" placeholder="ex. Taormina, Sicile">
+        <span class="field-hint">Astuce : la recherche au-dessus de la carte épingle directement.</span>
       </label>
 
       {# Budget #}
@@ -136,17 +156,82 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/exifr@7/dist/lite.umd.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
-{% if geo_items %}
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-{% endif %}
+<!-- Modal validation du parcours -->
+<div class="souhait-modal" id="route-modal" hidden>
+  <div class="souhait-modal-card">
+    <div class="souhait-modal-head">
+      <h3>Valider le parcours</h3>
+      <button type="button" class="souhait-modal-close" onclick="closeRouteModal()">✕</button>
+    </div>
+    <p class="route-modal-sub">
+      <span id="route-modal-count"></span> étapes partent en voyage, dans l'ordre tracé.
+      Les autres idées restent dans la rêverie.
+    </p>
+    <form method="POST" action="{{ url_for('carnet_transformer', cid_carnet=carnet.id) }}" id="route-form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="ordered" value="1">
+      <div id="route-form-ids"></div>
+      <label class="field"><span class="label">Titre du voyage</span>
+        <input type="text" name="title" id="route-title" maxlength="80" value="{{ carnet.title }}">
+      </label>
+      <div class="field-row">
+        <label class="field"><span class="label">Du</span>
+          <input type="date" name="date_start">
+        </label>
+        <label class="field"><span class="label">Au</span>
+          <input type="date" name="date_end">
+        </label>
+      </div>
+      <ol class="route-steps" id="route-steps"></ol>
+      <div class="form-actions">
+        <button type="button" class="btn btn-ghost" onclick="closeRouteModal()">Retour à la carte</button>
+        <button type="submit" class="btn btn-primary">✨ Créer le voyage</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='vendor/exifr-lite.umd.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/Sortable.min.js') }}"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
+<script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
 <script>
   const CSRF = "{{ csrf_token() }}";
   const URL_ADD_ITEM = "{{ url_for('carnet_add_item', cid_carnet=carnet.id) }}";
+  const URL_GEO_SEARCH = "{{ url_for('geo_search') }}";
 
   const KIND_LABELS = { link:'Lien', photo:'Photo', note:'Note', location:'Lieu', budget:'Budget' };
+
+  /* ─ Reload en gardant le scroll ─ */
+  const SCROLL_KEY = 'reverieScroll:' + location.pathname;
+  function reloadKeepScroll() {
+    try { sessionStorage.setItem(SCROLL_KEY, String(window.scrollY)); } catch(e) {}
+    location.reload();
+  }
+  document.addEventListener('DOMContentLoaded', function(){
+    try {
+      const y = sessionStorage.getItem(SCROLL_KEY);
+      if (y !== null) { sessionStorage.removeItem(SCROLL_KEY); window.scrollTo(0, parseInt(y,10)||0); }
+    } catch(e) {}
+  });
+
+  /* ─ Confirmation inline (pas de confirm() bloquant) ─ */
+  function armAction(btn, label, fn) {
+    if (btn.dataset.armed === '1') {
+      btn.dataset.armed = ''; btn.classList.remove('is-armed');
+      btn.textContent = btn.dataset.originalLabel || btn.textContent;
+      fn(); return;
+    }
+    btn.dataset.originalLabel = btn.textContent;
+    btn.dataset.armed = '1'; btn.classList.add('is-armed');
+    btn.textContent = label;
+    clearTimeout(btn._armTimer);
+    btn._armTimer = setTimeout(function(){
+      btn.dataset.armed = ''; btn.classList.remove('is-armed');
+      btn.textContent = btn.dataset.originalLabel;
+    }, 3500);
+  }
+  window.armAction = armAction;
 
   function showAddModal(kind) {
     document.getElementById('modal-kind').value = kind;
@@ -168,7 +253,6 @@
     var fd = new FormData(e.target);
     var kind = fd.get('kind');
 
-    // Si photo : lire EXIF avant submit
     if (kind === 'photo') {
       var f = document.getElementById('modal-input-photo').files[0];
       if (f && window.exifr) {
@@ -191,48 +275,235 @@
       var d = await r.json();
       if (!d.ok) { alert('Erreur : ' + (d.error || '')); return; }
       closeAddModal();
-      location.reload();
-    } catch (e) { alert('Reseau : ' + e.message); }
+      reloadKeepScroll();
+    } catch (e) { alert('Réseau : ' + e.message); }
   });
 
-  async function deleteItem(itemId) {
-    if (!confirm('Supprimer cet item ?')) return;
+  async function deleteItem(itemId, btn) {
+    if (btn) { armAction(btn, 'Confirmer ?', function(){ _deleteItem(itemId); }); return; }
+    _deleteItem(itemId);
+  }
+  async function _deleteItem(itemId) {
     var fd = new FormData(); fd.append('_csrf', CSRF);
     var r = await fetch('/item/' + itemId + '/supprimer', { method:'POST', body: fd });
     var d = await r.json();
     if (!d.ok) { alert('Erreur'); return; }
     var li = document.querySelector('.item-card[data-item-id="' + itemId + '"]');
     if (li) li.remove();
+    if (routePins[itemId]) { routeRemove(itemId); map.removeLayer(routePins[itemId].marker); delete routePins[itemId]; }
   }
   window.deleteItem = deleteItem;
 
-  // ── Mini-carte des lieux (Brief 07) ─────────────────────────────
-  {% if geo_items %}
-  (function(){
-    var el = document.getElementById('reverie-map');
-    if (!el || !window.L) return;
-    var pts = [
-      {% for g in geo_items %}
-      { lat: {{ g.lat }}, lng: {{ g.lng }}, kind: "{{ g.kind }}",
-        title: {{ (g.title or '')|tojson }}{% if g.thumb %}, thumb: "{{ g.thumb }}"{% endif %} },
-      {% endfor %}
-    ];
-    var map = L.map(el, { scrollWheelZoom: false });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '© OpenStreetMap'
-    }).addTo(map);
-    var bounds = [];
-    pts.forEach(function(p){
-      var marker = L.marker([p.lat, p.lng]).addTo(map);
-      var html = '<strong>' + (p.title || (p.kind === 'photo' ? 'Photo' : 'Lieu')) + '</strong>';
-      if (p.thumb) html = '<img src="' + p.thumb + '" style="max-width:160px;display:block;margin-bottom:6px">' + html;
-      marker.bindPopup(html);
-      bounds.push([p.lat, p.lng]);
+  /* ══════════ LA CARTE DES IDÉES ══════════ */
+  var GEO_ITEMS = [
+    {% for g in geo_items %}
+    { itemId: {{ g.item_id }}, lat: {{ g.lat }}, lng: {{ g.lng }}, kind: "{{ g.kind }}",
+      title: {{ (g.title or '')|tojson }}{% if g.thumb %}, thumb: "{{ g.thumb }}"{% endif %} },
+    {% endfor %}
+  ];
+
+  if (!window.L) {
+    document.getElementById('reverie-map').innerHTML =
+      '<p style="padding:40px;text-align:center;color:#A39C92;font-style:italic">Carte indisponible pour le moment.</p>';
+  }
+  var map = window.L ? L.map('reverie-map', { scrollWheelZoom: false }) : null;
+  if (map) L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© OpenStreetMap'
+  }).addTo(map);
+
+  var routeMode = false;
+  var routeOrder = [];          // [itemId, ...] dans l'ordre du parcours
+  var routePins = {};           // itemId -> {marker, data}
+  var routeLine = null;
+
+  function pinIcon(num) {
+    // Épingle douce ; numérotée en mode parcours
+    var cls = num ? 'pin-icon pin-icon-num' : 'pin-icon';
+    var html = num ? '<span>' + num + '</span>' : '';
+    return L.divIcon({ className: cls, html: html, iconSize: [26, 26], iconAnchor: [13, 24] });
+  }
+
+  function refreshPinIcons() {
+    Object.keys(routePins).forEach(function(id){
+      var idx = routeOrder.indexOf(Number(id));
+      routePins[id].marker.setIcon(pinIcon(idx >= 0 ? idx + 1 : null));
     });
-    if (bounds.length) map.fitBounds(bounds, { padding: [24, 24], maxZoom: 13 });
-  })();
-  {% endif %}
+    var line = routeOrder.map(function(id){ return [routePins[id].data.lat, routePins[id].data.lng]; });
+    if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+    if (line.length >= 2) {
+      routeLine = L.polyline(line, { color: '#A8503D', weight: 2.5, dashArray: '6 7', opacity: 0.8 }).addTo(map);
+    }
+    document.getElementById('route-count').textContent = routeOrder.length;
+    document.getElementById('btn-route-validate').disabled = routeOrder.length < 1;
+  }
+
+  function routeToggle(itemId) {
+    var i = routeOrder.indexOf(itemId);
+    if (i >= 0) routeOrder.splice(i, 1);
+    else routeOrder.push(itemId);
+    refreshPinIcons();
+  }
+  function routeRemove(itemId) {
+    var i = routeOrder.indexOf(itemId);
+    if (i >= 0) { routeOrder.splice(i, 1); refreshPinIcons(); }
+  }
+
+  function addPinToMap(g) {
+    var m = L.marker([g.lat, g.lng], {
+      icon: pinIcon(null),
+      draggable: g.kind === 'location',
+    }).addTo(map);
+    var html = '<strong>' + (g.title || (g.kind === 'photo' ? 'Photo' : 'Lieu')) + '</strong>';
+    if (g.thumb) html = '<img src="' + g.thumb + '" style="max-width:160px;display:block;margin-bottom:6px;border-radius:6px">' + html;
+    m.bindPopup(html);
+    m.on('click', function(e){
+      if (routeMode) {
+        m.closePopup();
+        routeToggle(g.itemId);
+        L.DomEvent.stopPropagation(e);
+      }
+    });
+    if (g.kind === 'location') {
+      m.on('dragend', async function(){
+        var ll = m.getLatLng();
+        var fd = new FormData();
+        fd.append('_csrf', CSRF); fd.append('lat', ll.lat); fd.append('lng', ll.lng);
+        try { await fetch('/item/' + g.itemId + '/geo', { method: 'POST', body: fd }); }
+        catch(e) { console.error(e); }
+        g.lat = ll.lat; g.lng = ll.lng;
+        refreshPinIcons();
+      });
+    }
+    routePins[g.itemId] = { marker: m, data: g };
+  }
+
+  if (map) GEO_ITEMS.forEach(addPinToMap);
+  if (map && GEO_ITEMS.length) {
+    map.fitBounds(GEO_ITEMS.map(function(g){ return [g.lat, g.lng]; }), { padding: [30, 30], maxZoom: 12 });
+  } else if (map) {
+    map.setView([46.6, 2.4], 5); // France, en attendant les premières idées
+  }
+
+  /* ─ Épingler une idée : clic sur la carte ─ */
+  var pendingMarker = null;
+  if (map) map.on('click', function(e){
+    if (routeMode) return;
+    if (pendingMarker) { map.removeLayer(pendingMarker); pendingMarker = null; }
+    openPinPopup(e.latlng.lat, e.latlng.lng, '', '');
+  });
+
+  function openPinPopup(lat, lng, title, address) {
+    if (pendingMarker) { map.removeLayer(pendingMarker); }
+    pendingMarker = L.marker([lat, lng], { icon: pinIcon(null), opacity: 0.75 }).addTo(map);
+    var html =
+      '<div class="pin-form">' +
+      '<input type="text" id="pin-title" placeholder="Quelle idée ici ?" value="' + (title || '').replace(/"/g, '&quot;') + '" maxlength="120">' +
+      '<button type="button" class="btn btn-primary btn-sm" onclick="confirmPin(' + lat + ',' + lng + ',' + JSON.stringify(address || '').replace(/"/g, '&quot;') + ')">📍 Épingler</button>' +
+      '</div>';
+    pendingMarker.bindPopup(html, { closeOnClick: false, minWidth: 220 }).openPopup();
+    setTimeout(function(){ var i = document.getElementById('pin-title'); if (i) i.focus(); }, 150);
+  }
+
+  async function confirmPin(lat, lng, address) {
+    var titleEl = document.getElementById('pin-title');
+    var title = titleEl ? titleEl.value.trim() : '';
+    if (!title && address) title = String(address).split(',')[0];
+    if (!title) title = 'Idée';
+    var fd = new FormData();
+    fd.append('_csrf', CSRF);
+    fd.append('kind', 'location');
+    fd.append('title', title);
+    fd.append('address', address || '');
+    fd.append('geo_lat', String(lat));
+    fd.append('geo_lng', String(lng));
+    try {
+      var r = await fetch(URL_ADD_ITEM, { method: 'POST', body: fd });
+      var d = await r.json();
+      if (!d.ok) { alert('Erreur : ' + (d.error || '')); return; }
+      reloadKeepScroll();
+    } catch(e) { alert('Réseau : ' + e.message); }
+  }
+  window.confirmPin = confirmPin;
+
+  /* ─ Recherche de lieu ─ */
+  var searchInput = document.getElementById('geo-search');
+  var searchResults = document.getElementById('geo-results');
+  var searchTimer = null;
+  searchInput.addEventListener('input', function(){
+    clearTimeout(searchTimer);
+    var q = searchInput.value.trim();
+    if (q.length < 3) { searchResults.hidden = true; return; }
+    searchTimer = setTimeout(async function(){
+      try {
+        var r = await fetch(URL_GEO_SEARCH + '?q=' + encodeURIComponent(q));
+        var d = await r.json();
+        if (!d.ok || !d.results.length) { searchResults.hidden = true; return; }
+        searchResults.innerHTML = '';
+        d.results.forEach(function(res){
+          var div = document.createElement('div');
+          div.className = 'reverie-search-result';
+          div.textContent = res.label;
+          div.addEventListener('click', function(){
+            searchResults.hidden = true;
+            searchInput.value = '';
+            map.setView([res.lat, res.lng], 12);
+            openPinPopup(res.lat, res.lng, res.label.split(',')[0], res.label);
+          });
+          searchResults.appendChild(div);
+        });
+        searchResults.hidden = false;
+      } catch(e) { console.error(e); }
+    }, 450);
+  });
+  document.addEventListener('click', function(e){
+    if (!e.target.closest('.reverie-search-wrap')) searchResults.hidden = true;
+  });
+
+  /* ─ Mode parcours ─ */
+  var btnRoute = document.getElementById('btn-route-mode');
+  var routeBar = document.getElementById('route-bar');
+  var mapHint = document.getElementById('map-hint');
+  function setRouteMode(on) {
+    routeMode = on;
+    routeBar.hidden = !on;
+    mapHint.hidden = on;
+    btnRoute.hidden = on;
+    document.getElementById('reverie-map').classList.toggle('is-routing', on);
+    if (!on) { routeOrder = []; refreshPinIcons(); }
+  }
+  btnRoute.addEventListener('click', function(){
+    if (!GEO_ITEMS.length) {
+      alert('Épingle d\'abord quelques idées sur la carte.');
+      return;
+    }
+    setRouteMode(true);
+  });
+  document.getElementById('btn-route-cancel').addEventListener('click', function(){ setRouteMode(false); });
+
+  document.getElementById('btn-route-validate').addEventListener('click', function(){
+    if (!routeOrder.length) return;
+    var idsDiv = document.getElementById('route-form-ids');
+    idsDiv.innerHTML = '';
+    var steps = document.getElementById('route-steps');
+    steps.innerHTML = '';
+    routeOrder.forEach(function(id){
+      var inp = document.createElement('input');
+      inp.type = 'hidden'; inp.name = 'item_ids'; inp.value = id;
+      idsDiv.appendChild(inp);
+      var li = document.createElement('li');
+      li.textContent = routePins[id].data.title;
+      steps.appendChild(li);
+    });
+    document.getElementById('route-modal-count').textContent = routeOrder.length;
+    document.getElementById('route-modal').hidden = false;
+    document.body.style.overflow = 'hidden';
+  });
+  function closeRouteModal() {
+    document.getElementById('route-modal').hidden = true;
+    document.body.style.overflow = '';
+  }
+  window.closeRouteModal = closeRouteModal;
+
   window.showAddModal = showAddModal;
   window.closeAddModal = closeAddModal;
 

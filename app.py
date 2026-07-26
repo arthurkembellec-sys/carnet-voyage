@@ -885,6 +885,20 @@ def _next_item_position(carnet_id):
 def carnet_souhait_view(cid_carnet):
     c = _get_carnet_or_404(cid_carnet)
     items = _carnet_items(cid_carnet)
+    # v4.1 : backfill best-effort — geocoder les lieux qui n'ont qu'une adresse
+    # (max 2 par affichage pour respecter la policy Nominatim 1 req/s)
+    backfilled = 0
+    for it in items:
+        if backfilled >= 2:
+            break
+        if (it.get('kind') == 'location' and it.get('address')
+                and it.get('geo_lat') is None):
+            res = _forward_geocode(it['address'], limit=1)
+            if res:
+                execute("UPDATE carnet_items SET geo_lat=?, geo_lng=? WHERE id=?",
+                        (res[0]['lat'], res[0]['lng'], it['id']))
+                it['geo_lat'], it['geo_lng'] = res[0]['lat'], res[0]['lng']
+            backfilled += 1
     # Voyages issus de cette reverie
     voyages = query(
         "SELECT id, title, status, created_at FROM carnets "
@@ -896,12 +910,15 @@ def carnet_souhait_view(cid_carnet):
     for it in items:
         if it.get('kind') == 'location' and it.get('geo_lat') is not None and it.get('geo_lng') is not None:
             geo_items.append({
+                'item_id': it['id'],
                 'lat': it['geo_lat'], 'lng': it['geo_lng'],
                 'kind': 'location',
                 'title': it.get('title') or it.get('address') or 'Lieu',
+                'address': it.get('address') or '',
             })
         elif it.get('kind') == 'photo' and it.get('photo_gps_lat') is not None and it.get('photo_gps_lng') is not None:
             geo_items.append({
+                'item_id': it['id'],
                 'lat': it['photo_gps_lat'], 'lng': it['photo_gps_lng'],
                 'kind': 'photo',
                 'title': it.get('title') or 'Photo',
@@ -954,14 +971,37 @@ def carnet_add_item(cid_carnet):
             log.error("upload item photo: %s", e)
             return jsonify({'ok': False, 'error': 'Photo : ' + str(e)}), 500
     pos = _next_item_position(cid_carnet)
+    # v4.1 : coordonnees posees depuis la carte des reveries
+    item_lat = _safe_float(request.form.get('geo_lat'))
+    item_lng = _safe_float(request.form.get('geo_lng'))
     iid = execute(
         "INSERT INTO carnet_items (carnet_id, position, kind, title, body, url, "
-        "photo_id, address, amount, currency, added_by) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "photo_id, address, geo_lat, geo_lng, amount, currency, added_by) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (cid_carnet, pos, kind, title, body, url_v, photo_id, address,
-         amount, currency, session['uid'])
+         item_lat, item_lng, amount, currency, session['uid'])
     )
-    return jsonify({'ok': True, 'item_id': iid})
+    return jsonify({'ok': True, 'item_id': iid, 'geo_lat': item_lat, 'geo_lng': item_lng})
+
+
+@app.route('/item/<int:item_id>/geo', methods=['POST'])
+@couple_required
+def item_update_geo(item_id):
+    """v4.1 : deplace l'epingle d'un item (drag sur la carte des reveries)."""
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    item = query("SELECT ci.id, c.couple_id FROM carnet_items ci "
+                 "JOIN carnets c ON c.id=ci.carnet_id WHERE ci.id=?",
+                 (item_id,), one=True)
+    if not item or item['couple_id'] != current_espace_id():
+        return jsonify({'ok': False, 'error': '404'}), 404
+    lat = _safe_float(request.form.get('lat'))
+    lng = _safe_float(request.form.get('lng'))
+    if lat is None or lng is None:
+        return jsonify({'ok': False, 'error': 'Coordonnees invalides'}), 400
+    execute("UPDATE carnet_items SET geo_lat=?, geo_lng=? WHERE id=?",
+            (lat, lng, item_id))
+    return jsonify({'ok': True})
 
 
 @app.route('/item/<int:item_id>/supprimer', methods=['POST'])
@@ -1010,18 +1050,32 @@ def carnet_transformer(cid_carnet):
                  'active', session['uid'], cid_carnet)
             )
             new_cid = cur.lastrowid
+            # v4.1 : ordered=1 (parcours trace sur la carte) -> les positions
+            # dans le voyage suivent l'ordre de selection des etapes.
+            ordered = request.form.get('ordered') == '1'
             if selected_ids:
                 placeholders = ','.join('?' * len(selected_ids))
                 if duplicate:
-                    # Copier les items au lieu de les deplacer
-                    conn.execute(
-                        f"INSERT INTO carnet_items (carnet_id, position, kind, title, "
-                        f"body, url, photo_id, address, geo_lat, geo_lng, amount, currency, added_by) "
-                        f"SELECT ?, position, kind, title, body, url, photo_id, address, "
-                        f"geo_lat, geo_lng, amount, currency, added_by "
-                        f"FROM carnet_items WHERE id IN ({placeholders})",
-                        tuple([new_cid] + selected_ids)
-                    )
+                    if ordered:
+                        for pos, iid in enumerate(selected_ids):
+                            conn.execute(
+                                "INSERT INTO carnet_items (carnet_id, position, kind, title, "
+                                "body, url, photo_id, address, geo_lat, geo_lng, amount, currency, added_by) "
+                                "SELECT ?, ?, kind, title, body, url, photo_id, address, "
+                                "geo_lat, geo_lng, amount, currency, added_by "
+                                "FROM carnet_items WHERE id=?",
+                                (new_cid, pos, iid)
+                            )
+                    else:
+                        # Copier les items au lieu de les deplacer
+                        conn.execute(
+                            f"INSERT INTO carnet_items (carnet_id, position, kind, title, "
+                            f"body, url, photo_id, address, geo_lat, geo_lng, amount, currency, added_by) "
+                            f"SELECT ?, position, kind, title, body, url, photo_id, address, "
+                            f"geo_lat, geo_lng, amount, currency, added_by "
+                            f"FROM carnet_items WHERE id IN ({placeholders})",
+                            tuple([new_cid] + selected_ids)
+                        )
                 else:
                     # Deplacer : changer carnet_id (le souhait n'a plus l'item)
                     conn.execute(
@@ -1029,6 +1083,12 @@ def carnet_transformer(cid_carnet):
                         f"WHERE id IN ({placeholders})",
                         tuple([new_cid, new_cid] + selected_ids)
                     )
+                    if ordered:
+                        for pos, iid in enumerate(selected_ids):
+                            conn.execute(
+                                "UPDATE carnet_items SET position=? WHERE id=?",
+                                (pos, iid)
+                            )
             conn.commit()
         except Exception as e:
             conn.rollback()
@@ -2498,6 +2558,43 @@ def _geo_cache_key(lat, lng):
         return f"{round(float(lat), 4):.4f},{round(float(lng), 4):.4f}"
     except (TypeError, ValueError):
         return None
+
+
+def _forward_geocode(q, limit=6):
+    """v4.1 Reveries : recherche de lieu (geocodage direct Nominatim).
+    Best effort, renvoie [{label, lat, lng}] (max `limit`)."""
+    import json as _json
+    import urllib.parse as _up
+    if not q or len(q.strip()) < 2:
+        return []
+    url = ("https://nominatim.openstreetmap.org/search"
+           f"?format=jsonv2&q={_up.quote(q.strip())}&limit={int(limit)}"
+           "&accept-language=fr")
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': _GEO_UA})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = _json.loads(resp.read())
+        out = []
+        for d in data:
+            try:
+                out.append({
+                    'label': d.get('display_name') or '',
+                    'lat': float(d['lat']), 'lng': float(d['lon']),
+                })
+            except (KeyError, TypeError, ValueError):
+                continue
+        return out
+    except Exception as e:
+        log.warning("forward geocode fail %r: %s", q, e)
+        return []
+
+
+@app.route('/geo/search')
+@couple_required
+def geo_search():
+    """Recherche de lieu pour la carte des reveries."""
+    q = request.args.get('q') or ''
+    return jsonify({'ok': True, 'results': _forward_geocode(q)})
 
 
 def _reverse_geocode(lat, lng):

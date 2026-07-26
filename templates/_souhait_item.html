@@ -9,7 +9,7 @@
       {% elif it.kind == 'budget' %}€ Budget
       {% endif %}
     </span>
-    <button type="button" class="item-delete" onclick="deleteItem({{ it.id }})" title="Supprimer">✕</button>
+    <button type="button" class="item-delete" onclick="deleteItem({{ it.id }}, this)" title="Supprimer">✕</button>
   </div>
 
   {% if it.kind == 'photo' and it.photo_thumb %}
