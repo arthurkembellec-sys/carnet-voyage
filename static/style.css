@@ -3827,3 +3827,16 @@ body.photo-roll-open .album-footer { opacity: 0; pointer-events: none; }
   /* L'aperçu : réglages plus digestes */
   .apercu-summary { padding: 16px 18px; }
 }
+
+/* v4.9 : choix « tout au début » dans le rouleau */
+.pr-lead {
+  flex-shrink: 0;
+  border: 1px dashed var(--border-strong);
+  background: var(--bg-subtle);
+  border-radius: 12px;
+  width: 84px; height: 108px;
+  font-family: var(--font-display); font-style: italic;
+  font-size: 12.5px; color: var(--ink-secondary);
+  cursor: pointer; padding: 8px;
+}
+.pr-lead:active { background: var(--accent-soft); }

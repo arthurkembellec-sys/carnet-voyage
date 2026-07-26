@@ -103,6 +103,12 @@
     {% endif %}
 
     <div class="page-actions">
+      {% if not p.is_margin %}
+        <button class="page-action-btn" type="button"
+                onclick="movePage({{ p.id }}, this)" title="Déplacer cette page ailleurs dans l'album">
+          ↔ Déplacer
+        </button>
+      {% endif %}
       {% if p.type == 'photo' %}
         <button class="page-action-btn" type="button"
                 onclick="openMarginNote({{ p.id }})" title="Note en marge reliée à cette photo">

@@ -448,17 +448,31 @@
 
   /* ─ Le rouleau de photos : défilement rapide, un toucher = relié ─ */
   var prCallback = null;
-  function openPhotoRoll(day, cb, title) {
+  function openPhotoRoll(day, cb, title, opts) {
+    opts = opts || {};
     prCallback = cb;
     var roll = document.getElementById('photo-roll');
     var strip = document.getElementById('pr-strip');
     document.getElementById('pr-title').textContent = title || 'Choisis la photo';
     strip.innerHTML = '';
+    if (opts.leadingChoice) {
+      var lead = document.createElement('button');
+      lead.type = 'button';
+      lead.className = 'pr-lead';
+      lead.textContent = opts.leadingChoice;
+      lead.addEventListener('click', function(){
+        var fn = prCallback;
+        closePhotoRoll();
+        if (fn) fn('__start__', null);
+      });
+      strip.appendChild(lead);
+    }
     var firstOfDay = null;
     var lastDay = null;
     document.querySelectorAll('.album-section:not(.album-section-margin) .page-item[data-type="photo"]').forEach(function(t){
       var img = t.querySelector('.page-photo img');
       if (!img) return;
+      if (opts.excludeId && String(t.dataset.pageId) === String(opts.excludeId)) return;
       var d = (t.dataset.takenAt || '').slice(0, 10);
       if (d && d !== lastDay) {
         lastDay = d;
@@ -498,6 +512,33 @@
   }
   window.openPhotoRoll = openPhotoRoll;
   window.closePhotoRoll = closePhotoRoll;
+
+  /* ─ v4.9 : déplacer une page via le rouleau (mobile d'abord) ─ */
+  async function movePage(pageId, btn) {
+    var tile = btn.closest('.page-item');
+    var day = tile ? (tile.dataset.takenAt || '').slice(0, 10) : '';
+    openPhotoRoll(day, async function(targetId){
+      var ids = collectMainIds().filter(function(id){ return String(id) !== String(pageId); });
+      if (targetId === '__start__') {
+        ids.unshift(String(pageId));
+      } else {
+        var i = ids.indexOf(String(targetId));
+        if (i < 0) i = ids.length - 1;
+        ids.splice(i + 1, 0, String(pageId));
+      }
+      setSaving('Déplacement…');
+      var fd = new FormData(); fd.append('_csrf', CSRF);
+      ids.forEach(function(id){ fd.append('page_id', id); });
+      try {
+        var r = await fetch("{{ url_for('carnet_reorder_pages', cid_carnet=carnet.id) }}", { method: 'POST', body: fd });
+        var d = await r.json();
+        if (!d.ok) { setError(d.error || 'Erreur'); return; }
+        setSaved('Page déplacée');
+        setTimeout(function(){ reloadKeepScroll(); }, 350);
+      } catch(e) { setError('Réseau'); }
+    }, 'Placer après quelle photo ?', { excludeId: pageId, leadingChoice: '⤒ Tout au début' });
+  }
+  window.movePage = movePage;
 
   /* ─ Ancrage des notes : relier, détacher, retrouver ─ */
   function startLinking(noteId, btn) {
