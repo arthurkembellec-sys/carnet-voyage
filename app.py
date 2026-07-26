@@ -2739,6 +2739,30 @@ def _inject_exif_to_jpeg(jpeg_path, taken_at_iso=None, gps_lat=None, gps_lng=Non
         log.warning("EXIF reinjection failed for %s: %s", jpeg_path, e)
 
 
+@app.template_filter('doux_label')
+def _doux_label(s):
+    """v4 : adoucit les libelles de section pour l'affichage album.
+    - retire les coordonnees GPS brutes (45.527,2.773) laissees quand le
+      reverse-geocoding n'a pas (encore) de nom de lieu ;
+    - replie les plages horaires identiques (15:53 -> 15:53 => 15:53) ;
+    - accorde "N photo(s)" en francais.
+    Ne modifie jamais la donnee en base, uniquement le rendu."""
+    import re
+    if not s:
+        return s
+    s = str(s)
+    s = re.sub(r'-?\d{1,3}\.\d{2,},\s*-?\d{1,3}\.\d{2,}', '', s)
+    s = re.sub(r'(\d{1,2}:\d{2})\s*\u2192\s*\1', r'\1', s)
+    s = re.sub(r'\b1 photo\(s\)', '1 photo', s)
+    s = re.sub(r'\b(\d+) photo\(s\)', r'\1 photos', s)
+    # nettoyage des separateurs orphelins laisses par le retrait des coords
+    s = re.sub(r'\s*\u00b7\s*(\u00b7|$)', r' \1', s)
+    s = re.sub(r'(\s*[\u00b7,]\s*)+', lambda m: ' \u00b7 ' if '\u00b7' in m.group(0) else ', ', s)
+    s = re.sub(r'^[\s\u00b7,]+|[\s\u00b7,]+$', '', s)
+    s = re.sub(r'\s{2,}', ' ', s)
+    return s or 'Lieu inconnu'
+
+
 @app.route('/carnet/<int:cid_carnet>/album')
 @couple_required
 def carnet_album(cid_carnet):
@@ -2763,9 +2787,30 @@ def carnet_album(cid_carnet):
             })
             last_day = day
         margin_groups[-1]['pages'].append(p)
+    # v4 : rail de marge aligne sur la timeline — les notes de marge sont
+    # rattachees au jour correspondant des sections auto (kind='day').
+    # margin_by_day : day 'YYYY-MM-DD' -> liste de pages de marge.
+    # margin_rest   : groupes sans jour-section correspondant (affiches en bas).
+    section_days = set()
+    for s1 in pages.get('structured', []):
+        sec = s1['section']
+        if sec.get('kind') == 'day' and sec.get('date_start'):
+            section_days.add(_norm_ts(sec['date_start'])[:10])
+        for sub in s1.get('subsections', []):
+            c2 = sub['section']
+            if c2.get('kind') == 'day' and c2.get('date_start'):
+                section_days.add(_norm_ts(c2['date_start'])[:10])
+    margin_by_day = {}
+    margin_rest = []
+    for g in margin_groups:
+        if g['day'] and g['day'] in section_days:
+            margin_by_day.setdefault(g['day'], []).extend(g['pages'])
+        else:
+            margin_rest.append(g)
     return render_template('album.html', carnet=c,
         main_pages=pages['main'], margin_pages=pages['margin'],
         margin_groups=margin_groups,
+        margin_by_day=margin_by_day, margin_rest=margin_rest,
         structured=pages.get('structured', []),
         orphans=pages.get('orphans', []),
         geo_photos=geo_photos, types=CARNET_TYPES, sort_mode=sort_mode)

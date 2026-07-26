@@ -2617,3 +2617,495 @@ a:not(.btn):not(.tab-link):not(.chip):not(.link):not(.brand):not(.espace-menu-it
   .form-actions { flex-direction: column-reverse; }
   .form-actions .btn { width: 100%; }
 }
+/* ════════════════════════════════════════════════════════════════════
+   ALBUM v4 — présentation douce & légère (2026-07-26)
+   Mosaïques par moment, rail de marge aligné sur la timeline,
+   chrome discret (outils derrière « ⋯ »), footer allégé.
+   Cette section SURCHARGE les styles album plus haut dans le fichier.
+   ════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --shadow-soft:  0 1px 2px rgba(28,26,23,0.06), 0 8px 24px rgba(28,26,23,0.07);
+  --shadow-hover: 0 2px 6px rgba(28,26,23,0.08), 0 16px 40px rgba(28,26,23,0.14);
+  --paper-kraft:  #F6EFE1;
+}
+
+/* ── La page album respire sur toute la largeur ─────────────────── */
+.album-page { max-width: 1120px; }
+
+/* En-tête plus doux */
+.album-page .lead { color: var(--ink-muted); font-size: 14px; }
+.sort-mode-chip:not(:empty) {
+  font-style: italic;
+  color: var(--ink-whisper);
+}
+.sort-mode-chip:not(:empty)::before { content: '· '; }
+.album-page .sort-mode-row { margin-top: 10px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.album-page .sort-hint { font-size: 12px; color: var(--ink-whisper); font-style: italic; }
+
+/* Carte : coins doux, ombre légère */
+.album-map-wrap {
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: var(--shadow-soft);
+  border: none;
+}
+
+/* ── Bloc jour : contenu + rail de marge ────────────────────────── */
+.day-block { position: relative; }
+.day-rail { margin-top: 26px; }
+.day-rail-head {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-bottom: 10px;
+}
+.day-rail-label {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 13px;
+  color: var(--ink-whisper);
+  letter-spacing: 0.02em;
+}
+.day-rail-add {
+  border: none; background: transparent;
+  color: var(--ink-whisper);
+  font-size: 15px; line-height: 1;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: color .2s, background .2s;
+}
+.day-rail-add:hover { color: var(--accent); background: var(--accent-soft); }
+
+@media (min-width: 1000px) {
+  .day-block {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 200px;
+    gap: 0 30px;
+    align-items: start;
+  }
+  .day-rail {
+    margin-top: 6px;
+    padding-left: 22px;
+    border-left: 1px dashed var(--border-default);
+    min-height: 60px;
+  }
+}
+@media (max-width: 999px) {
+  .day-rail.is-empty { display: none; }
+  .day-rail {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    padding: 14px 0 4px;
+  }
+  .day-rail-head { grid-column: 1 / -1; margin-bottom: 0; }
+}
+
+/* Notes du rail : petits papiers épinglés */
+.rail-note {
+  position: relative;
+  background: var(--paper-kraft);
+  border-radius: 8px;
+  padding: 9px 9px 6px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-soft);
+  transform: rotate(var(--tilt, 0deg));
+  transition: transform .25s var(--ease-out), box-shadow .25s;
+}
+.rail-note:hover { transform: rotate(0deg) scale(1.02); box-shadow: var(--shadow-hover); z-index: 20; }
+.rail-note::before {
+  content: '';
+  position: absolute;
+  top: -7px; left: 50%;
+  width: 46px; height: 14px;
+  transform: translateX(-50%) rotate(-2.5deg);
+  background: var(--accent-soft);
+  border-radius: 2px;
+  opacity: 0.85;
+}
+.rail-note .rail-note-photo { display: block; border-radius: 5px; overflow: hidden; cursor: zoom-in; }
+.rail-note .rail-note-photo img {
+  display: block; width: 100%;
+  max-height: 150px; object-fit: cover;
+  border-radius: 5px;
+}
+.rail-note .rail-note-caption,
+.rail-note .rail-note-text {
+  display: block; width: 100%;
+  border: none; background: transparent;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 12.5px; line-height: 1.5;
+  color: var(--ink-secondary);
+  resize: none; padding: 6px 2px 2px;
+  overflow: hidden;
+}
+.rail-note .rail-note-caption:focus,
+.rail-note .rail-note-text:focus { outline: none; color: var(--ink-primary); }
+.rail-note .page-more {
+  position: absolute; top: 2px; right: 4px;
+  opacity: 0;
+}
+.rail-note:hover .page-more, .rail-note.tools-open .page-more { opacity: 1; }
+.rail-note .page-tools { display: none; }
+.rail-note.tools-open .page-tools { display: block; padding-top: 4px; }
+
+/* ── Mosaïque : grille 6 colonnes, flux dense, tailles par orientation ── */
+.pages-list, .pages-list-sub {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  grid-auto-flow: dense;
+  gap: 26px 16px;
+  align-items: start;
+  margin: 18px 0;
+}
+.pages-list .page-item, .pages-list-sub .page-item { grid-column: span 3; }
+.pages-list .page-item.is-portrait, .pages-list-sub .page-item.is-portrait { grid-column: span 2; }
+/* La 1re photo d'un moment devient la « héroïne » du moment */
+.pages-list-sub > .page-item.is-landscape:first-child { grid-column: span 4; }
+.pages-list-sub > .page-item.is-portrait:first-child { grid-column: span 3; }
+/* Un peu de respiration variable : certaines paysages plus petites */
+.pages-list-sub > .page-item.is-landscape:nth-child(5n+3) { grid-column: span 2; }
+
+.pages-list .page-item[data-type="text"],
+.pages-list-sub .page-item[data-type="text"] { grid-column: 1 / -1; }
+
+@media (max-width: 719px) {
+  .pages-list, .pages-list-sub {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 18px 10px;
+  }
+  .pages-list .page-item, .pages-list-sub .page-item,
+  .pages-list-sub > .page-item.is-landscape:first-child,
+  .pages-list-sub > .page-item.is-landscape:nth-child(5n+3) { grid-column: span 2; }
+  .pages-list .page-item.is-portrait, .pages-list-sub .page-item.is-portrait,
+  .pages-list-sub > .page-item.is-portrait:first-child { grid-column: span 1; }
+}
+
+/* ── Tuile polaroid : sans bordure, ombre douce, légère rotation ── */
+.page-item {
+  background: var(--bg-card);
+  border: none;
+  border-radius: 6px;
+  padding: 8px 8px 4px;
+  box-shadow: var(--shadow-soft);
+  transform: rotate(var(--tilt, 0deg));
+  transition: transform .3s var(--ease-out), box-shadow .3s;
+  z-index: 1;
+}
+.page-item:hover, .page-item.tools-open {
+  transform: rotate(0deg) scale(1.015);
+  box-shadow: var(--shadow-hover);
+  z-index: 30;
+  border: none;
+}
+/* Chevauchements légers : décalages stables qui font « tas de photos » */
+@media (min-width: 720px) {
+  .pages-list-sub > .page-item:nth-child(3n)   { transform: rotate(var(--tilt, 0deg)) translate(-7px, 12px); z-index: 2; }
+  .pages-list-sub > .page-item:nth-child(4n+2) { transform: rotate(var(--tilt, 0deg)) translate(6px, -8px); z-index: 3; }
+  .pages-list-sub > .page-item:nth-child(3n):hover,
+  .pages-list-sub > .page-item:nth-child(4n+2):hover,
+  .pages-list-sub > .page-item:nth-child(3n).tools-open,
+  .pages-list-sub > .page-item:nth-child(4n+2).tools-open {
+    transform: rotate(0deg) scale(1.015) translate(0, 0);
+    z-index: 30;
+  }
+}
+
+/* Photo : remplit sa tuile, ratio par orientation */
+.page-photo { border-radius: 4px; }
+.page-item .page-photo img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  height: auto;
+  max-height: none;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--bg-subtle);
+}
+.page-item.is-portrait .page-photo img { aspect-ratio: 3 / 4; }
+.pages-list-sub > .page-item.is-landscape:first-child .page-photo img { aspect-ratio: 3 / 2; }
+
+/* Légende façon polaroid : écriture manuscrite discrète sous la photo */
+.page-caption-wrap { padding: 2px 2px 0; }
+.page-item .page-caption {
+  width: 100%;
+  border: none; background: transparent;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 13.5px; line-height: 1.45;
+  color: var(--ink-secondary);
+  text-align: center;
+  resize: none; overflow: hidden;
+  padding: 6px 2px 4px;
+}
+.page-item .page-caption:focus { outline: none; color: var(--ink-primary); }
+.page-item .page-caption::placeholder { color: transparent; transition: color .2s; }
+.page-item:hover .page-caption::placeholder,
+.page-item .page-caption:focus::placeholder { color: var(--ink-whisper); }
+
+/* Blocs texte : respiration pleine largeur, sans carte */
+.page-item.is-text, .page-item[data-type="text"] {
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+  padding: 10px 0;
+  max-width: 640px;
+  justify-self: center;
+  width: 100%;
+}
+.page-item.is-text:hover, .page-item[data-type="text"]:hover { box-shadow: none; transform: none; }
+.page-item[data-type="text"] .page-text {
+  width: 100%;
+  border: none; background: transparent;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 300;
+  font-size: 17px; line-height: 1.75;
+  color: var(--ink-secondary);
+  resize: none; overflow: hidden;
+  padding: 4px 8px;
+}
+.page-item[data-type="text"] .page-text:focus { outline: none; color: var(--ink-primary); }
+
+/* Vidéos : tuile pleine mais douce */
+.page-item.is-video { grid-column: span 3; }
+.page-item .page-video video { width: 100%; border-radius: 4px; display: block; }
+.page-video-meta {
+  display: flex; gap: 10px; align-items: center;
+  padding: 6px 4px 2px;
+  font-size: 11px; color: var(--ink-muted);
+}
+.video-public-link { color: var(--accent); text-decoration: none; }
+
+/* ── Chrome discret : outils derrière « ⋯ », poignée au survol ──── */
+.page-more {
+  position: absolute;
+  top: 12px; right: 12px;
+  width: 26px; height: 26px;
+  border: none; border-radius: 50%;
+  background: rgba(250, 248, 244, 0.85);
+  color: var(--ink-muted);
+  font-size: 15px; line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .2s, background .2s;
+  z-index: 5;
+  box-shadow: 0 1px 4px rgba(28,26,23,0.15);
+}
+.page-item:hover .page-more, .page-item.tools-open .page-more { opacity: 1; }
+.page-more:hover { background: #fff; color: var(--ink-primary); }
+.page-item[data-type="text"] .page-more { top: 4px; right: 4px; background: transparent; box-shadow: none; }
+
+.page-tools { display: none; }
+.page-item.tools-open .page-tools {
+  display: block;
+  padding: 8px 4px 6px;
+  margin-top: 4px;
+  border-top: 1px dashed var(--border-default);
+}
+.page-tools .page-meta { margin-top: 0; padding: 0 2px 6px; }
+.page-tools .page-actions {
+  border-top: none;
+  padding: 2px 0 4px;
+  margin-top: 0;
+  justify-content: flex-start;
+}
+
+/* Sur tactile (pas de survol) : « ⋯ » toujours légèrement visible */
+@media (hover: none) {
+  .page-more { opacity: 0.6; }
+  .drag-handle { opacity: 0.5; }
+}
+
+.drag-handle {
+  opacity: 0;
+  background: rgba(250, 248, 244, 0.9);
+  border: none;
+  box-shadow: 0 1px 4px rgba(28,26,23,0.15);
+  transition: opacity .2s, background .2s, transform .12s;
+}
+.page-item:hover .drag-handle { opacity: 1; }
+.drag-handle { top: 12px; left: 12px; }
+
+/* Confirmation inline (bouton armé) */
+.page-action-btn.is-armed, .btn.is-armed {
+  background: var(--color-danger) !important;
+  border-color: var(--color-danger) !important;
+  color: #fff !important;
+}
+
+/* Boutons d'action plus doux */
+.page-action-btn { border-color: var(--border-default); }
+
+/* ── Sections : têtes plus aériennes ────────────────────────────── */
+.album-l2-head { border-bottom: none; padding-bottom: 4px; }
+.album-l2-mini-map { border-radius: 10px; box-shadow: var(--shadow-soft); }
+
+/* ── Section notes en marge restantes ───────────────────────────── */
+.album-section-margin {
+  border-top: 1px dashed var(--border-default);
+}
+.pages-list-margin .page-item, .page-item-margin {
+  background: var(--paper-kraft) !important;
+  border: none !important;
+}
+
+/* ── Footer flottant : clair, givré, discret ────────────────────── */
+.album-footer {
+  background: rgba(250, 248, 244, 0.88);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--border-default);
+  box-shadow: 0 10px 34px rgba(28,26,23,0.16);
+  border-radius: var(--radius-pill);
+}
+.album-page ~ .album-footer .fab-btn, .album-footer .fab-btn {
+  color: var(--ink-secondary);
+}
+.album-footer .fab-btn:hover { background: rgba(28,26,23,0.05); }
+.album-footer .fab-icon {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+@media (max-width: 540px) {
+  .fab-label-optional { display: none; }
+}
+
+/* Interrupteur « marge » du footer */
+.fab-toggle {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--ink-muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  padding: 7px 13px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: background .2s, color .2s, border-color .2s;
+}
+.fab-toggle-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--border-strong);
+  transition: background .2s, box-shadow .2s;
+}
+.fab-toggle.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.fab-toggle.is-on .fab-toggle-dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* ── Modale note de marge (styles remontés depuis l'inline) ─────── */
+.margin-note-modal {
+  position: fixed; inset: 0;
+  background: var(--bg-overlay);
+  align-items: center; justify-content: center;
+  z-index: 9000; padding: 20px;
+}
+.margin-note-card {
+  background: var(--bg-primary);
+  max-width: 520px; width: 100%;
+  max-height: 88vh; overflow-y: auto;
+  border-radius: 14px; padding: 24px;
+  box-shadow: var(--shadow-hover);
+}
+.margin-note-close {
+  background: transparent; border: none; cursor: pointer;
+  font-size: 22px; line-height: 1; float: right; padding: 0;
+  color: var(--ink-muted);
+}
+.margin-note-title {
+  font-family: var(--font-display); font-style: italic;
+  margin: 0 0 6px; font-size: 22px;
+}
+.margin-note-sub { font-size: 12px; color: var(--ink-muted); margin: 0 0 16px; }
+.margin-note-label {
+  display: block; font-size: 11px; letter-spacing: 0.06em;
+  color: var(--ink-muted); margin-bottom: 6px; text-transform: uppercase;
+}
+.margin-note-file { display: block; margin-bottom: 14px; }
+.margin-note-input {
+  width: 100%; padding: 8px 10px;
+  border: 1px solid var(--border-strong); border-radius: 6px;
+  font-size: 13px; margin-bottom: 14px; background: var(--bg-card);
+}
+.margin-note-textarea {
+  width: 100%; padding: 10px;
+  border: 1px solid var(--border-strong); border-radius: 6px;
+  font-family: var(--font-display); font-style: italic;
+  font-size: 13px; resize: vertical; background: var(--bg-card);
+}
+.margin-note-actions {
+  display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px;
+}
+
+/* Le tri par glisser garde un fantôme doux */
+.page-ghost { opacity: 0.35; background: var(--accent-soft) !important; box-shadow: none; }
+.page-dragging { opacity: 0.9; transform: rotate(1.5deg) scale(1.02); }
+
+/* Empty states plus discrets */
+.empty-section { border: none; color: var(--ink-whisper); }
+
+/* ── v4.1 : retouches après premières captures ─────────────────── */
+/* Libellés de section : une ligne, pas de litanies de coordonnées */
+.album-l1-sub, .album-l2-sub {
+  max-width: 620px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.album-l1-sub { margin-left: auto; margin-right: auto; }
+/* Footer mobile : ne déborde jamais */
+.album-footer {
+  max-width: calc(100vw - 20px);
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.album-footer::-webkit-scrollbar { display: none; }
+@media (max-width: 540px) {
+  .album-footer { gap: 2px; padding: 8px 10px; }
+  .album-footer .fab-btn { padding: 8px 8px; }
+  .fab-toggle { padding: 6px 10px; flex-shrink: 0; }
+}
+
+/* ── v4.2 : mosaïque continue par jour + séparateurs de moment ──── */
+.moment-sep {
+  grid-column: 1 / -1;
+  list-style: none;
+  display: flex; align-items: baseline; gap: 12px;
+  margin: 10px 0 -8px;
+  padding: 0 2px;
+}
+.moment-sep-title {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 15px;
+  color: var(--ink-secondary);
+}
+.moment-sep-sub {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--ink-whisper);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.moment-sep::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px dashed var(--border-subtle);
+  transform: translateY(-4px);
+}
+/* Héroïne de moment : la photo qui suit un séparateur s'agrandit */
+.pages-list-sub > .moment-sep + .page-item.is-landscape { grid-column: span 4; }
+.pages-list-sub > .moment-sep + .page-item.is-landscape .page-photo img { aspect-ratio: 3 / 2; }
+.pages-list-sub > .moment-sep + .page-item.is-portrait { grid-column: span 3; }
+@media (max-width: 719px) {
+  .pages-list-sub > .moment-sep + .page-item.is-landscape { grid-column: span 2; }
+  .pages-list-sub > .moment-sep + .page-item.is-portrait { grid-column: span 1; }
+}
+
+/* Le premier papier du rail ne chevauche pas l'étiquette « En marge » */
+.rail-note { margin-top: 12px; }

@@ -5,12 +5,24 @@
 {% endblock %}
 {% block topbar_actions %}
   <a href="{{ url_for('carnet_modifier', cid_carnet=carnet.id) }}" class="link">Fiche</a>
-  <a href="{{ url_for('carnet_apercu', cid_carnet=carnet.id) }}" class="link">📖 Aperçu</a>
 {% endblock %}
 
 
 {% block content %}
 
+{# ── Macro : rail de marge d'un jour ─────────────────────────────── #}
+{% macro day_rail(day) %}
+  {% set notes = margin_by_day.get(day) if margin_by_day else none %}
+  <aside class="day-rail{% if not notes %} is-empty{% endif %}">
+    <div class="day-rail-head">
+      <span class="day-rail-label">En marge</span>
+      <button type="button" class="day-rail-add" onclick="openMarginNote()" title="Ajouter une note de marge">+</button>
+    </div>
+    {% if notes %}
+      {% for p in notes %}{% include '_margin_note.html' %}{% endfor %}
+    {% endif %}
+  </aside>
+{% endmacro %}
 
 <main class="page album-page">
 
@@ -21,57 +33,46 @@
         <h1 class="display"><em>{{ carnet.title }}</em></h1>
       </div>
       <div class="album-head-actions">
-        <button type="button" class="btn btn-secondary" id="btn-add-margin-note"
-                title="Ajouter une note ou un billet en marge"
-                style="margin-right:8px">
-          ✎ + Note de marge
-        </button>
         <a href="{{ url_for('carnet_apercu', cid_carnet=carnet.id) }}"
            class="btn-print-card"
            title="Aperçu du livre + impression PDF">
           <span class="btn-print-icon" aria-hidden="true">📖</span>
           <span class="btn-print-label">
-            <span class="btn-print-line1">Imprimer</span>
+            <span class="btn-print-line1">Le livre</span>
             <span class="btn-print-line2">Aperçu &amp; PDF</span>
           </span>
         </a>
       </div>
     </div>
     <p class="lead" id="album-status">
-      <span id="main-count">{{ main_pages|length }}</span> page(s) ·
-      <span id="margin-count">{{ margin_pages|length }}</span> en marge ·
-      <span id="sort-mode-label">{% if sort_mode == 'manual' %}ordre manuel{% else %}chronologique{% endif %}</span>
+      <span id="main-count">{{ main_pages|length }}</span> pages ·
+      <span id="margin-count">{{ margin_pages|length }}</span> notes en marge
+      <span id="sort-mode-label" class="sort-mode-chip">{% if sort_mode == 'manual' %}ordre manuel{% endif %}</span>
       <span id="save-status" class="save-indicator"></span>
     </p>
     <div class="sort-mode-row">
-      {% if sort_mode == 'manual' %}
-      <button type="button" class="btn btn-secondary btn-sm" id="btn-sort-chrono">
-        ↻ Re-trier chronologiquement
+      <button type="button" class="btn btn-secondary btn-sm" id="btn-reorder"
+              onclick="armAction(this, 'Confirmer le re-tri ?', remettreEnOrdre)"
+              title="Re-trie par date de prise et recalcule les journées — les déplacements manuels sont perdus">
+        ↻ Remettre en ordre chronologique
       </button>
-      {% endif %}
-      <span class="sort-hint">Glisse-dépose les pages pour réorganiser</span>
+      <span class="sort-hint">Glisse-dépose les photos pour affiner</span>
     </div>
   </section>
 
-  {# ────── MINI CARTE (si photos geolocalisees) ────── #}
+  {# ────── MINI CARTE (si photos géolocalisées) ────── #}
   {% if geo_photos %}
   <section class="album-map-wrap">
     <div class="album-map-head">
       <span class="kicker">Sur la carte</span>
-      <span class="map-count">{{ geo_photos|length }} photo(s) localisee(s)</span>
+      <span class="map-count">{{ geo_photos|length }} photo(s) localisée(s)</span>
     </div>
     <div id="album-map" class="album-map"></div>
   </section>
   {% endif %}
 
-  {# ────── ALBUM PRINCIPAL avec SECTIONS auto (Brief 05) ────── #}
+  {# ────── ALBUM PRINCIPAL : sections auto + rail de marge aligné ────── #}
   <section class="album-section">
-    <div class="album-section-head">
-      <h2 class="section-title">L'album</h2>
-      <button type="button" class="btn btn-secondary btn-sm" id="btn-recompute-sections" title="Réorganiser automatiquement par jour/lieu">
-        ↻ Réorganiser
-      </button>
-    </div>
 
     {% if structured %}
       {% for s1 in structured %}
@@ -79,40 +80,68 @@
         <div class="album-l1-head">
           <h3 class="album-l1-title"><em>{{ s1.section.primary_label }}</em></h3>
           {% if s1.section.secondary_label %}
-          <p class="album-l1-sub">{{ s1.section.secondary_label }}</p>
+          <p class="album-l1-sub">{{ s1.section.secondary_label|doux_label }}</p>
           {% endif %}
           <div class="album-l1-rule"></div>
         </div>
 
-        {% for sub in s1.subsections %}
-        <div class="album-level2">
-          <div class="album-l2-head">
-            {% if sub.section.location_lat is not none and sub.section.location_lng is not none %}
-            <div class="album-l2-mini-map">
-              <a href="https://www.google.com/maps?q={{ sub.section.location_lat }},{{ sub.section.location_lng }}" target="_blank" rel="noopener">
-                <img src="https://staticmap.openstreetmap.de/staticmap.php?center={{ sub.section.location_lat }},{{ sub.section.location_lng }}&zoom=11&size=80x80&maptype=mapnik&markers={{ sub.section.location_lat }},{{ sub.section.location_lng }},red-pushpin" alt="" loading="lazy" onerror="this.style.display='none'">
-              </a>
+        {% if s1.section.kind == 'day' %}
+          {# ── Cas B/C : le niveau 1 EST un jour → un seul bloc jour + rail ── #}
+          {% set day = (s1.section.date_start or '')[:10] %}
+          <div class="day-block">
+            <div class="day-main">
+              <ul class="pages-list pages-list-sub">
+                {% for sub in s1.subsections %}
+                  {% if s1.subsections|length > 1 %}
+                  <li class="moment-sep">
+                    <span class="moment-sep-title">{{ sub.section.primary_label|doux_label|capitalize }}</span>
+                    {% if sub.section.secondary_label %}
+                    <span class="moment-sep-sub">{{ sub.section.secondary_label|doux_label }}</span>
+                    {% endif %}
+                  </li>
+                  {% endif %}
+                  {% for p in sub.pages %}
+                    {% include '_page_item.html' %}
+                  {% endfor %}
+                {% endfor %}
+                {% for p in s1.pages %}
+                  {% include '_page_item.html' %}
+                {% endfor %}
+              </ul>
             </div>
-            {% endif %}
-            <div class="album-l2-meta">
-              <span class="album-l2-title">{{ sub.section.primary_label }}</span>
-              <span class="album-l2-sub">{{ sub.section.secondary_label }}</span>
+            {{ day_rail(day) }}
+          </div>
+
+        {% else %}
+          {# ── Cas A : niveau 1 = lieu, chaque niveau 2 est un jour + rail ── #}
+          {% for sub in s1.subsections %}
+          {% set day = (sub.section.date_start or '')[:10] %}
+          <div class="album-level2">
+            <div class="album-l2-head">
+              <div class="album-l2-meta">
+                <span class="album-l2-title">{{ sub.section.primary_label|doux_label }}</span>
+                <span class="album-l2-sub">{{ sub.section.secondary_label|doux_label }}</span>
+              </div>
+            </div>
+            <div class="day-block">
+              <div class="day-main">
+                <ul class="pages-list pages-list-sub">
+                  {% for p in sub.pages %}
+                    {% include '_page_item.html' %}
+                  {% endfor %}
+                </ul>
+              </div>
+              {{ day_rail(day) }}
             </div>
           </div>
+          {% endfor %}
+          {% if s1.pages %}
           <ul class="pages-list pages-list-sub">
-            {% for p in sub.pages %}
+            {% for p in s1.pages %}
               {% include '_page_item.html' %}
             {% endfor %}
           </ul>
-        </div>
-        {% endfor %}
-
-        {% if s1.pages %}
-        <ul class="pages-list pages-list-sub">
-          {% for p in s1.pages %}
-            {% include '_page_item.html' %}
-          {% endfor %}
-        </ul>
+          {% endif %}
         {% endif %}
       </div>
       {% endfor %}
@@ -150,14 +179,15 @@
     {% endif %}
   </section>
 
-  {# ────── NOTES EN MARGE ────── #}
-  <section class="album-section album-section-margin">
+  {# ────── NOTES EN MARGE restantes (jours sans section, ou carnet sans sections) ────── #}
+  <section class="album-section album-section-margin"
+           {% if not margin_rest and structured %}style="display:none"{% endif %}>
     <h2 class="section-title">
       Notes en marge
-      <span class="section-hint">Photos de contexte (lieux, plans, billets) · separees a l'impression</span>
+      <span class="section-hint">Sans jour correspondant dans l'album · séparées à l'impression</span>
     </h2>
     <ul class="pages-list pages-list-margin" id="pages-margin">
-      {% for g in margin_groups %}
+      {% for g in (margin_rest if structured else margin_groups) %}
         <li class="margin-day-sep" data-day="{{ g.day }}">{{ g.label }}</li>
         {% for p in g.pages %}
           {% include '_page_item.html' %}
@@ -166,65 +196,59 @@
     </ul>
     {% if not margin_pages %}
     <div class="empty-state empty-section" id="empty-margin">
-      <p class="empty-lead">Aucune note en marge. Toggle « Marge » sur une page pour la deplacer ici.</p>
+      <p class="empty-lead">Aucune note en marge. « ↑ Marge » sur une photo, ou le « + » du rail, pour en créer.</p>
     </div>
     {% endif %}
   </section>
 
 </main>
 
-<!-- Footer flottant : actions ajout -->
+<!-- Footer flottant : 4 actions + interrupteur marge -->
 <div class="album-footer">
   <input type="file" id="file-photos" accept="image/*" multiple style="position:absolute;left:-9999px;width:1px;height:1px">
   <input type="file" id="file-camera" accept="image/*" capture="environment" style="position:absolute;left:-9999px;width:1px;height:1px">
-  <input type="file" id="file-margin" accept="image/*" multiple style="position:absolute;left:-9999px;width:1px;height:1px">
   <input type="file" id="file-video" accept="video/*,video/mp4,video/quicktime,video/x-m4v,.mp4,.mov,.m4v,.webm" style="position:absolute;left:-9999px;width:1px;height:1px">
 
   <button type="button" class="fab-btn" onclick="document.getElementById('file-photos').click()">
     <span class="fab-icon">+</span> Photos
   </button>
-  <button type="button" class="fab-btn" onclick="document.getElementById('file-camera').click()">
-    <span class="fab-icon">📷</span> Camera
+  <button type="button" class="fab-btn" onclick="document.getElementById('file-camera').click()" title="Prendre une photo">
+    <span class="fab-icon">📷</span><span class="fab-label-optional"> Caméra</span>
   </button>
-  <button type="button" class="fab-btn" onclick="document.getElementById('file-video').click()" title="Ajouter une video">
-    <span class="fab-icon">🎬</span> Video
+  <button type="button" class="fab-btn" onclick="document.getElementById('file-video').click()" title="Ajouter une vidéo">
+    <span class="fab-icon">🎬</span><span class="fab-label-optional"> Vidéo</span>
   </button>
-  <button type="button" class="fab-btn" onclick="document.getElementById('file-margin').click()" title="Photo de contexte">
-    <span class="fab-icon">★</span> Marge
-  </button>
-  <button type="button" class="fab-btn" onclick="addTextBlock(false)">
+  <button type="button" class="fab-btn" onclick="addTextBlock(margeOn())">
     <span class="fab-icon">¶</span> Texte
   </button>
-  <button type="button" class="fab-btn fab-btn-margin" onclick="addTextBlock(true)" title="Note de texte en marge">
-    <span class="fab-icon">¶</span> Note
+  <button type="button" class="fab-toggle" id="fab-toggle-marge"
+          onclick="toggleMargeMode(this)"
+          title="Quand c'est activé, les prochains ajouts partent dans la marge">
+    <span class="fab-toggle-dot"></span> marge
   </button>
 </div>
 
 <!-- Modale ajout note de marge -->
-<div class="cover-modal" id="margin-note-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);align-items:center;justify-content:center;z-index:9000;padding:20px">
-  <div style="background:#FAF8F4;max-width:520px;width:100%;max-height:88vh;overflow-y:auto;border-radius:8px;padding:22px">
-    <button type="button" onclick="closeMarginNote()"
-            style="background:transparent;border:none;cursor:pointer;font-size:22px;line-height:1;float:right;padding:0;color:#6A6357">×</button>
-    <h3 style="font-family:Fraunces,serif;font-style:italic;margin:0 0 6px;font-size:22px">Note de marge</h3>
-    <p style="font-size:12px;color:#6A6357;margin:0 0 16px">
+<div class="cover-modal margin-note-modal" id="margin-note-modal" style="display:none">
+  <div class="margin-note-card">
+    <button type="button" class="margin-note-close" onclick="closeMarginNote()">×</button>
+    <h3 class="margin-note-title">Note de marge</h3>
+    <p class="margin-note-sub">
       Photo de contexte, billet de musée, gribouillis, citation… apparaîtra dans la marge du livre.
     </p>
     <form id="margin-note-form" enctype="multipart/form-data">
-      <label style="display:block;font-size:11px;letter-spacing:0.06em;color:#6A6357;margin-bottom:6px">PHOTO (optionnelle)</label>
-      <input type="file" name="photo" id="mn-photo" accept="image/*"
-             style="display:block;margin-bottom:14px">
+      <label class="margin-note-label">PHOTO (optionnelle)</label>
+      <input type="file" name="photo" id="mn-photo" accept="image/*" class="margin-note-file">
 
-      <label style="display:block;font-size:11px;letter-spacing:0.06em;color:#6A6357;margin-bottom:6px">LÉGENDE COURTE</label>
+      <label class="margin-note-label">LÉGENDE COURTE</label>
       <input type="text" name="caption" id="mn-caption" maxlength="120"
-             placeholder="Une phrase, un nom de lieu…"
-             style="width:100%;padding:8px 10px;border:1px solid #d8d2c5;border-radius:4px;font-size:13px;margin-bottom:14px">
+             placeholder="Une phrase, un nom de lieu…" class="margin-note-input">
 
-      <label style="display:block;font-size:11px;letter-spacing:0.06em;color:#6A6357;margin-bottom:6px">NOTE LONGUE (optionnelle)</label>
+      <label class="margin-note-label">NOTE LONGUE (optionnelle)</label>
       <textarea name="text" id="mn-text" rows="4"
-                placeholder="Souvenir, anecdote, prix, adresse…"
-                style="width:100%;padding:10px;border:1px solid #d8d2c5;border-radius:4px;font-family:Fraunces,serif;font-style:italic;font-size:13px;resize:vertical"></textarea>
+                placeholder="Souvenir, anecdote, prix, adresse…" class="margin-note-textarea"></textarea>
 
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <div class="margin-note-actions">
         <button type="button" class="btn btn-secondary" onclick="closeMarginNote()">Annuler</button>
         <button type="submit" class="btn btn-primary" id="mn-submit">Ajouter à la marge</button>
       </div>
@@ -259,7 +283,78 @@
   const URL_ADD_TEXT = "{{ url_for('carnet_add_text', cid_carnet=carnet.id) }}";
   const URL_ADD_MARGIN_NOTE = "{{ url_for('carnet_add_margin_note', cid_carnet=carnet.id) }}";
 
-  /* ─ Note de marge ─ */
+  /* ─ Reload en conservant la position de scroll (audit P1) ─ */
+  const SCROLL_KEY = 'albumScroll:' + location.pathname;
+  function reloadKeepScroll() {
+    try { sessionStorage.setItem(SCROLL_KEY, String(window.scrollY)); } catch(e) {}
+    location.reload();
+  }
+  document.addEventListener('DOMContentLoaded', function(){
+    try {
+      const y = sessionStorage.getItem(SCROLL_KEY);
+      if (y !== null) {
+        sessionStorage.removeItem(SCROLL_KEY);
+        window.scrollTo(0, parseInt(y, 10) || 0);
+      }
+    } catch(e) {}
+  });
+
+  /* ─ Outils de tuile (⋯) : un seul panneau ouvert à la fois ─ */
+  function toggleTools(btn) {
+    const item = btn.closest('.page-item');
+    if (!item) return;
+    const wasOpen = item.classList.contains('tools-open');
+    document.querySelectorAll('.page-item.tools-open').forEach(function(el){
+      el.classList.remove('tools-open');
+    });
+    if (!wasOpen) item.classList.add('tools-open');
+  }
+  document.addEventListener('click', function(e){
+    if (e.target.closest('.page-tools') || e.target.closest('.page-more')) return;
+    document.querySelectorAll('.page-item.tools-open').forEach(function(el){
+      el.classList.remove('tools-open');
+    });
+  });
+  window.toggleTools = toggleTools;
+
+  /* ─ Confirmation inline (remplace confirm() bloquant) ─
+     1er clic : le bouton s'arme et affiche le libellé de confirmation ;
+     2e clic dans les 3,5 s : l'action part. Sinon le bouton se désarme. */
+  function armAction(btn, label, fn) {
+    if (btn.dataset.armed === '1') {
+      btn.dataset.armed = '';
+      btn.classList.remove('is-armed');
+      btn.textContent = btn.dataset.originalLabel || btn.textContent;
+      fn();
+      return;
+    }
+    btn.dataset.originalLabel = btn.textContent;
+    btn.dataset.armed = '1';
+    btn.classList.add('is-armed');
+    btn.textContent = label;
+    clearTimeout(btn._armTimer);
+    btn._armTimer = setTimeout(function(){
+      btn.dataset.armed = '';
+      btn.classList.remove('is-armed');
+      btn.textContent = btn.dataset.originalLabel;
+    }, 3500);
+  }
+  function armDelete(btn, pageId) {
+    armAction(btn, 'Confirmer ?', function(){ deletePage(pageId); });
+  }
+  window.armAction = armAction; window.armDelete = armDelete;
+
+  /* ─ Interrupteur « vers la marge » du footer ─ */
+  let _margeMode = false;
+  function margeOn() { return _margeMode; }
+  function toggleMargeMode(btn) {
+    _margeMode = !_margeMode;
+    btn.classList.toggle('is-on', _margeMode);
+    setSaved(_margeMode ? 'Prochains ajouts : en marge' : 'Prochains ajouts : album');
+  }
+  window.margeOn = margeOn; window.toggleMargeMode = toggleMargeMode;
+
+  /* ─ Note de marge (modale) ─ */
   function openMarginNote(){
     const m = document.getElementById('margin-note-modal');
     m.style.display = 'flex';
@@ -271,9 +366,8 @@
   function closeMarginNote(){
     document.getElementById('margin-note-modal').style.display = 'none';
   }
+  window.openMarginNote = openMarginNote; window.closeMarginNote = closeMarginNote;
   document.addEventListener('DOMContentLoaded', function(){
-    const btn = document.getElementById('btn-add-margin-note');
-    if (btn) btn.addEventListener('click', openMarginNote);
     const form = document.getElementById('margin-note-form');
     if (form) form.addEventListener('submit', async function(ev){
       ev.preventDefault();
@@ -286,13 +380,13 @@
         const d = await r.json();
         if (d.ok) {
           closeMarginNote();
-          location.reload();
+          reloadKeepScroll();
         } else {
-          alert('Erreur : ' + (d.error || 'inconnue'));
+          setError('Erreur : ' + (d.error || 'inconnue'));
           submit.disabled = false; submit.textContent = 'Ajouter à la marge';
         }
       } catch(e) {
-        alert('Erreur réseau : ' + e);
+        setError('Erreur réseau : ' + e);
         submit.disabled = false; submit.textContent = 'Ajouter à la marge';
       }
     });
@@ -307,10 +401,10 @@
   let saveTimer = null;
   function setSaving(msg) { saveStatus.textContent = msg || 'Enregistrement...'; saveStatus.className = 'save-indicator saving'; }
   function setSaved(msg) {
-    saveStatus.textContent = msg || '✓ Enregistre';
+    saveStatus.textContent = msg || '✓ Enregistré';
     saveStatus.className = 'save-indicator saved';
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(function(){ saveStatus.textContent = ''; }, 1400);
+    saveTimer = setTimeout(function(){ saveStatus.textContent = ''; }, 1800);
   }
   function setError(msg) { saveStatus.textContent = msg || 'Erreur'; saveStatus.className = 'save-indicator error'; }
 
@@ -461,89 +555,27 @@
       console.log('upload response:', data);
       if (!data.ok) { setError('Echec : ' + (data.error || 'inconnu')); return; }
 
-      // Insere dans la bonne liste, et reordonne par taken_at
-      data.created.forEach(function(p){
-        const li = buildPageLi(p);
-        const targetList = document.getElementById(p.is_margin ? 'pages-margin' : 'pages-main');
-        if (targetList) insertChronological(targetList, li, p.taken_at);
-      });
-      attachAllAutosaves();
-      updateCounts();
-      var msg = data.created.length + ' ajoute(s)';
+      var msg = data.created.length + ' ajouté(s)';
       if (data.errors && data.errors.length) {
         setError(msg + ' · ' + data.errors.length + ' erreur(s)');
         console.warn('Erreurs serveur :', data.errors);
+        setTimeout(function(){ reloadKeepScroll(); }, 1200);
       } else {
         setSaved(msg);
+        // Reload : re-slotter dans les sections auto + rail de marge
+        setTimeout(function(){ reloadKeepScroll(); }, 500);
       }
-      // Reload : afficher les sections auto (Brief 05) + rebuilder la carte Leaflet
-      setTimeout(function(){ location.reload(); }, 800);
     } catch (e) {
       console.error(e);
       setError('Reseau : ' + e.message);
     }
   }
 
-  function buildPageLi(p) {
-    const li = document.createElement('li');
-    li.className = 'page-item' + (p.is_margin ? ' page-item-margin' : '');
-    li.dataset.pageId = p.page_id;
-    li.dataset.type = 'photo';
-    li.dataset.takenAt = p.taken_at || '';
-    li.dataset.isMargin = p.is_margin ? '1' : '0';
-    var nowFallback = new Date().toISOString().slice(0, 16).replace('T', ' ');
-    var dateHtml = p.taken_at
-      ? '<div class="page-date" title="Date de prise (EXIF)">' + fmtDate(p.taken_at) + '</div>'
-      : '<div class="page-date page-date-fallback" title="EXIF non disponible">ajoutee ' + nowFallback + '</div>';
-    var gpsHtml = '';
-    if (p.gps_lat != null && p.gps_lng != null) {
-      var ll = p.gps_lat.toFixed(5) + ',' + p.gps_lng.toFixed(5);
-      gpsHtml = '<a class="page-gps" target="_blank" rel="noopener" href="https://www.google.com/maps?q=' + ll + '">📍 ' + ll + '</a>';
-    }
-    var marginLabel = p.is_margin ? '↓ Album' : '↑ Marge';
-    li.innerHTML = `
-      <span class="drag-handle" title="Glisser pour reorganiser">⋮⋮</span>
-      <a class="page-photo" href="javascript:void(0)" onclick="openViewer(${p.page_id})">
-        <img src="${p.thumb_url}" data-full="${p.full_url}" data-page-id="${p.page_id}" loading="lazy" alt="">
-      </a>
-      <div class="page-meta">${dateHtml}${gpsHtml}</div>
-      <div class="page-caption-wrap">
-        <textarea class="page-caption" placeholder="Une legende..." rows="1" data-page-id="${p.page_id}"></textarea>
-      </div>
-      <div class="page-actions">
-        <button class="page-action-btn" type="button" onclick="toggleMargin(${p.page_id})">${marginLabel}</button>
-        <button class="page-action-btn page-action-danger" type="button" onclick="deletePage(${p.page_id})">✕ Supprimer</button>
-      </div>
-    `;
-    return li;
-  }
-
-  // v3.4 : comparaison sur cle normalisee (T/espace/Z mixtes sinon)
-  function normTs(s) {
-    return String(s || '').replace('T', ' ').replace(/Z$/, '').slice(0, 19);
-  }
-  function insertChronological(list, newLi, takenAt) {
-    var key = normTs(takenAt);
-    if (!key) { list.appendChild(newLi); return; }
-    const items = Array.from(list.querySelectorAll('.page-item'));
-    for (const existing of items) {
-      const t = normTs(existing.dataset.takenAt);
-      if (!t || t > key) {
-        list.insertBefore(newLi, existing);
-        return;
-      }
-    }
-    list.appendChild(newLi);
-  }
-
   document.getElementById('file-photos').addEventListener('change', function(e){
-    uploadFiles(e.target.files, { margin: false }); e.target.value = '';
+    uploadFiles(e.target.files, { margin: margeOn() }); e.target.value = '';
   });
   document.getElementById('file-camera').addEventListener('change', function(e){
-    uploadFiles(e.target.files, { margin: false, fromCamera: true }); e.target.value = '';
-  });
-  document.getElementById('file-margin').addEventListener('change', function(e){
-    uploadFiles(e.target.files, { margin: true }); e.target.value = '';
+    uploadFiles(e.target.files, { margin: margeOn(), fromCamera: true }); e.target.value = '';
   });
   document.getElementById('file-video').addEventListener('change', function(e){
     uploadVideo(e.target.files && e.target.files[0]);
@@ -693,7 +725,7 @@
       if (!d.ok) { setError('Finalisation : ' + (d.error || '')); return; }
       setSaved('Video ajoutee');
       // Reload pour afficher dans les sections auto
-      setTimeout(function(){ location.reload(); }, 600);
+      setTimeout(function(){ reloadKeepScroll(); }, 600);
     } catch (e) {
       setError('Finalisation : ' + e.message);
     }
@@ -702,10 +734,8 @@
 
   // ── Drag & drop : reorder pages (SortableJS) ──────────────────
   // v3.4 : Sortable est initialise sur TOUTES les listes visibles (sections
-  // auto comprises — avant, seule la liste plate cachee etait sortable, le
-  // drag & drop ne marchait donc jamais des que les sections existaient).
-  // L'ordre envoye au serveur = ordre DOM global de l'album principal, pour
-  // que les positions restent coherentes entre sections.
+  // auto comprises). L'ordre envoye au serveur = ordre DOM global de l'album
+  // principal, pour que les positions restent coherentes entre sections.
   function collectMainIds() {
     return Array.from(document.querySelectorAll(
       '.album-section:not(.album-section-margin) .page-item'
@@ -719,7 +749,7 @@
       ghostClass: 'page-ghost',
       dragClass: 'page-dragging',
       draggable: '.page-item',
-      filter: '.margin-day-sep',
+      filter: '.margin-day-sep, .moment-sep',
       delay: 50,
       delayOnTouchOnly: true,
       onEnd: async function(){
@@ -728,7 +758,7 @@
               return li.dataset.pageId;
             })
           : collectMainIds();
-        setSaving('Reorganisation...');
+        setSaving('Réorganisation...');
         var fd = new FormData(); fd.append('_csrf', CSRF);
         ids.forEach(function(id){ fd.append('page_id', id); });
         try {
@@ -737,67 +767,40 @@
           if (!d.ok) { setError('Reorder : ' + (d.error || '')); return; }
           var lbl = document.getElementById('sort-mode-label');
           if (lbl) lbl.textContent = 'ordre manuel';
-          if (!document.getElementById('btn-sort-chrono')) {
-            var row = document.querySelector('.sort-mode-row');
-            if (row) {
-              var btn = document.createElement('button');
-              btn.type = 'button';
-              btn.className = 'btn btn-secondary btn-sm';
-              btn.id = 'btn-sort-chrono';
-              btn.textContent = '↻ Re-trier chronologiquement';
-              btn.addEventListener('click', resortChrono);
-              row.insertBefore(btn, row.firstChild);
-            }
-          }
-          setSaved('Ordre enregistre');
+          setSaved('Ordre enregistré');
         } catch(e) { setError('Reseau : ' + e.message); }
       }
     });
   }
 
-  async function resortChrono() {
-    if (!confirm('Re-trier toutes les pages par date de prise ? Tu perdras ton ordre manuel.')) return;
-    setSaving();
+  // ── « Remettre en ordre chronologique » = re-tri par date + recalcul
+  //    des journées, en un seul geste (audit P1 : boutons fusionnés) ──
+  async function remettreEnOrdre() {
+    setSaving('Remise en ordre...');
     var fd = new FormData(); fd.append('_csrf', CSRF);
     try {
-      var r = await fetch("{{ url_for('carnet_sort_chrono', cid_carnet=carnet.id) }}", { method:'POST', body: fd });
-      var d = await r.json();
-      if (!d.ok) { setError(); return; }
-      setSaved('Trie par date');
-      setTimeout(function(){ location.reload(); }, 800);
+      var r1 = await fetch("{{ url_for('carnet_sort_chrono', cid_carnet=carnet.id) }}", { method:'POST', body: fd });
+      var d1 = await r1.json();
+      if (!d1.ok) { setError('Tri : ' + (d1.error || '')); return; }
+      var fd2 = new FormData(); fd2.append('_csrf', CSRF);
+      var r2 = await fetch("{{ url_for('carnet_recompute_sections', cid_carnet=carnet.id) }}", { method:'POST', body: fd2 });
+      var d2 = await r2.json();
+      if (!d2.ok) { setError('Sections : ' + (d2.error || '')); return; }
+      setSaved('Album remis en ordre');
+      setTimeout(function(){ reloadKeepScroll(); }, 500);
     } catch(e) { setError('Reseau'); }
   }
+  window.remettreEnOrdre = remettreEnOrdre;
 
   function bootSortable() {
     initSortable(document.getElementById('pages-main'), false);
-    // v3.4 : les listes des sections auto (et orphelins) sont sortables aussi
     document.querySelectorAll('.pages-list-sub').forEach(function(el){
       initSortable(el, false);
     });
     initSortable(document.getElementById('pages-margin'), true);
-    var chronoBtn = document.getElementById('btn-sort-chrono');
-    if (chronoBtn) chronoBtn.addEventListener('click', resortChrono);
   }
   if (window.Sortable) bootSortable();
   else window.addEventListener('load', bootSortable);
-  window.resortChrono = resortChrono;
-
-  // ── Recompute sections (Brief 05) ─────────────────────────────
-  var btnRecompute = document.getElementById('btn-recompute-sections');
-  if (btnRecompute) {
-    btnRecompute.addEventListener('click', async function(){
-      if (!confirm('Réorganiser automatiquement par jour et lieu ?\nLes déplacements manuels seront perdus.')) return;
-      setSaving('Réorganisation...');
-      var fd = new FormData(); fd.append('_csrf', CSRF);
-      try {
-        var r = await fetch("{{ url_for('carnet_recompute_sections', cid_carnet=carnet.id) }}", { method:'POST', body: fd });
-        var d = await r.json();
-        if (!d.ok) { setError(); return; }
-        setSaved('Sections recalculées');
-        setTimeout(function(){ location.reload(); }, 600);
-      } catch(e) { setError('Réseau'); }
-    });
-  }
 
   // ── Auto-save captions / texte ─────────────────────────────────
   function debounce(fn, ms) { let t; return function(){ clearTimeout(t); t = setTimeout(fn, ms); }; }
@@ -850,7 +853,7 @@
     try {
       const r = await fetch(`/album_page/${form.dataset.pageId}/taken_at`, { method: 'POST', body: fd });
       const d = await r.json();
-      if (d.ok) { setSaved(); window.location.reload(); }
+      if (d.ok) { setSaved(); reloadKeepScroll(); }
       else { setError(d.error || ''); }
     } catch (e) { setError('Reseau'); }
     return false;
@@ -870,24 +873,33 @@
       if (empty) empty.style.display = 'none';
       const list = document.getElementById(asMargin ? 'pages-margin' : 'pages-main');
       const li = document.createElement('li');
-      li.className = 'page-item' + (asMargin ? ' page-item-margin' : '');
+      li.className = 'page-item is-text' + (asMargin ? ' page-item-margin' : '');
       li.dataset.pageId = d.page_id;
       li.dataset.type = 'text';
       li.dataset.isMargin = asMargin ? '1' : '0';
+      li.style.setProperty('--tilt', (((d.page_id % 7) - 3) * 0.45) + 'deg');
       var nowFallback = new Date().toISOString().slice(0, 16).replace('T', ' ');
       var marginLabel = asMargin ? '↓ Album' : '↑ Marge';
       li.innerHTML = `
-        <span class="drag-handle" title="Glisser pour reorganiser">⋮⋮</span>
-        <textarea class="page-text" placeholder="Quelques mots..." rows="3" data-page-id="${d.page_id}"></textarea>
-        <div class="page-meta page-meta-text">
-          <div class="page-date page-date-fallback">ajoute ${nowFallback}</div>
-        </div>
-        <div class="page-actions">
-          <button class="page-action-btn" type="button" onclick="attachPhoto(${d.page_id})">+ Photo</button>
-          <button class="page-action-btn" type="button" onclick="toggleMargin(${d.page_id})">${marginLabel}</button>
-          <button class="page-action-btn page-action-danger" type="button" onclick="deletePage(${d.page_id})">✕ Supprimer</button>
+        <span class="drag-handle" title="Glisser pour réorganiser">⋮⋮</span>
+        <textarea class="page-text" placeholder="Quelques mots…" rows="3" data-page-id="${d.page_id}"></textarea>
+        <button type="button" class="page-more" onclick="toggleTools(this)" aria-label="Détails et actions">⋯</button>
+        <div class="page-tools">
+          <div class="page-meta page-meta-text">
+            <div class="page-date page-date-fallback">ajouté ${nowFallback}</div>
+          </div>
+          <div class="page-actions">
+            <button class="page-action-btn" type="button" onclick="attachPhoto(${d.page_id})">+ Photo</button>
+            <button class="page-action-btn" type="button" onclick="toggleMargin(${d.page_id})">${marginLabel}</button>
+            <button class="page-action-btn page-action-danger" type="button" onclick="armDelete(this, ${d.page_id})">✕ Supprimer</button>
+          </div>
         </div>
       `;
+      if (asMargin) {
+        const sect = document.querySelector('.album-section-margin');
+        if (sect) sect.style.display = '';
+      }
+      list.style.display = '';
       list.appendChild(li);
       attachAllAutosaves();
       const ta = li.querySelector('.page-text');
@@ -917,29 +929,14 @@
         const r = await fetch(`/album_page/${pageId}/attach_photo`, { method: 'POST', body: fd });
         const d = await r.json();
         if (!d.ok) { setError('Echec : ' + (d.error || '')); return; }
-        // Insere l'image en debut du bloc et bascule le bouton sur "Detach"
-        const li = document.querySelector(`.page-item[data-page-id="${pageId}"]`);
-        if (!li) return;
-        const a = document.createElement('a');
-        a.className = 'page-photo';
-        a.href = 'javascript:void(0)';
-        a.setAttribute('onclick', 'openViewer(' + pageId + ')');
-        a.innerHTML = '<img src="' + d.thumb_url + '" data-full="' + d.full_url + '" data-page-id="' + pageId + '" loading="lazy" alt="">';
-        li.insertBefore(a, li.firstChild);
-        // Remplacer le bouton "+ Photo" en "✕ Photo"
-        const btn = li.querySelector('.page-action-btn');
-        if (btn && btn.textContent.indexOf('Photo') >= 0) {
-          btn.textContent = '✕ Photo';
-          btn.setAttribute('onclick', 'detachPhoto(' + pageId + ')');
-        }
-        setSaved('Photo ajoutee');
+        setSaved('Photo ajoutée');
+        setTimeout(function(){ reloadKeepScroll(); }, 400);
       } catch (e) { setError('Reseau : ' + e.message); console.error(e); }
     };
     inp.click();
   }
 
   async function detachPhoto(pageId) {
-    if (!confirm('Retirer la photo de ce bloc ? Le texte est conserve.')) return;
     setSaving();
     const fd = new FormData(); fd.append('_csrf', CSRF);
     try {
@@ -958,8 +955,9 @@
       setSaved();
     } catch (e) { setError('Reseau'); }
   }
+  window.attachPhoto = attachPhoto; window.detachPhoto = detachPhoto;
 
-  // ── Toggle margin ─────────────────────────────────────────────
+  // ── Toggle margin : bascule album <-> marge puis re-slotte via reload ──
   async function toggleMargin(pageId) {
     setSaving();
     const fd = new FormData(); fd.append('_csrf', CSRF);
@@ -967,24 +965,13 @@
       const r = await fetch(`/album_page/${pageId}/margin`, { method: 'POST', body: fd });
       const d = await r.json();
       if (!d.ok) { setError(); return; }
-      const li = document.querySelector(`.page-item[data-page-id="${pageId}"]`);
-      if (!li) return;
-      li.classList.toggle('page-item-margin', d.is_margin);
-      li.dataset.isMargin = d.is_margin ? '1' : '0';
-      const targetList = document.getElementById(d.is_margin ? 'pages-margin' : 'pages-main');
-      if (targetList) {
-        insertChronological(targetList, li, li.dataset.takenAt);
-      }
-      const btn = li.querySelector('.page-margin-btn');
-      if (btn) btn.textContent = d.is_margin ? '↓ Mettre dans l\'album' : '↑ Mettre en marge';
-      updateCounts();
-      setSaved();
+      setSaved(d.is_margin ? 'Déplacé en marge' : 'Remis dans l\'album');
+      setTimeout(function(){ reloadKeepScroll(); }, 350);
     } catch (e) { setError('Reseau'); }
   }
 
-  // ── Suppression ───────────────────────────────────────────────
+  // ── Suppression (confirmation inline via armDelete) ───────────
   async function deletePage(pageId) {
-    if (!confirm('Supprimer cette page ?')) return;
     setSaving();
     const fd = new FormData(); fd.append('_csrf', CSRF);
     try {
@@ -994,13 +981,13 @@
       const li = document.querySelector(`.page-item[data-page-id="${pageId}"]`);
       if (li) li.remove();
       updateCounts();
-      setSaved();
+      setSaved('Supprimé');
     } catch (e) { setError('Reseau'); }
   }
 
   function updateCounts() {
-    const m = document.querySelectorAll('#pages-main > .page-item').length;
-    const g = document.querySelectorAll('#pages-margin > .page-item').length;
+    const m = document.querySelectorAll('.album-section:not(.album-section-margin) .page-item').length;
+    const g = document.querySelectorAll('.page-item[data-is-margin="1"]').length;
     document.getElementById('main-count').textContent = m;
     document.getElementById('margin-count').textContent = g;
     const eMain = document.getElementById('empty-main');
@@ -1013,8 +1000,8 @@
   let viewerPhotos = [], viewerIdx = 0;
   function refreshViewerList() {
     viewerPhotos = Array.from(document.querySelectorAll('.page-photo img')).map(function(img){
-      const pwrap = img.parentElement.parentElement;
-      const cap = pwrap.querySelector('.page-caption');
+      const pwrap = img.closest('.page-item, .rail-note');
+      const cap = pwrap ? pwrap.querySelector('.page-caption') : null;
       return { full: img.dataset.full, pageId: img.dataset.pageId, caption: (cap ? cap.value : '') };
     });
   }

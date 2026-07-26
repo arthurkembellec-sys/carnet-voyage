@@ -1,0 +1,31 @@
+{# ── Note de marge v4 : petit papier épinglé dans le rail de la timeline ──
+     Mêmes hooks JS que les tuiles (autosave caption/texte, marge, suppression). #}
+<div class="rail-note page-item page-item-margin{% if p.type == 'text' %} is-text{% endif %}"
+     style="--tilt:{{ '%.2f'|format(((p.id % 5) - 2) * 0.9) }}deg"
+     data-page-id="{{ p.id }}"
+     data-type="{{ p.type }}"
+     data-taken-at="{{ p.photo_taken_at or '' }}"
+     data-is-margin="1">
+  {% if p.photo_path %}
+    <a class="page-photo rail-note-photo" href="javascript:void(0)" onclick="openViewer({{ p.id }})">
+      <img src="{{ url_for('serve_upload', filename=p.photo_thumb) }}"
+           data-full="{{ url_for('serve_upload', filename=p.photo_path) }}"
+           data-page-id="{{ p.id }}"
+           loading="lazy" alt="">
+    </a>
+  {% endif %}
+  {% if p.type == 'text' %}
+    <textarea class="page-text rail-note-text" placeholder="Une note…" rows="2"
+              data-page-id="{{ p.id }}">{{ p.text_content or '' }}</textarea>
+  {% else %}
+    <textarea class="page-caption rail-note-caption" placeholder="Une légende…" rows="1"
+              data-page-id="{{ p.id }}">{{ p.caption or '' }}</textarea>
+  {% endif %}
+  <button type="button" class="page-more rail-note-more" onclick="toggleTools(this)" aria-label="Actions">⋯</button>
+  <div class="page-tools">
+    <div class="page-actions">
+      <button class="page-action-btn" type="button" onclick="toggleMargin({{ p.id }})">↓ Album</button>
+      <button class="page-action-btn page-action-danger" type="button" onclick="armDelete(this, {{ p.id }})">✕ Supprimer</button>
+    </div>
+  </div>
+</div>
