@@ -381,6 +381,11 @@ def init_db():
         # ── v2.4 — options carto PDF (Brief 06 §5.7)
         "ALTER TABLE carnets ADD COLUMN pdf_show_overview_map INTEGER DEFAULT 1",
         "ALTER TABLE carnets ADD COLUMN pdf_show_section_maps INTEGER DEFAULT 1",
+        # ── v4.5 — reverie pre-planning : epingles typees, planning par jour,
+        # notes rattachees a une epingle
+        "ALTER TABLE carnet_items ADD COLUMN pin_kind TEXT DEFAULT ''",
+        "ALTER TABLE carnet_items ADD COLUMN planned_day INTEGER",
+        "ALTER TABLE carnet_items ADD COLUMN parent_item_id INTEGER REFERENCES carnet_items(id) ON DELETE SET NULL",
         # ── v4.2 — note de marge rattachee a une photo de l'album
         # (la note se place a cote de sa photo dans le rail, et sur la
         #  page de cette photo dans le livre)
@@ -712,6 +717,16 @@ SOUHAIT_KINDS = [
     ('autre',      'Autre'),
 ]
 
+# v4.5 : types d'epingle sur la carte des reveries (choix au moment d'epingler)
+PIN_KINDS = [
+    ('dormir', '🛏', 'Dormir'),
+    ('manger', '🍽', 'Manger'),
+    ('rando',  '🥾', 'Rando'),
+    ('plage',  '🏖', 'Plage'),
+    ('visite', '🏛', 'Visite'),
+    ('autre',  '📍', 'Autre'),
+]
+
 ITEM_KINDS = [
     ('link',     'Lien'),
     ('photo',    'Photo'),
@@ -959,6 +974,8 @@ def carnet_souhait_view(cid_carnet):
                 'item_id': it['id'],
                 'lat': it['geo_lat'], 'lng': it['geo_lng'],
                 'kind': 'location',
+                'pin_kind': it.get('pin_kind') or '',
+                'planned_day': it.get('planned_day'),
                 'title': it.get('title') or it.get('address') or 'Lieu',
                 'address': it.get('address') or '',
             })
@@ -970,8 +987,14 @@ def carnet_souhait_view(cid_carnet):
                 'title': it.get('title') or 'Photo',
                 'thumb': url_for('serve_upload', filename=it['photo_thumb']) if it.get('photo_thumb') else None,
             })
+    # v4.5 : notes rattachees a une epingle (regroupement)
+    children_by_parent = {}
+    for it in items:
+        if it.get('parent_item_id'):
+            children_by_parent.setdefault(it['parent_item_id'], []).append(it)
     return render_template('carnet_souhait.html', carnet=c, items=items,
         voyages=[dict(v) for v in voyages], item_kinds=ITEM_KINDS,
+        pin_kinds=PIN_KINDS, children_by_parent=children_by_parent,
         geo_items=geo_items)
 
 
@@ -1020,12 +1043,24 @@ def carnet_add_item(cid_carnet):
     # v4.1 : coordonnees posees depuis la carte des reveries
     item_lat = _safe_float(request.form.get('geo_lat'))
     item_lng = _safe_float(request.form.get('geo_lng'))
+    # v4.5 : type d'epingle + rattachement a une epingle parente
+    pin_kind = (request.form.get('pin_kind') or '').strip()
+    if pin_kind and pin_kind not in {k for k, _, _ in PIN_KINDS}:
+        pin_kind = 'autre'
+    parent_id = None
+    raw_parent = request.form.get('parent_item_id')
+    if raw_parent and str(raw_parent).isdigit():
+        par = query("SELECT id FROM carnet_items WHERE id=? AND carnet_id=?",
+                    (int(raw_parent), cid_carnet), one=True)
+        if par:
+            parent_id = par['id']
     iid = execute(
         "INSERT INTO carnet_items (carnet_id, position, kind, title, body, url, "
-        "photo_id, address, geo_lat, geo_lng, amount, currency, added_by) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "photo_id, address, geo_lat, geo_lng, amount, currency, pin_kind, "
+        "parent_item_id, added_by) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (cid_carnet, pos, kind, title, body, url_v, photo_id, address,
-         item_lat, item_lng, amount, currency, session['uid'])
+         item_lat, item_lng, amount, currency, pin_kind, parent_id, session['uid'])
     )
     return jsonify({'ok': True, 'item_id': iid, 'geo_lat': item_lat, 'geo_lng': item_lng})
 
@@ -1047,6 +1082,84 @@ def item_update_geo(item_id):
         return jsonify({'ok': False, 'error': 'Coordonnees invalides'}), 400
     execute("UPDATE carnet_items SET geo_lat=?, geo_lng=? WHERE id=?",
             (lat, lng, item_id))
+    return jsonify({'ok': True})
+
+
+@app.route('/item/<int:item_id>/pin_kind', methods=['POST'])
+@couple_required
+def item_set_pin_kind(item_id):
+    """v4.5 : change le type d'une epingle (dormir, manger, rando...)."""
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    item = query("SELECT ci.id, c.couple_id FROM carnet_items ci "
+                 "JOIN carnets c ON c.id=ci.carnet_id WHERE ci.id=?",
+                 (item_id,), one=True)
+    if not item or item['couple_id'] != current_espace_id():
+        return jsonify({'ok': False, 'error': '404'}), 404
+    kind = (request.form.get('pin_kind') or '').strip()
+    if kind and kind not in {k for k, _, _ in PIN_KINDS}:
+        return jsonify({'ok': False, 'error': 'Type inconnu'}), 400
+    execute("UPDATE carnet_items SET pin_kind=? WHERE id=?", (kind, item_id))
+    return jsonify({'ok': True, 'pin_kind': kind})
+
+
+@app.route('/item/<int:item_id>/parent', methods=['POST'])
+@couple_required
+def item_set_parent(item_id):
+    """v4.5 : rattache (ou detache) une note/lien/photo a une epingle."""
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    item = query("SELECT ci.*, c.couple_id AS cpl FROM carnet_items ci "
+                 "JOIN carnets c ON c.id=ci.carnet_id WHERE ci.id=?",
+                 (item_id,), one=True)
+    if not item or item['cpl'] != current_espace_id():
+        return jsonify({'ok': False, 'error': '404'}), 404
+    raw = (request.form.get('parent_item_id') or '').strip()
+    if not raw:
+        execute("UPDATE carnet_items SET parent_item_id=NULL WHERE id=?", (item_id,))
+        return jsonify({'ok': True, 'parent_item_id': None})
+    if not raw.isdigit() or int(raw) == item_id:
+        return jsonify({'ok': False, 'error': 'Cible invalide'}), 400
+    target = query("SELECT id FROM carnet_items WHERE id=? AND carnet_id=?",
+                   (int(raw), item['carnet_id']), one=True)
+    if not target:
+        return jsonify({'ok': False, 'error': 'Epingle introuvable'}), 404
+    execute("UPDATE carnet_items SET parent_item_id=? WHERE id=?",
+            (target['id'], item_id))
+    return jsonify({'ok': True, 'parent_item_id': target['id']})
+
+
+@app.route('/carnet/<int:cid_carnet>/planning', methods=['POST'])
+@couple_required
+def carnet_planning_save(cid_carnet):
+    """v4.5 : sauvegarde le pre-planning de la reverie.
+    JSON : {date_start, date_end, days: [[item_id,...], ...]} —
+    days[k] = etapes du jour k dans l'ordre. Les items absents -> planned_day NULL.
+    Modifiable a volonte jusqu'au basculement en voyage."""
+    c = _get_carnet_or_404(cid_carnet)
+    if c['type'] != 'souhait':
+        return jsonify({'ok': False, 'error': 'Reverie uniquement'}), 400
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    data = request.get_json(silent=True) or {}
+    ds = (data.get('date_start') or '').strip() or None
+    de = (data.get('date_end') or '').strip() or None
+    if ds and de and de < ds:
+        return jsonify({'ok': False, 'error': 'Dates inversees'}), 400
+    days = data.get('days') or []
+    execute("UPDATE carnets SET date_start=?, date_end=? WHERE id=?",
+            (ds, de, cid_carnet))
+    execute("UPDATE carnet_items SET planned_day=NULL WHERE carnet_id=?",
+            (cid_carnet,))
+    pos = 0
+    for k, day in enumerate(days[:31]):
+        for iid in day:
+            if not str(iid).isdigit():
+                continue
+            execute("UPDATE carnet_items SET planned_day=?, position=? "
+                    "WHERE id=? AND carnet_id=?",
+                    (k, pos, int(iid), cid_carnet))
+            pos += 1
     return jsonify({'ok': True})
 
 

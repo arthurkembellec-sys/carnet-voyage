@@ -3443,3 +3443,124 @@ body.linking-mode .album-footer { opacity: 0.3; pointer-events: none; }
   font-size: 11px; color: var(--ink-muted);
 }
 .invite-regen { margin-top: 14px; text-align: center; }
+
+/* ════════════════════════════════════════════════════════════════════
+   v4.5 — rêverie pré-planning : épingles typées, planning vivant,
+   notes reliées aux épingles (2026-07-26)
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Épingles typées : pastille emoji, couleur par famille */
+.pin-icon .pk {
+  display: block;
+  transform: rotate(45deg);
+  font-size: 13px; line-height: 24px; text-align: center;
+}
+.pin-icon-dormir { background: #5B7A9D; }
+.pin-icon-manger { background: #B0713C; }
+.pin-icon-rando  { background: #5C7A5A; }
+.pin-icon-plage  { background: #4A97A8; }
+.pin-icon-visite { background: #8C6B7A; }
+.pin-icon-autre  { background: var(--accent, #A8503D); }
+
+/* Sélecteur de type dans les popups */
+.pin-kinds {
+  display: flex; gap: 3px; margin: 8px 0 6px;
+  flex-wrap: wrap;
+}
+.pin-kinds button {
+  border: 1px solid var(--border-default);
+  background: var(--bg-card);
+  border-radius: 8px;
+  font-size: 14px; line-height: 1;
+  padding: 6px 7px; cursor: pointer;
+  opacity: 0.55;
+  transition: opacity .15s, border-color .15s, background .15s;
+}
+.pin-kinds button.is-active {
+  opacity: 1; border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.pin-kind-save { margin-top: 2px; }
+
+/* Le planning : carte dédiée, jours en rangée fluide */
+.planning-card {
+  background: var(--bg-card);
+  border-radius: 14px;
+  box-shadow: var(--shadow-soft);
+  padding: 16px 18px;
+  margin: 0 0 32px;
+}
+.planning-head {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+}
+.planning-dates {
+  display: inline-flex; align-items: center; gap: 6px;
+  flex: 1;
+}
+.planning-dates input {
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-family: var(--font-ui); font-size: 12.5px;
+  background: var(--bg-primary); color: var(--ink);
+}
+.planning-dates-sep { color: var(--ink-whisper); }
+.planning-hint {
+  margin: 10px 0 0;
+  font-family: var(--font-display); font-style: italic;
+  font-size: 12.5px; color: var(--ink-whisper);
+}
+.planning-days {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.planning-days .day-card-steps { min-height: 34px; }
+.day-step-kind { margin-right: 2px; }
+.planning-pool {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-default);
+}
+.planning-pool-label {
+  font-family: var(--font-display); font-style: italic;
+  font-size: 12.5px; color: var(--ink-whisper);
+}
+.planning-pool-list {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-top: 6px;
+}
+.planning-pool-list .day-step { margin: 0; }
+.planning-save {
+  margin: 8px 0 0; font-size: 11.5px; color: var(--ink-whisper);
+  min-height: 14px;
+}
+
+/* Notes reliées à une épingle */
+.item-link-pin {
+  border: none; background: transparent;
+  font-size: 11px; cursor: pointer;
+  color: var(--ink-whisper);
+  padding: 2px 6px; border-radius: 6px;
+  transition: background .15s;
+}
+.item-link-pin:hover { background: var(--accent-soft); color: var(--accent); }
+.item-children {
+  list-style: none;
+  margin: 8px 0 0; padding: 6px 0 0 10px;
+  border-top: 1px dashed var(--border-subtle);
+}
+.item-child {
+  display: flex; align-items: baseline; gap: 6px;
+  font-size: 12.5px; color: var(--ink-secondary);
+  padding: 3px 0;
+}
+.item-child a { color: var(--accent); text-decoration: none; overflow: hidden; text-overflow: ellipsis; }
+.item-child-kind { flex-shrink: 0; }
+.item-child-unlink {
+  border: none; background: transparent; cursor: pointer;
+  color: var(--ink-whisper); font-size: 10px;
+  margin-left: auto;
+}
+.item-child-unlink:hover { color: var(--color-danger); }

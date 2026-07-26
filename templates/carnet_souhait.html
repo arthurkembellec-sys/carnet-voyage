@@ -56,6 +56,30 @@
     </div>
   </section>
 
+  {# ────── LE PLANNING (v4.5) : pré-planning des vacances, modifiable ────── #}
+  <section class="planning-card" id="planning-card">
+    <div class="planning-head">
+      <h2 class="section-title" style="margin:0">Le planning</h2>
+      <div class="planning-dates">
+        <input type="date" id="plan-ds" value="{{ carnet.date_start or '' }}" title="Début">
+        <span class="planning-dates-sep">→</span>
+        <input type="date" id="plan-de" value="{{ carnet.date_end or '' }}" title="Fin">
+      </div>
+      <button type="button" class="btn btn-primary btn-sm" id="btn-go-voyage"
+              onclick="armAction(this, 'Confirmer le départ ?', goVoyage)"
+              title="Bascule ce planning en carnet de voyage — les étapes planifiées partent, le reste demeure en rêverie">
+        ✨ Passer en voyage
+      </button>
+    </div>
+    <p class="planning-hint" id="planning-hint">Pose des dates : les journées apparaissent, et tu y glisses tes épingles.</p>
+    <div class="planning-days" id="planning-days"></div>
+    <div class="planning-pool" id="planning-pool-wrap" hidden>
+      <span class="planning-pool-label">À caser</span>
+      <ul class="day-card-steps planning-pool-list" id="planning-pool"></ul>
+    </div>
+    <p class="planning-save" id="planning-save"></p>
+  </section>
+
   {% if voyages %}
   <section class="voyages-issus">
     <h2 class="section-title">Voyages issus de cette rêverie</h2>
@@ -329,6 +353,7 @@
   var GEO_ITEMS = [
     {% for g in geo_items %}
     { itemId: {{ g.item_id }}, lat: {{ g.lat }}, lng: {{ g.lng }}, kind: "{{ g.kind }}",
+      pin_kind: {{ (g.pin_kind or '')|tojson }}, planned_day: {{ g.planned_day if g.planned_day is not none else 'null' }},
       title: {{ (g.title or '')|tojson }}{% if g.thumb %}, thumb: "{{ g.thumb }}"{% endif %} },
     {% endfor %}
   ];
@@ -348,17 +373,39 @@
   var routePins = {};           // itemId -> {marker, data}
   var routeLine = null;
 
-  function pinIcon(num) {
-    // Épingle douce ; numérotée en mode parcours
-    var cls = num ? 'pin-icon pin-icon-num' : 'pin-icon';
-    var html = num ? '<span>' + num + '</span>' : '';
-    return L.divIcon({ className: cls, html: html, iconSize: [26, 26], iconAnchor: [13, 24] });
+  var PIN_KINDS = {{ pin_kinds|tojson }};   // [ [kind, emoji, label], ... ]
+  function pinEmoji(kind) {
+    for (var i = 0; i < PIN_KINDS.length; i++) if (PIN_KINDS[i][0] === kind) return PIN_KINDS[i][1];
+    return '';
   }
+  function pinIcon(num, kind) {
+    if (num) {
+      return L.divIcon({ className: 'pin-icon pin-icon-num', html: '<span>' + num + '</span>',
+                         iconSize: [26, 26], iconAnchor: [13, 24] });
+    }
+    var em = pinEmoji(kind);
+    if (em) {
+      return L.divIcon({ className: 'pin-icon pin-icon-' + kind, html: '<span class="pk">' + em + '</span>',
+                         iconSize: [28, 28], iconAnchor: [14, 25] });
+    }
+    return L.divIcon({ className: 'pin-icon', html: '', iconSize: [26, 26], iconAnchor: [13, 24] });
+  }
+  function kindSelectorHtml(selected, idPrefix) {
+    return '<div class="pin-kinds" id="' + idPrefix + '-kinds">' + PIN_KINDS.map(function(k){
+      return '<button type="button" data-kind="' + k[0] + '" title="' + k[2] + '"' +
+        (k[0] === selected ? ' class="is-active"' : '') +
+        ' onclick="selectPinKind(this)">' + k[1] + '</button>';
+    }).join('') + '</div>';
+  }
+  window.selectPinKind = function(btn){
+    btn.parentElement.querySelectorAll('button').forEach(function(b){ b.classList.remove('is-active'); });
+    btn.classList.add('is-active');
+  };
 
   function refreshPinIcons() {
     Object.keys(routePins).forEach(function(id){
       var idx = routeOrder.indexOf(Number(id));
-      routePins[id].marker.setIcon(pinIcon(idx >= 0 ? idx + 1 : null));
+      routePins[id].marker.setIcon(pinIcon(idx >= 0 ? idx + 1 : null, routePins[id].data.pin_kind));
     });
     var line = routeOrder.map(function(id){ return [routePins[id].data.lat, routePins[id].data.lng]; });
     if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
@@ -471,8 +518,9 @@
     var fd = new FormData();
     fd.append('_csrf', CSRF);
     fd.append('kind', 'location');
-    fd.append('title', '🛏 ' + name);
+    fd.append('title', name);
     fd.append('address', name);
+    fd.append('pin_kind', 'dormir');
     fd.append('geo_lat', String(lat));
     fd.append('geo_lng', String(lng));
     try {
@@ -497,6 +545,179 @@
     });
   }
 
+  /* ══════════ LE PLANNING (v4.5) : pré-planning vivant de la rêverie ══════════
+     Les épingles se répartissent par jour (glisser-déposer), les temps de
+     trajet se calculent par journée, tout se sauvegarde en continu —
+     modifiable jusqu'au basculement en carnet de voyage. */
+  var planDays = [];        // [[itemId,...], ...] — un tableau par jour
+  var planSaveTimer = null;
+  var planTimesSeq = 0;
+
+  function planDates() {
+    return { ds: document.getElementById('plan-ds').value,
+             de: document.getElementById('plan-de').value };
+  }
+  function planNbDays() {
+    var d = planDates();
+    if (!d.ds || !d.de || d.de < d.ds) return 0;
+    return Math.min(31, Math.round((new Date(d.de) - new Date(d.ds)) / 86400000) + 1);
+  }
+  function planInitFromItems() {
+    var nb = planNbDays();
+    planDays = [];
+    for (var k = 0; k < nb; k++) planDays.push([]);
+    GEO_ITEMS.filter(function(g){ return g.kind === 'location'; }).forEach(function(g){
+      var d = g.planned_day;
+      if (d != null && d >= 0 && d < nb) planDays[d].push(g.itemId);
+    });
+  }
+  function planPool() {
+    var placed = {};
+    planDays.forEach(function(day){ day.forEach(function(id){ placed[id] = 1; }); });
+    return GEO_ITEMS.filter(function(g){ return g.kind === 'location' && !placed[g.itemId]; })
+                    .map(function(g){ return g.itemId; });
+  }
+  function planStepHtml(id) {
+    var g = routePins[id] ? routePins[id].data : GEO_ITEMS.find(function(x){ return x.itemId === id; });
+    if (!g) return '';
+    return '<li class="day-step" data-item-id="' + id + '">' +
+      '<span class="day-step-kind">' + (pinEmoji(g.pin_kind) || '📍') + '</span> ' +
+      (g.title || 'Idée') + '</li>';
+  }
+  function renderPlanning() {
+    var daysEl = document.getElementById('planning-days');
+    var poolWrap = document.getElementById('planning-pool-wrap');
+    var poolEl = document.getElementById('planning-pool');
+    var hint = document.getElementById('planning-hint');
+    var nb = planNbDays();
+    if (!nb) {
+      daysEl.innerHTML = ''; poolWrap.hidden = true; hint.hidden = false;
+      return;
+    }
+    hint.hidden = true;
+    if (planDays.length !== nb) {
+      // Redimensionner en conservant ce qui tient ; l'excédent retourne au pool
+      var flat = [];
+      planDays.slice(nb).forEach(function(day){ flat = flat.concat(day); });
+      planDays = planDays.slice(0, nb);
+      while (planDays.length < nb) planDays.push([]);
+    }
+    var ds = planDates().ds;
+    daysEl.innerHTML = '';
+    planDays.forEach(function(day, k){
+      var card = document.createElement('div');
+      card.className = 'day-card';
+      card.innerHTML = '<div class="day-card-head"><span class="day-card-date">' +
+        fmtDayLabel(ds, k) + '</span><span class="day-card-time" data-day="' + k + '"></span></div>';
+      var ul = document.createElement('ul');
+      ul.className = 'day-card-steps';
+      ul.dataset.planDay = k;
+      ul.innerHTML = day.map(planStepHtml).join('');
+      card.appendChild(ul);
+      daysEl.appendChild(card);
+    });
+    var pool = planPool();
+    poolWrap.hidden = false;
+    poolEl.innerHTML = pool.map(planStepHtml).join('');
+    if (window.Sortable) {
+      daysEl.querySelectorAll('.day-card-steps').forEach(function(ul){ planSortable(ul); });
+      planSortable(poolEl);
+    }
+    planUpdateTimes();
+  }
+  function planSortable(ul) {
+    if (ul._sortable) { ul._sortable.destroy(); }
+    ul._sortable = new Sortable(ul, {
+      group: 'planning', animation: 150,
+      onEnd: function(){ planReadDom(); planScheduleSave(); planUpdateTimes(); }
+    });
+  }
+  function planReadDom() {
+    planDays = Array.from(document.querySelectorAll('#planning-days .day-card-steps')).map(function(ul){
+      return Array.from(ul.querySelectorAll('.day-step')).map(function(li){ return Number(li.dataset.itemId); });
+    });
+  }
+  async function planUpdateTimes() {
+    var seq = ++planTimesSeq;
+    for (var k = 0; k < planDays.length; k++) {
+      var el = document.querySelector('#planning-days .day-card-time[data-day="' + k + '"]');
+      if (!el) continue;
+      // Trajet du jour : depuis la dernière étape de la veille, puis les étapes du jour
+      var coords = [];
+      for (var p = k - 1; p >= 0; p--) {
+        if (planDays[p].length) { coords.push(planDays[p][planDays[p].length - 1]); break; }
+      }
+      coords = coords.concat(planDays[k]);
+      if (coords.length < 2) { el.textContent = planDays[k].length ? 'sur place' : ''; continue; }
+      el.textContent = '…';
+      var qs = coords.map(function(id){
+        var g = routePins[id] ? routePins[id].data : null;
+        return g ? g.lat.toFixed(6) + ',' + g.lng.toFixed(6) : null;
+      }).filter(Boolean).join(';');
+      try {
+        var d = await fetch('/geo/route?coords=' + encodeURIComponent(qs) + '&profile=car')
+          .then(function(r){ return r.json(); });
+        if (seq !== planTimesSeq) return;
+        el.textContent = d.ok ? '≈ ' + fmtDur(d.duration_s) + ' 🚗' : '';
+      } catch(e) { el.textContent = ''; }
+    }
+  }
+  function planScheduleSave() {
+    clearTimeout(planSaveTimer);
+    var st = document.getElementById('planning-save');
+    st.textContent = 'Enregistrement…';
+    planSaveTimer = setTimeout(async function(){
+      var d = planDates();
+      try {
+        var r = await fetch("{{ url_for('carnet_planning_save', cid_carnet=carnet.id) }}", {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+          body: JSON.stringify({ _csrf: CSRF, date_start: d.ds, date_end: d.de, days: planDays })
+        });
+        var j = await r.json();
+        st.textContent = j.ok ? '✓ Planning enregistré' : (j.error || 'Erreur');
+        setTimeout(function(){ st.textContent = ''; }, 1800);
+      } catch(e) { st.textContent = 'Réseau'; }
+    }, 700);
+  }
+  ['plan-ds', 'plan-de'].forEach(function(id){
+    document.getElementById(id).addEventListener('change', function(){
+      renderPlanning(); planScheduleSave();
+    });
+  });
+
+  /* Basculement : le planning devient un carnet de voyage */
+  function goVoyage() {
+    planReadDom();
+    var ordered = [].concat.apply([], planDays);
+    if (!ordered.length) {
+      // pas de planning : on emmène toutes les épingles dans l'ordre actuel
+      ordered = GEO_ITEMS.filter(function(g){ return g.kind === 'location'; })
+                         .map(function(g){ return g.itemId; });
+    }
+    if (!ordered.length) { setError('Aucune épingle à emmener'); return; }
+    var d = planDates();
+    var f = document.createElement('form');
+    f.method = 'POST';
+    f.action = "{{ url_for('carnet_transformer', cid_carnet=carnet.id) }}";
+    var add = function(n, v){
+      var i = document.createElement('input');
+      i.type = 'hidden'; i.name = n; i.value = v; f.appendChild(i);
+    };
+    add('_csrf', CSRF);
+    add('ordered', '1');
+    add('title', {{ carnet.title|tojson }});
+    if (d.ds) add('date_start', d.ds);
+    if (d.de) add('date_end', d.de);
+    ordered.forEach(function(id){ add('item_ids', id); });
+    document.body.appendChild(f);
+    f.submit();
+  }
+  window.goVoyage = goVoyage;
+
+  planInitFromItems();
+  renderPlanning();
+
   function routeToggle(itemId) {
     var i = routeOrder.indexOf(itemId);
     if (i >= 0) routeOrder.splice(i, 1);
@@ -510,13 +731,24 @@
 
   function addPinToMap(g) {
     var m = L.marker([g.lat, g.lng], {
-      icon: pinIcon(null),
+      icon: pinIcon(null, g.pin_kind),
       draggable: g.kind === 'location',
     }).addTo(map);
     var html = '<strong>' + (g.title || (g.kind === 'photo' ? 'Photo' : 'Lieu')) + '</strong>';
     if (g.thumb) html = '<img src="' + g.thumb + '" style="max-width:160px;display:block;margin-bottom:6px;border-radius:6px">' + html;
+    if (g.kind === 'location') {
+      html += kindSelectorHtml(g.pin_kind || '', 'pin' + g.itemId) +
+        '<button type="button" class="btn btn-secondary btn-sm pin-kind-save" onclick="savePinKind(' + g.itemId + ')">OK</button>';
+    }
     m.bindPopup(html);
     m.on('click', function(e){
+      if (pinLinkItemId && g.kind === 'location') {
+        m.closePopup();
+        var nid = pinLinkItemId; pinLinkItemId = null;
+        linkToPin(nid, g.itemId);
+        L.DomEvent.stopPropagation(e);
+        return;
+      }
       if (routeMode) {
         m.closePopup();
         routeToggle(g.itemId);
@@ -536,6 +768,20 @@
     }
     routePins[g.itemId] = { marker: m, data: g };
   }
+
+  window.savePinKind = async function(itemId){
+    var sel = document.querySelector('#pin' + itemId + '-kinds button.is-active');
+    var kind = sel ? sel.dataset.kind : '';
+    var fd = new FormData(); fd.append('_csrf', CSRF); fd.append('pin_kind', kind);
+    try {
+      var d = await fetch('/item/' + itemId + '/pin_kind', { method: 'POST', body: fd }).then(function(r){ return r.json(); });
+      if (!d.ok) { setError(d.error || 'Erreur'); return; }
+      var p = routePins[itemId];
+      if (p) { p.data.pin_kind = kind; p.marker.setIcon(pinIcon(null, kind)); p.marker.closePopup(); }
+      setSaved('Type d\'épingle enregistré');
+      renderPlanning();
+    } catch(e) { setError('Réseau'); }
+  };
 
   if (map) GEO_ITEMS.forEach(addPinToMap);
   if (map && GEO_ITEMS.length) {
@@ -558,6 +804,7 @@
     var html =
       '<div class="pin-form">' +
       '<input type="text" id="pin-title" placeholder="Quelle idée ici ?" value="' + (title || '').replace(/"/g, '&quot;') + '" maxlength="120">' +
+      kindSelectorHtml('autre', 'newpin') +
       '<button type="button" class="btn btn-primary btn-sm" onclick="confirmPin(' + lat + ',' + lng + ',' + JSON.stringify(address || '').replace(/"/g, '&quot;') + ')">📍 Épingler</button>' +
       '</div>';
     pendingMarker.bindPopup(html, { closeOnClick: false, minWidth: 220 }).openPopup();
@@ -569,10 +816,12 @@
     var title = titleEl ? titleEl.value.trim() : '';
     if (!title && address) title = String(address).split(',')[0];
     if (!title) title = 'Idée';
+    var selK = document.querySelector('#newpin-kinds button.is-active');
     var fd = new FormData();
     fd.append('_csrf', CSRF);
     fd.append('kind', 'location');
     fd.append('title', title);
+    fd.append('pin_kind', selK ? selK.dataset.kind : 'autre');
     fd.append('address', address || '');
     fd.append('geo_lat', String(lat));
     fd.append('geo_lng', String(lng));
@@ -816,6 +1065,39 @@
     document.body.style.overflow = '';
   }
   window.closeRouteModal = closeRouteModal;
+
+  /* ─ Relier une idée à une épingle : on tape l'épingle sur la carte ─ */
+  var pinLinkItemId = null;
+  window.startPinLink = function(itemId){
+    pinLinkItemId = itemId;
+    document.getElementById('reverie-map').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setSaving('Touche l\'épingle à relier… (Échap pour annuler)');
+    document.addEventListener('keydown', function esc(e){
+      if (e.key === 'Escape') { pinLinkItemId = null; setSaved('Annulé'); document.removeEventListener('keydown', esc); }
+    });
+  };
+  async function linkToPin(itemId, pinId) {
+    var fd = new FormData();
+    fd.append('_csrf', CSRF);
+    fd.append('parent_item_id', pinId);
+    try {
+      var d = await fetch('/item/' + itemId + '/parent', { method: 'POST', body: fd }).then(function(r){ return r.json(); });
+      if (!d.ok) { setError(d.error || 'Erreur'); return; }
+      setSaved('Idée reliée à l\'épingle');
+      setTimeout(function(){ reloadKeepScroll(); }, 400);
+    } catch(e) { setError('Réseau'); }
+  }
+  window.unlinkFromPin = async function(itemId){
+    var fd = new FormData();
+    fd.append('_csrf', CSRF);
+    fd.append('parent_item_id', '');
+    try {
+      var d = await fetch('/item/' + itemId + '/parent', { method: 'POST', body: fd }).then(function(r){ return r.json(); });
+      if (!d.ok) { setError(d.error || 'Erreur'); return; }
+      setSaved('Détachée');
+      setTimeout(function(){ reloadKeepScroll(); }, 350);
+    } catch(e) { setError('Réseau'); }
+  };
 
   window.showAddModal = showAddModal;
   window.closeAddModal = closeAddModal;

@@ -1,3 +1,4 @@
+{% if it.parent_item_id %}{# rendue sous son épingle parente #}{% else %}
 <li class="item-card item-card-{{ it.kind }}" data-item-id="{{ it.id }}">
   <span class="drag-handle drag-handle-corner" title="Glisser pour reorganiser">⋮⋮</span>
   <div class="item-head">
@@ -5,10 +6,13 @@
       {% if it.kind == 'link' %}🔗 Lien
       {% elif it.kind == 'photo' %}📷 Photo
       {% elif it.kind == 'note' %}¶ Note
-      {% elif it.kind == 'location' %}📍 Lieu
+      {% elif it.kind == 'location' %}{% if it.pin_kind %}{% for k, em, lab in pin_kinds %}{% if k == it.pin_kind %}{{ em }} {{ lab }}{% endif %}{% endfor %}{% else %}📍 Lieu{% endif %}
       {% elif it.kind == 'budget' %}€ Budget
       {% endif %}
     </span>
+    {% if it.kind != 'location' %}
+    <button type="button" class="item-link-pin" onclick="startPinLink({{ it.id }})" title="Relier cette idée à une épingle de la carte">🔗→📍</button>
+    {% endif %}
     <button type="button" class="item-delete" onclick="deleteItem({{ it.id }}, this)" title="Supprimer">✕</button>
   </div>
 
@@ -31,4 +35,22 @@
   {% if it.added_by_name %}
     <div class="item-meta">par {{ it.added_by_name }} · {{ (it.added_at or '')|truncate(10, true, '') }}</div>
   {% endif %}
+
+  {# Notes rattachées à cette épingle #}
+  {% if it.kind == 'location' and children_by_parent and children_by_parent.get(it.id) %}
+  <ul class="item-children">
+    {% for ch in children_by_parent[it.id] %}
+    <li class="item-child" data-item-id="{{ ch.id }}">
+      <span class="item-child-kind">{% if ch.kind == 'link' %}🔗{% elif ch.kind == 'photo' %}📷{% elif ch.kind == 'budget' %}€{% else %}¶{% endif %}</span>
+      {% if ch.kind == 'link' and ch.url %}
+        <a href="{{ ch.url }}" target="_blank" rel="noopener">{{ ch.title or ch.url|truncate(40, true) }}</a>
+      {% else %}
+        <span>{{ ch.title or ch.body or (ch.amount ~ ' ' ~ (ch.currency or 'EUR') if ch.amount else '…') }}</span>
+      {% endif %}
+      <button type="button" class="item-child-unlink" onclick="unlinkFromPin({{ ch.id }})" title="Détacher de l'épingle">✕</button>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
 </li>
+{% endif %}
