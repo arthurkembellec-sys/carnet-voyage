@@ -374,21 +374,27 @@
   var routeLine = null;
 
   var PIN_KINDS = {{ pin_kinds|tojson }};   // [ [kind, emoji, label], ... ]
+  var PIN_CHILDREN = {{ (children_slim or {})|tojson }};   // idées rattachées par épingle
+  var DAY_COLORS = ['#A8503D','#5B7A9D','#5C7A5A','#B0713C','#8C6B7A','#4A97A8',
+                    '#7A7A4F','#B58373','#3D4A5C','#B8864B','#5E8D87','#96604F'];
   function pinEmoji(kind) {
     for (var i = 0; i < PIN_KINDS.length; i++) if (PIN_KINDS[i][0] === kind) return PIN_KINDS[i][1];
     return '';
   }
-  function pinIcon(num, kind) {
+  function pinIcon(num, kind, plannedDay) {
     if (num) {
       return L.divIcon({ className: 'pin-icon pin-icon-num', html: '<span>' + num + '</span>',
                          iconSize: [26, 26], iconAnchor: [13, 24] });
     }
+    // Couleur du JOUR planifié prioritaire (le planning se lit sur la carte),
+    // sinon couleur du type d'épingle ; l'emoji du type reste dedans.
+    var cls = 'pin-icon';
+    if (kind) cls += ' pin-icon-' + kind;
+    if (plannedDay != null && plannedDay >= 0) cls += ' pin-day-' + (plannedDay % DAY_COLORS.length);
     var em = pinEmoji(kind);
-    if (em) {
-      return L.divIcon({ className: 'pin-icon pin-icon-' + kind, html: '<span class="pk">' + em + '</span>',
-                         iconSize: [28, 28], iconAnchor: [14, 25] });
-    }
-    return L.divIcon({ className: 'pin-icon', html: '', iconSize: [26, 26], iconAnchor: [13, 24] });
+    return L.divIcon({ className: cls,
+                       html: em ? '<span class="pk">' + em + '</span>' : '',
+                       iconSize: [28, 28], iconAnchor: [14, 25] });
   }
   function kindSelectorHtml(selected, idPrefix) {
     return '<div class="pin-kinds" id="' + idPrefix + '-kinds">' + PIN_KINDS.map(function(k){
@@ -405,7 +411,7 @@
   function refreshPinIcons() {
     Object.keys(routePins).forEach(function(id){
       var idx = routeOrder.indexOf(Number(id));
-      routePins[id].marker.setIcon(pinIcon(idx >= 0 ? idx + 1 : null, routePins[id].data.pin_kind));
+      routePins[id].marker.setIcon(pinIcon(idx >= 0 ? idx + 1 : null, routePins[id].data.pin_kind, routePins[id].data.planned_day));
     });
     var line = routeOrder.map(function(id){ return [routePins[id].data.lat, routePins[id].data.lng]; });
     if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
@@ -584,6 +590,17 @@
       '<span class="day-step-kind">' + (pinEmoji(g.pin_kind) || '📍') + '</span> ' +
       (g.title || 'Idée') + '</li>';
   }
+  function planRefreshPinDays() {
+    // couleur de jour des épingles = état courant du planning
+    var dayOf = {};
+    planDays.forEach(function(day, k){ day.forEach(function(id){ dayOf[id] = k; }); });
+    Object.keys(routePins).forEach(function(id){
+      var p = routePins[id];
+      if (p.data.kind !== 'location') return;
+      p.data.planned_day = (id in dayOf) ? dayOf[id] : null;
+      if (!routeMode) p.marker.setIcon(pinIcon(null, p.data.pin_kind, p.data.planned_day));
+    });
+  }
   function renderPlanning() {
     var daysEl = document.getElementById('planning-days');
     var poolWrap = document.getElementById('planning-pool-wrap');
@@ -607,6 +624,7 @@
     planDays.forEach(function(day, k){
       var card = document.createElement('div');
       card.className = 'day-card';
+      card.style.borderLeft = '4px solid ' + DAY_COLORS[k % DAY_COLORS.length];
       card.innerHTML = '<div class="day-card-head"><span class="day-card-date">' +
         fmtDayLabel(ds, k) + '</span><span class="day-card-time" data-day="' + k + '"></span></div>';
       var ul = document.createElement('ul');
@@ -629,7 +647,7 @@
     if (ul._sortable) { ul._sortable.destroy(); }
     ul._sortable = new Sortable(ul, {
       group: 'planning', animation: 150,
-      onEnd: function(){ planReadDom(); planScheduleSave(); planUpdateTimes(); }
+      onEnd: function(){ planReadDom(); planScheduleSave(); planUpdateTimes(); planRefreshPinDays(); }
     });
   }
   function planReadDom() {
@@ -717,6 +735,7 @@
 
   planInitFromItems();
   renderPlanning();
+  planRefreshPinDays();
 
   function routeToggle(itemId) {
     var i = routeOrder.indexOf(itemId);
@@ -731,11 +750,26 @@
 
   function addPinToMap(g) {
     var m = L.marker([g.lat, g.lng], {
-      icon: pinIcon(null, g.pin_kind),
+      icon: pinIcon(null, g.pin_kind, g.planned_day),
       draggable: g.kind === 'location',
     }).addTo(map);
+    // v4.7 : nom apparent sous l'épingle
+    var label = (g.title || '').slice(0, 26) + ((g.title || '').length > 26 ? '…' : '');
+    if (label) m.bindTooltip(label, { permanent: true, direction: 'bottom',
+      className: 'pin-label', offset: [0, 6], opacity: 1 });
     var html = '<strong>' + (g.title || (g.kind === 'photo' ? 'Photo' : 'Lieu')) + '</strong>';
     if (g.thumb) html = '<img src="' + g.thumb + '" style="max-width:160px;display:block;margin-bottom:6px;border-radius:6px">' + html;
+    // v4.7 : les idées rattachées (liens & co) directement dans le popup
+    var kids = PIN_CHILDREN[String(g.itemId)] || [];
+    if (kids.length) {
+      html += '<div class="pin-pop-children">' + kids.map(function(ch){
+        var ico = ch.kind === 'link' ? '🔗' : (ch.kind === 'photo' ? '📷' : (ch.kind === 'budget' ? '€' : '¶'));
+        var t = (ch.title || ch.url || '…').slice(0, 34);
+        return ch.url
+          ? '<a href="' + ch.url + '" target="_blank" rel="noopener">' + ico + ' ' + t + '</a>'
+          : '<span>' + ico + ' ' + t + '</span>';
+      }).join('') + '</div>';
+    }
     if (g.kind === 'location') {
       html += kindSelectorHtml(g.pin_kind || '', 'pin' + g.itemId) +
         '<button type="button" class="btn btn-secondary btn-sm pin-kind-save" onclick="savePinKind(' + g.itemId + ')">OK</button>';
@@ -777,7 +811,7 @@
       var d = await fetch('/item/' + itemId + '/pin_kind', { method: 'POST', body: fd }).then(function(r){ return r.json(); });
       if (!d.ok) { setError(d.error || 'Erreur'); return; }
       var p = routePins[itemId];
-      if (p) { p.data.pin_kind = kind; p.marker.setIcon(pinIcon(null, kind)); p.marker.closePopup(); }
+      if (p) { p.data.pin_kind = kind; p.marker.setIcon(pinIcon(null, kind, p.data.planned_day)); p.marker.closePopup(); }
       setSaved('Type d\'épingle enregistré');
       renderPlanning();
     } catch(e) { setError('Réseau'); }

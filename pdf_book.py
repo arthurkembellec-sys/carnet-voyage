@@ -58,6 +58,55 @@ def _item_ts(it):
     return s[:19]
 
 
+# ── v4.7 : emoji dans le livre — police NotoEmoji (monochrome) embarquée ──
+_EMOJI_FONT = 'NotoEmoji'
+_EMOJI_OK = False
+
+def _register_emoji_font():
+    global _EMOJI_OK
+    try:
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        import os as _os
+        p = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                          'static', 'vendor', 'fonts', 'NotoEmoji.ttf')
+        if _os.path.exists(p):
+            pdfmetrics.registerFont(TTFont(_EMOJI_FONT, p))
+            _EMOJI_OK = True
+    except Exception:
+        _EMOJI_OK = False
+
+_register_emoji_font()
+
+
+def _is_emoji_ch(ch):
+    o = ord(ch)
+    return ((0x1F000 <= o <= 0x1FAFF) or (0x2600 <= o <= 0x27BF)
+            or (0x2B00 <= o <= 0x2BFF) or (0x1F1E6 <= o <= 0x1F1FF)
+            or o in (0x2764, 0x2728, 0x263A, 0x2B50))
+
+
+def _strip_joiners(s):
+    """Retire les selecteurs de variation / ZWJ (non rendus par la police statique)."""
+    return ''.join(ch for ch in (s or '') if ord(ch) not in (0xFE0F, 0x200D))
+
+
+def _emoji_runs(text):
+    """Decoupe en [(est_emoji, morceau), ...] pour alterner les polices."""
+    runs, cur, cur_e = [], '', None
+    for ch in _strip_joiners(text):
+        e = _is_emoji_ch(ch)
+        if cur_e is None or e == cur_e:
+            cur += ch
+            cur_e = e
+        else:
+            runs.append((cur_e, cur))
+            cur, cur_e = ch, e
+    if cur:
+        runs.append((cur_e, cur))
+    return runs
+
+
 def build_margin_plan(pages_main, margin_pool, n_per_page):
     """v3.4.1 : distribution des notes de marge par page composite, alignee
     sur les dates (fusion chronologique) au lieu de la repartition uniforme.
@@ -201,6 +250,40 @@ def render_carnet_pdf(
         h = th - (GUTTER_TOP_MM + GUTTER_BOTTOM_MM) * mm
         return (x, y, w, h)
 
+    def _mixed_width(text, font_name, font_size):
+        from reportlab.pdfbase.pdfmetrics import stringWidth
+        if not _EMOJI_OK:
+            return stringWidth(text, font_name, font_size)
+        return sum(stringWidth(t, _EMOJI_FONT if e else font_name, font_size)
+                   for e, t in _emoji_runs(text))
+
+    def _draw_mixed(x, y, text, align='left'):
+        """v4.7 : dessine `text` avec la police courante, emojis via NotoEmoji."""
+        from reportlab.pdfbase.pdfmetrics import stringWidth
+        font_name, font_size = pdf._fontname, pdf._fontsize
+        if not _EMOJI_OK or not any(_is_emoji_ch(c) for c in _strip_joiners(text)):
+            if align == 'center':
+                pdf.drawCentredString(x, y, text)
+            elif align == 'right':
+                pdf.drawRightString(x, y, text)
+            else:
+                pdf.drawString(x, y, text)
+            return
+        text2 = _strip_joiners(text)
+        total = _mixed_width(text2, font_name, font_size)
+        if align == 'center':
+            sx = x - total / 2
+        elif align == 'right':
+            sx = x - total
+        else:
+            sx = x
+        for e, t in _emoji_runs(text2):
+            f = _EMOJI_FONT if e else font_name
+            pdf.setFont(f, font_size)
+            pdf.drawString(sx, y, t)
+            sx += stringWidth(t, f, font_size)
+        pdf.setFont(font_name, font_size)
+
     def _wrap_text(text, cx, cy, max_width, line_height=14, max_lines=99,
                    align='center'):
         """Wrap basique multi-ligne."""
@@ -211,7 +294,7 @@ def render_carnet_pdf(
         lines, cur = [], []
         for w in words:
             test = ' '.join(cur + [w])
-            if stringWidth(test, font_name, font_size) <= max_width:
+            if _mixed_width(test, font_name, font_size) <= max_width:
                 cur.append(w)
             else:
                 if cur:
@@ -228,11 +311,11 @@ def render_carnet_pdf(
         y = cy + total_h / 2
         for line in lines:
             if align == 'left':
-                pdf.drawString(cx, y, line)
+                _draw_mixed(cx, y, line, 'left')
             elif align == 'right':
-                pdf.drawRightString(cx, y, line)
+                _draw_mixed(cx, y, line, 'right')
             else:
-                pdf.drawCentredString(cx, y, line)
+                _draw_mixed(cx, y, line, 'center')
             y -= line_height
 
     def _wrap_text_left(text, x, y_top, max_width, line_height=10, max_lines=99):
@@ -244,7 +327,7 @@ def render_carnet_pdf(
         lines, cur = [], []
         for w in words:
             test = ' '.join(cur + [w])
-            if stringWidth(test, font_name, font_size) <= max_width:
+            if _mixed_width(test, font_name, font_size) <= max_width:
                 cur.append(w)
             else:
                 if cur:
@@ -255,7 +338,7 @@ def render_carnet_pdf(
         lines = lines[:max_lines]
         y = y_top
         for line in lines:
-            pdf.drawString(x, y, line)
+            _draw_mixed(x, y, line, 'left')
             y -= line_height
         return len(lines)
 
@@ -667,7 +750,7 @@ def render_carnet_pdf(
         line_h = title_size * 1.15
         y_title = bleed + (h_mm * mm) * 0.30 + (len(title_lines) - 1) * line_h / 2
         for line in title_lines:
-            pdf.drawCentredString(page_w / 2, y_title, line)
+            _draw_mixed(page_w / 2, y_title, line, 'center')
             y_title -= line_h
         sub = []
         if carnet.get('location'):

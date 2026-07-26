@@ -84,4 +84,36 @@
   });
 </script>
 
+{% if mode == 'modifier' and cid_carnet %}
+<section class="danger-zone">
+  <form method="POST" action="{{ url_for('carnet_supprimer', cid_carnet=cid_carnet) }}" id="carnet-delete-form">
+    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+    <button type="button" class="btn btn-ghost btn-danger-soft" id="btn-delete-carnet"
+            title="Le carnet part à la corbeille">
+      ✕ Supprimer ce carnet
+    </button>
+  </form>
+</section>
+<script>
+  (function(){
+    var b = document.getElementById('btn-delete-carnet');
+    if (!b) return;
+    b.addEventListener('click', function(){
+      if (b.dataset.armed === '1') {
+        document.getElementById('carnet-delete-form').submit();
+        return;
+      }
+      b.dataset.armed = '1';
+      b.classList.add('is-armed');
+      b.textContent = 'Confirmer la suppression ?';
+      setTimeout(function(){
+        b.dataset.armed = '';
+        b.classList.remove('is-armed');
+        b.textContent = '✕ Supprimer ce carnet';
+      }, 3500);
+    });
+  })();
+</script>
+{% endif %}
+
 {% endblock %}

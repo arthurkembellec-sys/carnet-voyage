@@ -995,9 +995,16 @@ def carnet_souhait_view(cid_carnet):
     for it in items:
         if it.get('parent_item_id'):
             children_by_parent.setdefault(it['parent_item_id'], []).append(it)
+    # v4.7 : version legere pour le popup de la carte
+    children_slim = {
+        str(pid): [{'kind': ch.get('kind'), 'title': ch.get('title') or '',
+                    'url': ch.get('url') or ''} for ch in lst[:6]]
+        for pid, lst in children_by_parent.items()
+    }
     return render_template('carnet_souhait.html', carnet=c, items=items,
         voyages=[dict(v) for v in voyages], item_kinds=ITEM_KINDS,
         pin_kinds=PIN_KINDS, children_by_parent=children_by_parent,
+        children_slim=children_slim,
         geo_items=geo_items)
 
 

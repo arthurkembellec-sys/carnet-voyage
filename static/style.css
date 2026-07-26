@@ -3643,3 +3643,60 @@ body.linking-mode .album-footer { opacity: 0.3; pointer-events: none; }
   padding: 3px 8px;
   margin-top: 6px;
 }
+
+/* ════════════════════════════════════════════════════════════════════
+   v4.7 — carte-planning : couleurs par jour, noms apparents,
+   idées dans le popup ; emoji dans le livre (police NotoEmoji)
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Couleur de l'épingle = son jour de planning (prioritaire sur le type) */
+.pin-day-0 { background: #A8503D !important; }
+.pin-day-1 { background: #5B7A9D !important; }
+.pin-day-2 { background: #5C7A5A !important; }
+.pin-day-3 { background: #B0713C !important; }
+.pin-day-4 { background: #8C6B7A !important; }
+.pin-day-5 { background: #4A97A8 !important; }
+.pin-day-6 { background: #7A7A4F !important; }
+.pin-day-7 { background: #B58373 !important; }
+.pin-day-8 { background: #3D4A5C !important; }
+.pin-day-9 { background: #B8864B !important; }
+.pin-day-10 { background: #5E8D87 !important; }
+.pin-day-11 { background: #96604F !important; }
+
+/* Nom apparent sous l'épingle : étiquette douce */
+.pin-label {
+  background: rgba(251,251,250,0.92);
+  border: none;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(23,24,26,0.18);
+  color: var(--ink-secondary);
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+.pin-label::before { display: none; }
+
+/* Idées rattachées dans le popup */
+.pin-pop-children {
+  display: flex; flex-direction: column; gap: 4px;
+  margin: 8px 0 2px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-default);
+  font-size: 12px;
+}
+.pin-pop-children a { color: var(--accent); text-decoration: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pin-pop-children span { color: var(--ink-secondary); }
+
+/* Bouton suppression de carnet (Fiche) */
+.danger-zone {
+  max-width: 720px; margin: 8px auto 40px; padding: 0 20px;
+  text-align: right;
+}
+.btn-danger-soft { color: var(--color-danger); }
+.btn-danger-soft.is-armed {
+  background: var(--color-danger) !important;
+  color: #fff !important;
+  border-color: var(--color-danger) !important;
+}
