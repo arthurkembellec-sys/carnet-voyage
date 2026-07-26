@@ -3700,3 +3700,130 @@ body.linking-mode .album-footer { opacity: 0.3; pointer-events: none; }
   color: #fff !important;
   border-color: var(--color-danger) !important;
 }
+
+/* ════════════════════════════════════════════════════════════════════
+   v4.8 — MOBILE D'ABORD (audit 2026-07-26)
+   Rouleau de photos, cibles tactiles, footer qui s'efface,
+   modales en feuille, outils visibles sans survol.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── Le rouleau de photos : feuille basse, défilement horizontal ── */
+.photo-roll {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  background: var(--bg-card);
+  border-radius: 18px 18px 0 0;
+  box-shadow: 0 -8px 40px rgba(23,24,26,0.25);
+  z-index: 9600;
+  padding: 10px 0 max(10px, env(safe-area-inset-bottom));
+  animation: roll-up .22s var(--ease-out);
+}
+@keyframes roll-up { from { transform: translateY(40%); opacity: 0.4; } to { transform: none; opacity: 1; } }
+.photo-roll[hidden] { display: none !important; }
+.photo-roll-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 2px 16px 8px;
+}
+.photo-roll-title {
+  font-family: var(--font-display); font-style: italic;
+  font-size: 15px; color: var(--ink-primary);
+}
+.photo-roll-close {
+  border: none; background: var(--bg-subtle);
+  width: 44px; height: 44px; border-radius: 50%;
+  font-size: 16px; color: var(--ink-muted); cursor: pointer;
+}
+.photo-roll-strip {
+  display: flex; gap: 8px; align-items: center;
+  overflow-x: auto; overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 16px;
+  scrollbar-width: none;
+}
+.photo-roll-strip::-webkit-scrollbar { display: none; }
+.pr-day {
+  flex-shrink: 0;
+  writing-mode: vertical-rl; transform: rotate(180deg);
+  font-family: var(--font-ui); font-size: 10.5px;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--ink-whisper);
+  padding: 6px 2px;
+}
+.pr-photo {
+  flex-shrink: 0;
+  border: 3px solid transparent; background: none; padding: 0;
+  border-radius: 12px; overflow: hidden; cursor: pointer;
+  width: 108px; height: 108px;
+  transition: border-color .12s, transform .12s;
+}
+.pr-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pr-photo.is-active { border-color: var(--accent); transform: scale(0.96); }
+.photo-roll-hint {
+  margin: 8px 16px 0;
+  font-family: var(--font-display); font-style: italic;
+  font-size: 12px; color: var(--ink-whisper);
+}
+body.photo-roll-open .album-footer { opacity: 0; pointer-events: none; }
+.mn-roll-thumb { width: 26px; height: 26px; border-radius: 5px; object-fit: cover; vertical-align: middle; margin-right: 4px; }
+
+/* ── Footer flottant : s'efface à la lecture, revient en remontant ── */
+.album-footer { transition: transform .25s var(--ease-out), opacity .25s; }
+.album-footer.is-tucked { transform: translate(0, 120%); opacity: 0; pointer-events: none; }
+
+/* ── Tactile : les outils n'attendent plus le survol ── */
+@media (hover: none) {
+  .page-more { opacity: 0.85 !important; }
+  .rail-note .page-more { opacity: 0.85 !important; }
+  .drag-handle { opacity: 0.5 !important; }
+  .book-cell-fullbtn { opacity: 0.85 !important; }
+  .page-item .page-caption::placeholder { color: var(--ink-whisper); }
+  .item-link-pin { opacity: 1; }
+}
+
+/* ── Cibles tactiles ≥ 44px sur petit écran ── */
+@media (max-width: 640px) {
+  .page-more { width: 38px; height: 38px; font-size: 18px; top: 8px; right: 8px; }
+  .drag-handle { width: 38px; height: 38px; top: 8px; left: 8px; font-size: 15px; }
+  .day-rail-add {
+    width: 40px; height: 40px; font-size: 20px;
+    background: var(--accent-soft); color: var(--accent);
+  }
+  .rail-note-wander { padding: 8px 12px; font-size: 12.5px; }
+  .item-delete { width: 40px; height: 40px; font-size: 15px; }
+  .item-link-pin { padding: 10px 12px; font-size: 13px; }
+  .page-action-btn { padding: 10px 16px; font-size: 12.5px; }
+  .btn-sm, .btn.btn-sm { padding: 10px 16px; }
+  .book-cell-fullbtn { width: 28px; height: 28px; line-height: 28px; font-size: 13px; }
+  .chips .chip { padding: 10px 14px; }
+  /* Topbar : respiration et cibles dignes d'un pouce */
+  .topbar-inner { gap: 10px; }
+  .topbar .link, .topbar a { padding: 10px 6px; }
+  /* Leaflet : zoom + épingles confortables */
+  .leaflet-touch .leaflet-bar a { width: 40px; height: 40px; line-height: 40px; }
+
+  /* Tête de carte rêverie : deux rangées, la recherche respire */
+  .reverie-map-head { flex-wrap: wrap; }
+  .reverie-search-wrap { flex: 1 1 100%; order: 1; }
+  #btn-sleep { order: 2; width: 48px; padding: 10px 0; text-align: center; }
+  #btn-route-mode { order: 3; flex: 1; }
+
+  /* Modales en feuille : plein écran doux */
+  .souhait-modal-card, .margin-note-card, .cover-modal-card {
+    max-width: 100%; width: 100%;
+    max-height: 94dvh;
+    border-radius: 18px 18px 0 0;
+    align-self: flex-end;
+  }
+  .souhait-modal, .margin-note-modal, .cover-modal { padding: 0; align-items: flex-end; }
+
+  /* Planning : cartes pleine largeur, étapes bien touchables */
+  .planning-days, .voyage-planning-days { grid-template-columns: 1fr; }
+  .day-step { padding: 12px 12px; font-size: 14px; }
+  .planning-dates input { font-size: 14px; padding: 9px 10px; }
+
+  /* Rail de marge : notes plus généreuses */
+  .day-rail { grid-template-columns: 1fr 1fr; }
+  .rail-note .rail-note-caption, .rail-note .rail-note-text { font-size: 13.5px; }
+
+  /* L'aperçu : réglages plus digestes */
+  .apercu-summary { padding: 16px 18px; }
+}

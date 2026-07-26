@@ -13,7 +13,7 @@
 {# ── Macro : rail de marge d'un jour ─────────────────────────────── #}
 {% macro day_rail(day) %}
   {% set notes = margin_by_day.get(day) if margin_by_day else none %}
-  <aside class="day-rail{% if not notes %} is-empty{% endif %}">
+  <aside class="day-rail{% if not notes %} is-empty{% endif %}" data-day="{{ day }}">
     <div class="day-rail-head">
       <span class="day-rail-label">En marge</span>
       <button type="button" class="day-rail-add" onclick="openMarginNote(null, '{{ day }}')" title="Ajouter une note de marge reliée à un événement du jour">+</button>
@@ -323,6 +323,16 @@
   </div>
 </div>
 
+<!-- Rouleau de photos : défilement rapide pour relier une note -->
+<div class="photo-roll" id="photo-roll" hidden>
+  <div class="photo-roll-head">
+    <span class="photo-roll-title" id="pr-title">Choisis la photo</span>
+    <button type="button" class="photo-roll-close" onclick="closePhotoRoll()" aria-label="Fermer">✕</button>
+  </div>
+  <div class="photo-roll-strip" id="pr-strip"></div>
+  <p class="photo-roll-hint">Fais défiler, touche une photo — c'est relié.</p>
+</div>
+
 <!-- Viewer plein ecran -->
 <div class="photo-viewer" id="photo-viewer" hidden>
   <button type="button" class="viewer-close" onclick="closeViewer()" aria-label="Fermer">✕</button>
@@ -349,6 +359,20 @@
   const URL_UPLOAD_PHOTOS = "{{ url_for('carnet_upload_photos', cid_carnet=carnet.id) }}";
   const URL_ADD_TEXT = "{{ url_for('carnet_add_text', cid_carnet=carnet.id) }}";
   const URL_ADD_MARGIN_NOTE = "{{ url_for('carnet_add_margin_note', cid_carnet=carnet.id) }}";
+
+  /* ─ v4.8 mobile : le footer s'efface quand on lit, revient quand on remonte ─ */
+  (function(){
+    var footer = document.querySelector('.album-footer');
+    if (!footer) return;
+    var lastY = window.scrollY, hidden = false;
+    window.addEventListener('scroll', function(){
+      var y = window.scrollY;
+      var down = y > lastY + 6, up = y < lastY - 6;
+      if (down && !hidden && y > 160) { hidden = true; footer.classList.add('is-tucked'); }
+      else if ((up || y < 80) && hidden) { hidden = false; footer.classList.remove('is-tucked'); }
+      if (down || up) lastY = y;
+    }, { passive: true });
+  })();
 
   /* ─ Reload en conservant la position de scroll (audit P1) ─ */
   const SCROLL_KEY = 'albumScroll:' + location.pathname;
@@ -377,7 +401,8 @@
     if (!wasOpen) item.classList.add('tools-open');
   }
   document.addEventListener('click', function(e){
-    if (e.target.closest('.page-tools') || e.target.closest('.page-more')) return;
+    if (e.target.closest('.page-tools') || e.target.closest('.page-more') ||
+        e.target.closest('.rail-note-wander')) return;
     document.querySelectorAll('.page-item.tools-open').forEach(function(el){
       el.classList.remove('tools-open');
     });
@@ -421,40 +446,85 @@
   }
   window.margeOn = margeOn; window.toggleMargeMode = toggleMargeMode;
 
+  /* ─ Le rouleau de photos : défilement rapide, un toucher = relié ─ */
+  var prCallback = null;
+  function openPhotoRoll(day, cb, title) {
+    prCallback = cb;
+    var roll = document.getElementById('photo-roll');
+    var strip = document.getElementById('pr-strip');
+    document.getElementById('pr-title').textContent = title || 'Choisis la photo';
+    strip.innerHTML = '';
+    var firstOfDay = null;
+    var lastDay = null;
+    document.querySelectorAll('.album-section:not(.album-section-margin) .page-item[data-type="photo"]').forEach(function(t){
+      var img = t.querySelector('.page-photo img');
+      if (!img) return;
+      var d = (t.dataset.takenAt || '').slice(0, 10);
+      if (d && d !== lastDay) {
+        lastDay = d;
+        var sep = document.createElement('span');
+        sep.className = 'pr-day';
+        try {
+          sep.textContent = new Date(d + 'T12:00:00')
+            .toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
+        } catch(e) { sep.textContent = d; }
+        strip.appendChild(sep);
+      }
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'pr-photo';
+      b.innerHTML = '<img src="' + img.src + '" loading="lazy" alt="">';
+      b.addEventListener('click', function(){
+        strip.querySelectorAll('.pr-photo.is-active').forEach(function(x){ x.classList.remove('is-active'); });
+        b.classList.add('is-active');
+        var fn = prCallback;
+        setTimeout(function(){ closePhotoRoll(); if (fn) fn(t.dataset.pageId, img.src); }, 120);
+      });
+      if (day && d === day && !firstOfDay) firstOfDay = b;
+      strip.appendChild(b);
+    });
+    roll.hidden = false;
+    document.body.classList.add('photo-roll-open');
+    if (firstOfDay) {
+      setTimeout(function(){
+        firstOfDay.scrollIntoView({ behavior: 'auto', inline: 'start', block: 'nearest' });
+      }, 60);
+    }
+  }
+  function closePhotoRoll() {
+    document.getElementById('photo-roll').hidden = true;
+    document.body.classList.remove('photo-roll-open');
+    prCallback = null;
+  }
+  window.openPhotoRoll = openPhotoRoll;
+  window.closePhotoRoll = closePhotoRoll;
+
   /* ─ Ancrage des notes : relier, détacher, retrouver ─ */
-  let linkingNoteId = null;
   function startLinking(noteId, btn) {
-    linkingNoteId = noteId;
-    document.body.classList.add('linking-mode');
-    setSaving('Touche la photo à relier… (Échap pour annuler)');
-    const onKey = function(e){ if (e.key === 'Escape') stopLinking(); };
-    document.addEventListener('keydown', onKey, { once: true });
+    // v4.8 : le rouleau de photos — défilement rapide, positionné au jour de la note
+    var day = '';
+    if (btn) {
+      var rail = btn.closest('.day-rail');
+      if (rail && rail.dataset.day) day = rail.dataset.day;
+      if (!day) {
+        var note = btn.closest('.rail-note, .page-item');
+        if (note) day = (note.dataset.takenAt || '').slice(0, 10);
+      }
+    }
+    openPhotoRoll(day, async function(pageId){
+      setSaving('Liaison…');
+      const fd = new FormData();
+      fd.append('_csrf', CSRF);
+      fd.append('anchor_page_id', pageId);
+      try {
+        const r = await fetch(`/album_page/${noteId}/anchor`, { method: 'POST', body: fd });
+        const d = await r.json();
+        if (!d.ok) { setError(d.error || 'Erreur'); return; }
+        setSaved('Note reliée');
+        setTimeout(function(){ reloadKeepScroll(); }, 350);
+      } catch(err) { setError('Réseau'); }
+    }, 'Relier la note à une photo');
   }
-  function stopLinking() {
-    linkingNoteId = null;
-    document.body.classList.remove('linking-mode');
-    setSaved('Annulé');
-  }
-  document.addEventListener('click', async function(e){
-    if (!linkingNoteId) return;
-    const tile = e.target.closest('.page-item:not(.page-item-margin)');
-    if (!tile || tile.dataset.type !== 'photo') return;
-    e.preventDefault(); e.stopPropagation();
-    const noteId = linkingNoteId;
-    linkingNoteId = null;
-    document.body.classList.remove('linking-mode');
-    setSaving('Liaison…');
-    const fd = new FormData();
-    fd.append('_csrf', CSRF);
-    fd.append('anchor_page_id', tile.dataset.pageId);
-    try {
-      const r = await fetch(`/album_page/${noteId}/anchor`, { method: 'POST', body: fd });
-      const d = await r.json();
-      if (!d.ok) { setError(d.error || 'Erreur'); return; }
-      setSaved('Note reliée');
-      setTimeout(function(){ reloadKeepScroll(); }, 350);
-    } catch(err) { setError('Réseau'); }
-  }, true);
   async function unlinkNote(noteId) {
     setSaving();
     const fd = new FormData();
@@ -527,20 +597,17 @@
       b.addEventListener('click', function(){ pickAnchor(b, '', e.id); });
       etEl.appendChild(b);
     });
-    // photos du jour : depuis le DOM du bloc jour correspondant
-    const tiles = [];
-    document.querySelectorAll('.album-section:not(.album-section-margin) .page-item[data-type="photo"]').forEach(function(t){
-      if ((t.dataset.takenAt || '').slice(0, 10) === day) tiles.push(t);
+    // v4.8 : bouton vers le rouleau (défilement rapide de toutes les photos)
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'mn-anchor-chip mn-anchor-roll';
+    b.textContent = '📷 Choisir une photo…';
+    b.addEventListener('click', function(){
+      openPhotoRoll(day, function(pageId, src){
+        pickAnchor(b, pageId, '');
+        b.innerHTML = '<img class="mn-roll-thumb" src="' + src + '" alt=""> photo choisie';
+      }, 'Relier la note à une photo');
     });
-    tiles.slice(0, 14).forEach(function(t){
-      const img = t.querySelector('.page-photo img');
-      if (!img) return;
-      const b = document.createElement('button');
-      b.type = 'button'; b.className = 'mn-anchor-photo';
-      b.innerHTML = '<img src="' + img.src + '" alt="">';
-      b.addEventListener('click', function(){ pickAnchor(b, t.dataset.pageId, ''); });
-      phEl.appendChild(b);
-    });
+    phEl.appendChild(b);
   }
   function pickAnchor(btn, pageId, itemId) {
     document.querySelectorAll('.mn-anchor-chip.is-active, .mn-anchor-photo.is-active')

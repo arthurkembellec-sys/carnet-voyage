@@ -92,7 +92,7 @@
           </div>
         </div>
         <form method="POST" action="{{ url_for('profil_quitter_espace', eid=e.id) }}"
-              onsubmit="return confirm('Quitter {{ e.name or \"cet espace\" }} ? Tes contributions restent visibles aux autres membres.');">
+              onsubmit="return confirm('Quitter cet espace ? Tes contributions restent visibles aux autres membres.');">
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
           <button type="submit" class="btn btn-secondary btn-sm">Quitter</button>
         </form>

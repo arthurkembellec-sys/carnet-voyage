@@ -240,6 +240,20 @@
 
   const KIND_LABELS = { link:'Lien', photo:'Photo', note:'Note', location:'Lieu', budget:'Budget' };
 
+  /* ─ v4.8 mobile : le footer s'efface quand on lit, revient quand on remonte ─ */
+  (function(){
+    var footer = document.querySelector('.album-footer');
+    if (!footer) return;
+    var lastY = window.scrollY, hidden = false;
+    window.addEventListener('scroll', function(){
+      var y = window.scrollY;
+      var down = y > lastY + 6, up = y < lastY - 6;
+      if (down && !hidden && y > 160) { hidden = true; footer.classList.add('is-tucked'); }
+      else if ((up || y < 80) && hidden) { hidden = false; footer.classList.remove('is-tucked'); }
+      if (down || up) lastY = y;
+    }, { passive: true });
+  })();
+
   /* ─ Reload en gardant le scroll ─ */
   const SCROLL_KEY = 'reverieScroll:' + location.pathname;
   function reloadKeepScroll() {
