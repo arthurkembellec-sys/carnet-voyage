@@ -390,6 +390,9 @@ def init_db():
         # (la note se place a cote de sa photo dans le rail, et sur la
         #  page de cette photo dans le livre)
         "ALTER TABLE album_pages ADD COLUMN anchor_page_id INTEGER REFERENCES album_pages(id) ON DELETE SET NULL",
+        # ── v4.6 — marge dependante d'un EVENEMENT : photo (anchor_page_id)
+        # OU etape du planning (anchor_item_id)
+        "ALTER TABLE album_pages ADD COLUMN anchor_item_id INTEGER REFERENCES carnet_items(id) ON DELETE SET NULL",
         # ── v2.2 — Web Push : abonnements aux notifications PWA ──────
         """CREATE TABLE IF NOT EXISTS push_subscriptions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1137,8 +1140,8 @@ def carnet_planning_save(cid_carnet):
     days[k] = etapes du jour k dans l'ordre. Les items absents -> planned_day NULL.
     Modifiable a volonte jusqu'au basculement en voyage."""
     c = _get_carnet_or_404(cid_carnet)
-    if c['type'] != 'souhait':
-        return jsonify({'ok': False, 'error': 'Reverie uniquement'}), 400
+    # v4.6 : le planning se met a jour aussi sur un VOYAGE (prevu -> reel,
+    # ajustable jusqu'a la livraison de l'album)
     if not csrf_check():
         return jsonify({'ok': False, 'error': 'CSRF'}), 403
     data = request.get_json(silent=True) or {}
@@ -1219,9 +1222,11 @@ def carnet_transformer(cid_carnet):
                         for pos, iid in enumerate(selected_ids):
                             conn.execute(
                                 "INSERT INTO carnet_items (carnet_id, position, kind, title, "
-                                "body, url, photo_id, address, geo_lat, geo_lng, amount, currency, added_by) "
+                                "body, url, photo_id, address, geo_lat, geo_lng, amount, currency, "
+                                "pin_kind, planned_day, parent_item_id, added_by) "
                                 "SELECT ?, ?, kind, title, body, url, photo_id, address, "
-                                "geo_lat, geo_lng, amount, currency, added_by "
+                                "geo_lat, geo_lng, amount, currency, pin_kind, planned_day, "
+                                "parent_item_id, added_by "
                                 "FROM carnet_items WHERE id=?",
                                 (new_cid, pos, iid)
                             )
@@ -1229,9 +1234,11 @@ def carnet_transformer(cid_carnet):
                         # Copier les items au lieu de les deplacer
                         conn.execute(
                             f"INSERT INTO carnet_items (carnet_id, position, kind, title, "
-                            f"body, url, photo_id, address, geo_lat, geo_lng, amount, currency, added_by) "
+                            f"body, url, photo_id, address, geo_lat, geo_lng, amount, currency, "
+                            f"pin_kind, planned_day, parent_item_id, added_by) "
                             f"SELECT ?, position, kind, title, body, url, photo_id, address, "
-                            f"geo_lat, geo_lng, amount, currency, added_by "
+                            f"geo_lat, geo_lng, amount, currency, pin_kind, planned_day, "
+                            f"parent_item_id, added_by "
                             f"FROM carnet_items WHERE id IN ({placeholders})",
                             tuple([new_cid] + selected_ids)
                         )
@@ -3151,6 +3158,28 @@ def carnet_album(cid_carnet):
     pages = _carnet_pages(cid_carnet, sort_mode=sort_mode)
     geo_photos = [p for p in pages['all']
                   if p.get('photo_gps_lat') is not None and p.get('photo_gps_lng') is not None]
+    # v4.6 : etapes du planning du voyage, par date reelle (date_start + jour)
+    etapes_by_day = {}
+    etapes_all = []
+    if c.get('date_start'):
+        rows_et = query("""
+            SELECT id, title, pin_kind, planned_day, position FROM carnet_items
+            WHERE carnet_id=? AND kind='location' AND planned_day IS NOT NULL
+            ORDER BY planned_day ASC, position ASC
+        """, (cid_carnet,))
+        from datetime import date as _date, timedelta as _td
+        try:
+            d0 = _date.fromisoformat(str(c['date_start'])[:10])
+        except ValueError:
+            d0 = None
+        for r_ in rows_et:
+            r_ = dict(r_)
+            etapes_all.append(r_)
+            if d0 is not None:
+                day_key = (d0 + _td(days=r_['planned_day'])).isoformat()
+                r_['day'] = day_key
+                etapes_by_day.setdefault(day_key, []).append(r_)
+    etape_by_id = {e['id']: e for e in etapes_all}
     # v4.2 : enrichir les notes ancrees (vignette + chronologie de la photo)
     anchors = {}
     anchor_ids = [p['anchor_page_id'] for p in pages['margin'] if p.get('anchor_page_id')]
@@ -3170,6 +3199,14 @@ def carnet_album(cid_carnet):
         else:
             p['anchor_thumb'] = None
             p['anchor_ts'] = ''
+        # v4.6 : ancre vers une etape -> jour de l'etape + libelle
+        et = etape_by_id.get(p.get('anchor_item_id'))
+        if et:
+            p['anchor_etape'] = et
+            if et.get('day'):
+                p['anchor_ts'] = et['day'] + ' 00:00:01'
+        else:
+            p['anchor_etape'] = None
     # Tri du rail : une note ancree suit la chronologie de SA photo
     pages['margin'].sort(key=lambda p: (
         (p.get('anchor_ts') or _norm_ts(p.get('photo_taken_at')
@@ -3222,6 +3259,8 @@ def carnet_album(cid_carnet):
         ORDER BY v.added_at ASC
     """, (c['couple_id'],))]
     return render_template('album.html', carnet=c,
+        etapes_by_day=etapes_by_day, etapes_all=etapes_all,
+        pin_kinds=PIN_KINDS,
         orphan_videos=orphan_videos,
         main_pages=pages['main'], margin_pages=pages['margin'],
         margin_groups=margin_groups,
@@ -3605,7 +3644,7 @@ def carnet_add_margin_note(cid_carnet):
     # v4.2 : une note texte sans corps mais avec legende -> la legende EST le texte
     if page_type == 'text' and not text and caption:
         text, caption = caption, ''
-    # v4.2 : ancre optionnelle vers une page photo du meme carnet
+    # v4.2 : ancre vers une page photo · v4.6 : OU vers une etape du planning
     anchor_id = None
     raw_anchor = request.form.get('anchor_page_id')
     if raw_anchor and str(raw_anchor).isdigit():
@@ -3613,11 +3652,19 @@ def carnet_add_margin_note(cid_carnet):
                   "AND COALESCE(is_margin,0)=0", (int(raw_anchor), cid_carnet), one=True)
         if a:
             anchor_id = a['id']
+    anchor_item = None
+    raw_item = request.form.get('anchor_item_id')
+    if raw_item and str(raw_item).isdigit():
+        it = query("SELECT id FROM carnet_items WHERE id=? AND carnet_id=?",
+                   (int(raw_item), cid_carnet), one=True)
+        if it:
+            anchor_item = it['id']
     page_id = execute(
         "INSERT INTO album_pages (carnet_id, type, position, photo_id, "
-        "text_content, caption, is_margin, anchor_page_id, added_by) "
-        "VALUES (?,?,?,?,?,?,1,?,?)",
-        (cid_carnet, page_type, pos, photo_id, text, caption, anchor_id, session['uid'])
+        "text_content, caption, is_margin, anchor_page_id, anchor_item_id, added_by) "
+        "VALUES (?,?,?,?,?,?,1,?,?,?)",
+        (cid_carnet, page_type, pos, photo_id, text, caption, anchor_id,
+         anchor_item, session['uid'])
     )
     cap_short = caption or text or ''
     if len(cap_short) > 80:
@@ -3657,9 +3704,20 @@ def page_set_anchor(page_id):
         return jsonify({'ok': False, 'error': '404'}), 404
     if not note['is_margin']:
         return jsonify({'ok': False, 'error': 'Seule une note de marge peut etre reliee'}), 400
+    raw_item = (request.form.get('anchor_item_id') or '').strip()
+    if raw_item:
+        if not raw_item.isdigit():
+            return jsonify({'ok': False, 'error': 'Ancre invalide'}), 400
+        t = query("SELECT id FROM carnet_items WHERE id=? AND carnet_id=?",
+                  (int(raw_item), note['carnet_id']), one=True)
+        if not t:
+            return jsonify({'ok': False, 'error': 'Etape introuvable'}), 404
+        execute("UPDATE album_pages SET anchor_item_id=?, anchor_page_id=NULL WHERE id=?",
+                (t['id'], page_id))
+        return jsonify({'ok': True, 'anchor_item_id': t['id']})
     raw = (request.form.get('anchor_page_id') or '').strip()
     if not raw:
-        execute("UPDATE album_pages SET anchor_page_id=NULL WHERE id=?", (page_id,))
+        execute("UPDATE album_pages SET anchor_page_id=NULL, anchor_item_id=NULL WHERE id=?", (page_id,))
         return jsonify({'ok': True, 'anchor_page_id': None})
     if not raw.isdigit():
         return jsonify({'ok': False, 'error': 'Ancre invalide'}), 400
@@ -3667,7 +3725,7 @@ def page_set_anchor(page_id):
                    "AND COALESCE(is_margin,0)=0", (int(raw), note['carnet_id']), one=True)
     if not target:
         return jsonify({'ok': False, 'error': 'Photo introuvable dans cet album'}), 404
-    execute("UPDATE album_pages SET anchor_page_id=? WHERE id=?", (target['id'], page_id))
+    execute("UPDATE album_pages SET anchor_page_id=?, anchor_item_id=NULL WHERE id=?", (target['id'], page_id))
     return jsonify({'ok': True, 'anchor_page_id': target['id']})
 
 

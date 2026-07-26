@@ -16,7 +16,7 @@
   <aside class="day-rail{% if not notes %} is-empty{% endif %}">
     <div class="day-rail-head">
       <span class="day-rail-label">En marge</span>
-      <button type="button" class="day-rail-add" onclick="openMarginNote()" title="Ajouter une note de marge">+</button>
+      <button type="button" class="day-rail-add" onclick="openMarginNote(null, '{{ day }}')" title="Ajouter une note de marge reliée à un événement du jour">+</button>
     </div>
     {% if notes %}
       {% for p in notes %}{% include '_margin_note.html' %}{% endfor %}
@@ -71,6 +71,22 @@
   </section>
   {% endif %}
 
+  {# ────── PLANNING DU VOYAGE (v4.6) : prévu → réel, ajustable ────── #}
+  {% if etapes_all and carnet.date_start and carnet.date_end %}
+  <details class="voyage-planning">
+    <summary class="apercu-summary">
+      <span class="apercu-summary-icon">🧭</span>
+      <span class="apercu-summary-text">
+        Planning du voyage
+        <span class="apercu-summary-current">{{ etapes_all|length }} étape(s) · glisse-les entre les jours si la réalité a changé</span>
+      </span>
+      <span class="apercu-summary-chevron">▾</span>
+    </summary>
+    <div class="voyage-planning-days" id="vp-days"></div>
+    <p class="planning-save" id="vp-save" style="padding:0 18px 12px"></p>
+  </details>
+  {% endif %}
+
   {# ────── VIDÉOS RETROUVÉES (uploads anciens jamais rattachés) ────── #}
   {% if orphan_videos %}
   <section class="orphan-videos">
@@ -110,6 +126,16 @@
         {% if s1.section.kind == 'day' %}
           {# ── Cas B/C : le niveau 1 EST un jour → un seul bloc jour + rail ── #}
           {% set day = (s1.section.date_start or '')[:10] %}
+          {% if etapes_by_day and etapes_by_day.get(day) %}
+          <div class="day-etapes">
+            {% for e in etapes_by_day[day] %}
+            <span class="day-etape" data-item-id="{{ e.id }}">
+              {%- for k, em, lab in pin_kinds %}{% if k == e.pin_kind %}{{ em }} {% endif %}{% endfor -%}
+              {{ e.title }}
+            </span>
+            {% endfor %}
+          </div>
+          {% endif %}
           <div class="day-block">
             <div class="day-main">
               <ul class="pages-list pages-list-sub">
@@ -139,6 +165,16 @@
           {% for sub in s1.subsections %}
           {% set day = (sub.section.date_start or '')[:10] %}
           <div class="album-level2">
+            {% if etapes_by_day and etapes_by_day.get(day) %}
+            <div class="day-etapes">
+              {% for e in etapes_by_day[day] %}
+              <span class="day-etape" data-item-id="{{ e.id }}">
+                {%- for k, em, lab in pin_kinds %}{% if k == e.pin_kind %}{{ em }} {% endif %}{% endfor -%}
+                {{ e.title }}
+              </span>
+              {% endfor %}
+            </div>
+            {% endif %}
             <div class="album-l2-head">
               <div class="album-l2-meta">
                 <span class="album-l2-title">{{ sub.section.primary_label|doux_label }}</span>
@@ -259,8 +295,15 @@
       Photo de contexte, billet de musée, gribouillis, citation… apparaîtra dans la marge du livre.
     </p>
     <p class="margin-note-linked" id="mn-linked" hidden>↳ Cette note sera reliée à la photo choisie — elle s'affichera à côté d'elle, et sur sa page dans le livre.</p>
+    <div id="mn-anchor-picker" hidden>
+      <label class="margin-note-label">RELIER À UN ÉVÉNEMENT DU JOUR</label>
+      <div class="mn-anchor-etapes" id="mn-anchor-etapes"></div>
+      <div class="mn-anchor-photos" id="mn-anchor-photos"></div>
+      <p class="mn-anchor-warn" id="mn-anchor-warn">Sans événement choisi, la note restera vagabonde dans la marge du jour.</p>
+    </div>
     <form id="margin-note-form" enctype="multipart/form-data">
       <input type="hidden" name="anchor_page_id" id="mn-anchor" value="">
+      <input type="hidden" name="anchor_item_id" id="mn-anchor-item" value="">
       <label class="margin-note-label">PHOTO (optionnelle)</label>
       <input type="file" name="photo" id="mn-photo" accept="image/*" class="margin-note-file">
 
@@ -449,15 +492,63 @@
   window.scrollToPage = scrollToPage;
 
   /* ─ Note de marge (modale) ─ */
-  function openMarginNote(anchorPageId){
+  var ETAPES_BY_DAY = {{ (etapes_by_day or {})|tojson }};
+  var PIN_EMOJIS = {};
+  {% for k, em, lab in pin_kinds %}PIN_EMOJIS[{{ k|tojson }}] = {{ em|tojson }};
+  {% endfor %}
+
+  function openMarginNote(anchorPageId, day){
     const m = document.getElementById('margin-note-modal');
     m.style.display = 'flex';
     document.getElementById('mn-caption').value = '';
     document.getElementById('mn-text').value = '';
     document.getElementById('mn-photo').value = '';
     document.getElementById('mn-anchor').value = anchorPageId || '';
+    document.getElementById('mn-anchor-item').value = '';
     document.getElementById('mn-linked').hidden = !anchorPageId;
+    // v4.6 : sélecteur d'événement quand on vient du rail d'un jour
+    const picker = document.getElementById('mn-anchor-picker');
+    if (!anchorPageId && day) {
+      buildAnchorPicker(day);
+      picker.hidden = false;
+    } else {
+      picker.hidden = true;
+    }
     setTimeout(()=>document.getElementById('mn-caption').focus(), 100);
+  }
+  function buildAnchorPicker(day) {
+    const etEl = document.getElementById('mn-anchor-etapes');
+    const phEl = document.getElementById('mn-anchor-photos');
+    etEl.innerHTML = ''; phEl.innerHTML = '';
+    (ETAPES_BY_DAY[day] || []).forEach(function(e){
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'mn-anchor-chip';
+      b.textContent = (PIN_EMOJIS[e.pin_kind] ? PIN_EMOJIS[e.pin_kind] + ' ' : '') + e.title;
+      b.addEventListener('click', function(){ pickAnchor(b, '', e.id); });
+      etEl.appendChild(b);
+    });
+    // photos du jour : depuis le DOM du bloc jour correspondant
+    const tiles = [];
+    document.querySelectorAll('.album-section:not(.album-section-margin) .page-item[data-type="photo"]').forEach(function(t){
+      if ((t.dataset.takenAt || '').slice(0, 10) === day) tiles.push(t);
+    });
+    tiles.slice(0, 14).forEach(function(t){
+      const img = t.querySelector('.page-photo img');
+      if (!img) return;
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'mn-anchor-photo';
+      b.innerHTML = '<img src="' + img.src + '" alt="">';
+      b.addEventListener('click', function(){ pickAnchor(b, t.dataset.pageId, ''); });
+      phEl.appendChild(b);
+    });
+  }
+  function pickAnchor(btn, pageId, itemId) {
+    document.querySelectorAll('.mn-anchor-chip.is-active, .mn-anchor-photo.is-active')
+      .forEach(function(x){ x.classList.remove('is-active'); });
+    btn.classList.add('is-active');
+    document.getElementById('mn-anchor').value = pageId || '';
+    document.getElementById('mn-anchor-item').value = itemId || '';
+    document.getElementById('mn-anchor-warn').hidden = !!(pageId || itemId);
   }
   function closeMarginNote(){
     document.getElementById('margin-note-modal').style.display = 'none';
@@ -1134,6 +1225,78 @@
       if (Math.abs(dx) > 60) viewerNav(dx < 0 ? 1 : -1);
       startX = null;
     });
+  })();
+
+  /* ─ v4.6 : planning du voyage (prévu → réel), ajustable ─ */
+  (function(){
+    var wrap = document.getElementById('vp-days');
+    if (!wrap) return;
+    var DS = {{ (carnet.date_start or '')|tojson }};
+    var DE = {{ (carnet.date_end or '')|tojson }};
+    function nbDays(){
+      return Math.min(31, Math.round((new Date(DE) - new Date(DS)) / 86400000) + 1);
+    }
+    function dayLabel(k){
+      var d = new Date(DS + 'T12:00:00'); d.setDate(d.getDate() + k);
+      return d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
+    }
+    var vpDays = [];
+    var nb = nbDays();
+    for (var k = 0; k < nb; k++) vpDays.push([]);
+    var flat = [];
+    Object.keys(ETAPES_BY_DAY).sort().forEach(function(d){
+      ETAPES_BY_DAY[d].forEach(function(e){ flat.push(e); });
+    });
+    flat.forEach(function(e){
+      if (e.planned_day != null && e.planned_day >= 0 && e.planned_day < nb) vpDays[e.planned_day].push(e);
+    });
+    function render(){
+      wrap.innerHTML = '';
+      vpDays.forEach(function(day, k){
+        var card = document.createElement('div');
+        card.className = 'day-card';
+        card.innerHTML = '<div class="day-card-head"><span class="day-card-date">' + dayLabel(k) + '</span></div>';
+        var ul = document.createElement('ul');
+        ul.className = 'day-card-steps';
+        ul.dataset.vpDay = k;
+        day.forEach(function(e){
+          var li = document.createElement('li');
+          li.className = 'day-step';
+          li.dataset.itemId = e.id;
+          li.textContent = (PIN_EMOJIS[e.pin_kind] ? PIN_EMOJIS[e.pin_kind] + ' ' : '') + e.title;
+          ul.appendChild(li);
+        });
+        card.appendChild(ul);
+        wrap.appendChild(card);
+      });
+      if (window.Sortable) {
+        wrap.querySelectorAll('.day-card-steps').forEach(function(ul){
+          new Sortable(ul, { group: 'vp', animation: 150, onEnd: save });
+        });
+      }
+    }
+    var saveTimer = null;
+    function save(){
+      var days = Array.from(wrap.querySelectorAll('.day-card-steps')).map(function(ul){
+        return Array.from(ul.querySelectorAll('.day-step')).map(function(li){ return Number(li.dataset.itemId); });
+      });
+      clearTimeout(saveTimer);
+      var st = document.getElementById('vp-save');
+      st.textContent = 'Enregistrement…';
+      saveTimer = setTimeout(async function(){
+        try {
+          var r = await fetch("{{ url_for('carnet_planning_save', cid_carnet=carnet.id) }}", {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
+            body: JSON.stringify({ date_start: DS, date_end: DE, days: days })
+          });
+          var j = await r.json();
+          st.textContent = j.ok ? '✓ Planning mis à jour — l\'album suivra' : (j.error || 'Erreur');
+          setTimeout(function(){ st.textContent = ''; reloadKeepScroll(); }, 900);
+        } catch(e) { st.textContent = 'Réseau'; }
+      }, 600);
+    }
+    render();
   })();
 
   // v4.4 : rattacher une vidéo retrouvée à cet album

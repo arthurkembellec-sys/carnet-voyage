@@ -3564,3 +3564,82 @@ body.linking-mode .album-footer { opacity: 0.3; pointer-events: none; }
   margin-left: auto;
 }
 .item-child-unlink:hover { color: var(--color-danger); }
+
+/* ════════════════════════════════════════════════════════════════════
+   v4.6 — marges dépendantes d'un événement, étapes dans l'album,
+   planning du voyage prévu → réel (2026-07-26)
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Étapes du jour en tête de journée : le squelette du voyage */
+.day-etapes {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  justify-content: center;
+  margin: -8px 0 14px;
+}
+.day-etape {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: var(--bg-card);
+  border: 1px dashed var(--border-default);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-family: var(--font-display); font-style: italic;
+  font-size: 12.5px; color: var(--ink-secondary);
+}
+
+/* Panneau planning du voyage */
+.voyage-planning {
+  margin: 20px 0;
+  background: var(--bg-card);
+  border-radius: 14px;
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+}
+.voyage-planning-days {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  padding: 4px 18px 14px;
+}
+.voyage-planning .day-card { background: var(--bg-subtle); }
+.voyage-planning .day-card-steps { min-height: 30px; }
+
+/* Sélecteur d'événement dans la modale de note */
+.mn-anchor-etapes { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.mn-anchor-chip {
+  border: 1px dashed var(--border-strong);
+  background: var(--bg-card);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-family: var(--font-display); font-style: italic;
+  font-size: 12.5px; cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.mn-anchor-chip.is-active { border-color: var(--accent); background: var(--accent-soft); border-style: solid; }
+.mn-anchor-photos { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.mn-anchor-photo {
+  border: 2px solid transparent; background: none; padding: 0;
+  border-radius: 8px; overflow: hidden; cursor: pointer;
+  width: 52px; height: 52px;
+}
+.mn-anchor-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mn-anchor-photo.is-active { border-color: var(--accent); }
+.mn-anchor-warn {
+  font-family: var(--font-display); font-style: italic;
+  font-size: 11.5px; color: var(--color-warning);
+  margin: 4px 0 12px;
+}
+#mn-anchor-picker { margin-bottom: 6px; }
+
+/* Note vagabonde : nudge discret */
+.rail-note-anchor-etape { cursor: default; }
+.rail-note-wander {
+  display: inline-block;
+  border: none; cursor: pointer;
+  background: rgba(184,134,75,0.12);
+  color: var(--color-warning);
+  font-family: var(--font-display); font-style: italic;
+  font-size: 11px;
+  border-radius: 6px;
+  padding: 3px 8px;
+  margin-top: 6px;
+}

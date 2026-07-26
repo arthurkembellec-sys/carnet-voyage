@@ -32,6 +32,15 @@
     {% endif %}
     <span>↳ reliée</span>
   </a>
+  {% elif p.anchor_etape %}
+  <span class="rail-note-anchor rail-note-anchor-etape" title="Reliée à une étape du planning">
+    <span>↳ {% for k, em, lab in pin_kinds %}{% if k == p.anchor_etape.pin_kind %}{{ em }} {% endif %}{% endfor %}{{ p.anchor_etape.title }}</span>
+  </span>
+  {% else %}
+  <button type="button" class="rail-note-wander" onclick="toggleTools(this)"
+          title="Cette note n'est reliée à aucun événement — elle vagabonde">
+    ⚠ à relier
+  </button>
   {% endif %}
   <button type="button" class="page-more rail-note-more" onclick="toggleTools(this)" aria-label="Actions">⋯</button>
   <div class="page-tools">
