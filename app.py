@@ -2728,14 +2728,26 @@ def geo_sleep():
          f'node[tourism~"^({kinds})$"]({s},{w},{n},{e});'
          f'way[tourism~"^({kinds})$"]({s},{w},{n},{e});'
          f');out center 40;')
+    # v4.4.1 : instances de repli — overpass-api.de refuse parfois les IP cloud
+    data = None
+    for endpoint in ('https://overpass-api.de/api/interpreter',
+                     'https://overpass.kumi.systems/api/interpreter',
+                     'https://overpass.private.coffee/api/interpreter'):
+        try:
+            req = urllib.request.Request(
+                endpoint,
+                data=('data=' + urllib.parse.quote(q)).encode(),
+                headers={'User-Agent': _GEO_UA,
+                         'Content-Type': 'application/x-www-form-urlencoded'})
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                data = _json.loads(resp.read())
+            break
+        except Exception as e:
+            log.warning("overpass %s KO: %s", endpoint, e)
+            continue
     try:
-        req = urllib.request.Request(
-            'https://overpass-api.de/api/interpreter',
-            data=('data=' + urllib.parse.quote(q)).encode(),
-            headers={'User-Agent': _GEO_UA,
-                     'Content-Type': 'application/x-www-form-urlencoded'})
-        with urllib.request.urlopen(req, timeout=14) as resp:
-            data = _json.loads(resp.read())
+        if data is None:
+            raise RuntimeError('toutes les instances Overpass KO')
         out = []
         for el in (data.get('elements') or [])[:40]:
             lat = el.get('lat') or (el.get('center') or {}).get('lat')
