@@ -307,8 +307,9 @@
       '<p style="padding:40px;text-align:center;color:#A39C92;font-style:italic">Carte indisponible pour le moment.</p>';
   }
   var map = window.L ? L.map('reverie-map', { scrollWheelZoom: false }) : null;
-  if (map) L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, attribution: '© OpenStreetMap'
+  if (map) L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    maxZoom: 19, subdomains: 'abcd',
+    attribution: '© OpenStreetMap · © CARTO'
   }).addTo(map);
 
   var routeMode = false;

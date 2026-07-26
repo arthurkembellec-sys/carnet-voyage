@@ -339,6 +339,10 @@ def init_db():
         # ── v2.4 — options carto PDF (Brief 06 §5.7)
         "ALTER TABLE carnets ADD COLUMN pdf_show_overview_map INTEGER DEFAULT 1",
         "ALTER TABLE carnets ADD COLUMN pdf_show_section_maps INTEGER DEFAULT 1",
+        # ── v4.2 — note de marge rattachee a une photo de l'album
+        # (la note se place a cote de sa photo dans le rail, et sur la
+        #  page de cette photo dans le livre)
+        "ALTER TABLE album_pages ADD COLUMN anchor_page_id INTEGER REFERENCES album_pages(id) ON DELETE SET NULL",
         # ── v2.2 — Web Push : abonnements aux notifications PWA ──────
         """CREATE TABLE IF NOT EXISTS push_subscriptions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2869,12 +2873,39 @@ def carnet_album(cid_carnet):
     pages = _carnet_pages(cid_carnet, sort_mode=sort_mode)
     geo_photos = [p for p in pages['all']
                   if p.get('photo_gps_lat') is not None and p.get('photo_gps_lng') is not None]
+    # v4.2 : enrichir les notes ancrees (vignette + chronologie de la photo)
+    anchors = {}
+    anchor_ids = [p['anchor_page_id'] for p in pages['margin'] if p.get('anchor_page_id')]
+    if anchor_ids:
+        ph = ','.join('?' * len(anchor_ids))
+        for r in query(f"""
+            SELECT ap.id, p.thumb_path, p.taken_at, ap.caption
+            FROM album_pages ap LEFT JOIN photos p ON p.id = ap.photo_id
+            WHERE ap.id IN ({ph})
+        """, tuple(anchor_ids)):
+            anchors[r['id']] = dict(r)
+    for p in pages['margin']:
+        a = anchors.get(p.get('anchor_page_id'))
+        if a:
+            p['anchor_thumb'] = a.get('thumb_path')
+            p['anchor_ts'] = _norm_ts(a.get('taken_at'))
+        else:
+            p['anchor_thumb'] = None
+            p['anchor_ts'] = ''
+    # Tri du rail : une note ancree suit la chronologie de SA photo
+    pages['margin'].sort(key=lambda p: (
+        (p.get('anchor_ts') or _norm_ts(p.get('photo_taken_at')
+         or p.get('video_taken_at') or p.get('created_at'))) == '',
+        p.get('anchor_ts') or _norm_ts(p.get('photo_taken_at')
+         or p.get('video_taken_at') or p.get('created_at')),
+        p.get('id') or 0,
+    ))
     # v3.4 : notes de marge groupees par jour (suivent la chronologie de l'album)
     margin_groups = []
     last_day = None
     for p in pages['margin']:
-        ts = _norm_ts(p.get('photo_taken_at') or p.get('video_taken_at')
-                      or p.get('created_at'))
+        ts = p.get('anchor_ts') or _norm_ts(p.get('photo_taken_at')
+             or p.get('video_taken_at') or p.get('created_at'))
         day = ts[:10] if ts else ''
         if day != last_day or not margin_groups:
             margin_groups.append({
@@ -3284,11 +3315,22 @@ def carnet_add_margin_note(cid_carnet):
             return jsonify({'ok': False, 'error': 'Photo : ' + str(e)}), 500
     pos = _next_page_position(cid_carnet)
     page_type = 'photo' if photo_id else 'text'
+    # v4.2 : une note texte sans corps mais avec legende -> la legende EST le texte
+    if page_type == 'text' and not text and caption:
+        text, caption = caption, ''
+    # v4.2 : ancre optionnelle vers une page photo du meme carnet
+    anchor_id = None
+    raw_anchor = request.form.get('anchor_page_id')
+    if raw_anchor and str(raw_anchor).isdigit():
+        a = query("SELECT id FROM album_pages WHERE id=? AND carnet_id=? "
+                  "AND COALESCE(is_margin,0)=0", (int(raw_anchor), cid_carnet), one=True)
+        if a:
+            anchor_id = a['id']
     page_id = execute(
         "INSERT INTO album_pages (carnet_id, type, position, photo_id, "
-        "text_content, caption, is_margin, added_by) "
-        "VALUES (?,?,?,?,?,?,1,?)",
-        (cid_carnet, page_type, pos, photo_id, text, caption, session['uid'])
+        "text_content, caption, is_margin, anchor_page_id, added_by) "
+        "VALUES (?,?,?,?,?,?,1,?,?)",
+        (cid_carnet, page_type, pos, photo_id, text, caption, anchor_id, session['uid'])
     )
     cap_short = caption or text or ''
     if len(cap_short) > 80:
@@ -3313,6 +3355,33 @@ def carnet_add_text(cid_carnet):
         (cid_carnet, 'text', pos, '', 1 if is_margin else 0, session['uid'])
     )
     return jsonify({'ok': True, 'page_id': page_id, 'position': pos, 'is_margin': is_margin})
+
+
+@app.route('/album_page/<int:page_id>/anchor', methods=['POST'])
+@couple_required
+def page_set_anchor(page_id):
+    """v4.2 : relie (ou detache) une note de marge a une page photo de l'album."""
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    note = query("SELECT ap.*, c.couple_id AS cpl FROM album_pages ap "
+                 "JOIN carnets c ON c.id=ap.carnet_id WHERE ap.id=?",
+                 (page_id,), one=True)
+    if not note or note['cpl'] != current_espace_id():
+        return jsonify({'ok': False, 'error': '404'}), 404
+    if not note['is_margin']:
+        return jsonify({'ok': False, 'error': 'Seule une note de marge peut etre reliee'}), 400
+    raw = (request.form.get('anchor_page_id') or '').strip()
+    if not raw:
+        execute("UPDATE album_pages SET anchor_page_id=NULL WHERE id=?", (page_id,))
+        return jsonify({'ok': True, 'anchor_page_id': None})
+    if not raw.isdigit():
+        return jsonify({'ok': False, 'error': 'Ancre invalide'}), 400
+    target = query("SELECT id FROM album_pages WHERE id=? AND carnet_id=? "
+                   "AND COALESCE(is_margin,0)=0", (int(raw), note['carnet_id']), one=True)
+    if not target:
+        return jsonify({'ok': False, 'error': 'Photo introuvable dans cet album'}), 404
+    execute("UPDATE album_pages SET anchor_page_id=? WHERE id=?", (target['id'], page_id))
+    return jsonify({'ok': True, 'anchor_page_id': target['id']})
 
 
 @app.route('/album_page/<int:page_id>/supprimer', methods=['POST'])

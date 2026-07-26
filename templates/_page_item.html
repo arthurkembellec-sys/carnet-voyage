@@ -103,6 +103,12 @@
     {% endif %}
 
     <div class="page-actions">
+      {% if p.type == 'photo' %}
+        <button class="page-action-btn" type="button"
+                onclick="openMarginNote({{ p.id }})" title="Note en marge reliée à cette photo">
+          ✎ Note
+        </button>
+      {% endif %}
       {% if p.type == 'text' %}
         {% if p.photo_path %}
           <button class="page-action-btn" type="button" onclick="detachPhoto({{ p.id }})">✕ Photo</button>

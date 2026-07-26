@@ -88,6 +88,25 @@ def build_margin_plan(pages_main, margin_pool, n_per_page):
     pool = list(margin_pool or [])
     if not n or not pool:
         return plan
+    # v4.2 : une note ancree (anchor_page_id) va sur la page composite qui
+    # contient sa photo — hors plafond, c'est un choix explicite de l'auteur.
+    page_to_chunk = {}
+    for k, chunk in enumerate(chunks):
+        for p in chunk:
+            pid = p.get('id') if isinstance(p, dict) else None
+            if pid is not None:
+                page_to_chunk[pid] = k
+    rest = []
+    for m in pool:
+        aid = m.get('anchor_page_id') if isinstance(m, dict) else None
+        k = page_to_chunk.get(aid) if aid else None
+        if k is not None:
+            plan[k].append(m)
+        else:
+            rest.append(m)
+    pool = rest
+    if not pool:
+        return plan
     cap = max(3, -(-len(pool) // n))  # au moins l'ancien "per" uniforme
     idx = 0
     for k, chunk in enumerate(chunks):

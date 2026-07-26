@@ -3280,3 +3280,60 @@ a:not(.btn):not(.tab-link):not(.chip):not(.link):not(.brand):not(.espace-menu-it
   font-family: var(--font-display); font-style: italic;
   font-size: 13px; color: var(--ink-whisper);
 }
+
+/* ════════════════════════════════════════════════════════════════════
+   v4.2 — notes de marge reliées à une photo + carte rêveuse (2026-07-26)
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Fond de carte adouci : teinté papier, moins saturé — propice à la rêverie */
+.reverie-map .leaflet-tile-pane,
+.album-map .leaflet-tile-pane {
+  filter: saturate(0.75) sepia(0.14) brightness(1.03) contrast(0.94);
+}
+
+/* Lien visuel d'une note reliée : vignette de sa photo */
+.rail-note-anchor {
+  display: flex; align-items: center; gap: 7px;
+  margin-top: 6px; padding: 4px 6px;
+  border-radius: 6px;
+  background: rgba(250,248,244,0.65);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background .2s;
+}
+.rail-note-anchor:hover { background: rgba(250,248,244,0.95); }
+.rail-note-anchor img {
+  width: 30px; height: 30px;
+  object-fit: cover; border-radius: 5px;
+  box-shadow: 0 1px 3px rgba(28,26,23,0.2);
+}
+.rail-note-anchor span {
+  font-family: var(--font-display); font-style: italic;
+  font-size: 11.5px; color: var(--ink-muted);
+}
+.rail-note.is-anchored::before { background: var(--accent); opacity: 0.35; }
+
+/* Halo sur la photo cible (survol de la note ou « retrouver ») */
+.page-item.anchor-glow {
+  box-shadow: 0 0 0 3px var(--accent), var(--shadow-hover);
+  transform: rotate(0deg) scale(1.02);
+  z-index: 40;
+}
+
+/* Mode liaison : les photos deviennent la cible */
+body.linking-mode .album-section:not(.album-section-margin) .page-item[data-type="photo"] {
+  cursor: crosshair;
+  outline: 2px dashed var(--accent-soft);
+  outline-offset: 2px;
+}
+body.linking-mode .album-footer { opacity: 0.3; pointer-events: none; }
+
+/* Mention de liaison dans la modale */
+.margin-note-linked {
+  font-family: var(--font-display); font-style: italic;
+  font-size: 12.5px; color: var(--accent);
+  margin: 0 0 14px;
+  padding: 8px 12px;
+  background: var(--accent-soft);
+  border-radius: 8px;
+}

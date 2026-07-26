@@ -236,7 +236,9 @@
     <p class="margin-note-sub">
       Photo de contexte, billet de musée, gribouillis, citation… apparaîtra dans la marge du livre.
     </p>
+    <p class="margin-note-linked" id="mn-linked" hidden>↳ Cette note sera reliée à la photo choisie — elle s'affichera à côté d'elle, et sur sa page dans le livre.</p>
     <form id="margin-note-form" enctype="multipart/form-data">
+      <input type="hidden" name="anchor_page_id" id="mn-anchor" value="">
       <label class="margin-note-label">PHOTO (optionnelle)</label>
       <input type="file" name="photo" id="mn-photo" accept="image/*" class="margin-note-file">
 
@@ -354,13 +356,85 @@
   }
   window.margeOn = margeOn; window.toggleMargeMode = toggleMargeMode;
 
+  /* ─ Ancrage des notes : relier, détacher, retrouver ─ */
+  let linkingNoteId = null;
+  function startLinking(noteId, btn) {
+    linkingNoteId = noteId;
+    document.body.classList.add('linking-mode');
+    setSaving('Touche la photo à relier… (Échap pour annuler)');
+    const onKey = function(e){ if (e.key === 'Escape') stopLinking(); };
+    document.addEventListener('keydown', onKey, { once: true });
+  }
+  function stopLinking() {
+    linkingNoteId = null;
+    document.body.classList.remove('linking-mode');
+    setSaved('Annulé');
+  }
+  document.addEventListener('click', async function(e){
+    if (!linkingNoteId) return;
+    const tile = e.target.closest('.page-item:not(.page-item-margin)');
+    if (!tile || tile.dataset.type !== 'photo') return;
+    e.preventDefault(); e.stopPropagation();
+    const noteId = linkingNoteId;
+    linkingNoteId = null;
+    document.body.classList.remove('linking-mode');
+    setSaving('Liaison…');
+    const fd = new FormData();
+    fd.append('_csrf', CSRF);
+    fd.append('anchor_page_id', tile.dataset.pageId);
+    try {
+      const r = await fetch(`/album_page/${noteId}/anchor`, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!d.ok) { setError(d.error || 'Erreur'); return; }
+      setSaved('Note reliée');
+      setTimeout(function(){ reloadKeepScroll(); }, 350);
+    } catch(err) { setError('Réseau'); }
+  }, true);
+  async function unlinkNote(noteId) {
+    setSaving();
+    const fd = new FormData();
+    fd.append('_csrf', CSRF);
+    fd.append('anchor_page_id', '');
+    try {
+      const r = await fetch(`/album_page/${noteId}/anchor`, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!d.ok) { setError(); return; }
+      setSaved('Note détachée');
+      setTimeout(function(){ reloadKeepScroll(); }, 350);
+    } catch(e) { setError('Réseau'); }
+  }
+  function scrollToPage(pageId) {
+    const el = document.querySelector(`.page-item[data-page-id="${pageId}"]`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('anchor-glow');
+    setTimeout(function(){ el.classList.remove('anchor-glow'); }, 2200);
+  }
+  // Halo : survoler une note reliée illumine sa photo
+  document.addEventListener('mouseover', function(e){
+    const note = e.target.closest('.rail-note.is-anchored');
+    if (!note) return;
+    const t = document.querySelector(`.page-item[data-page-id="${note.dataset.anchorId}"]`);
+    if (t) t.classList.add('anchor-glow');
+  });
+  document.addEventListener('mouseout', function(e){
+    const note = e.target.closest('.rail-note.is-anchored');
+    if (!note) return;
+    const t = document.querySelector(`.page-item[data-page-id="${note.dataset.anchorId}"]`);
+    if (t) t.classList.remove('anchor-glow');
+  });
+  window.startLinking = startLinking; window.unlinkNote = unlinkNote;
+  window.scrollToPage = scrollToPage;
+
   /* ─ Note de marge (modale) ─ */
-  function openMarginNote(){
+  function openMarginNote(anchorPageId){
     const m = document.getElementById('margin-note-modal');
     m.style.display = 'flex';
     document.getElementById('mn-caption').value = '';
     document.getElementById('mn-text').value = '';
     document.getElementById('mn-photo').value = '';
+    document.getElementById('mn-anchor').value = anchorPageId || '';
+    document.getElementById('mn-linked').hidden = !anchorPageId;
     setTimeout(()=>document.getElementById('mn-caption').focus(), 100);
   }
   function closeMarginNote(){
@@ -1055,9 +1129,9 @@
       {% endfor %}
     ];
     var map = L.map(el, { scrollWheelZoom: false });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '© OpenStreetMap'
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19, subdomains: 'abcd',
+      attribution: '© OpenStreetMap · © CARTO'
     }).addTo(map);
     var bounds = [];
     pts.forEach(function(p){

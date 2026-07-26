@@ -1,10 +1,12 @@
-{# ── Note de marge v4 : petit papier épinglé dans le rail de la timeline ──
-     Mêmes hooks JS que les tuiles (autosave caption/texte, marge, suppression). #}
-<div class="rail-note page-item page-item-margin{% if p.type == 'text' %} is-text{% endif %}"
+{# ── Note de marge v4.2 : papier épinglé, rattachable à une photo ──
+     Une note ancrée montre la vignette de sa photo ; au survol, la photo
+     s'illumine dans la mosaïque. Hooks JS conservés. #}
+<div class="rail-note page-item page-item-margin{% if p.type == 'text' %} is-text{% endif %}{% if p.anchor_page_id %} is-anchored{% endif %}"
      style="--tilt:{{ '%.2f'|format(((p.id % 5) - 2) * 0.9) }}deg"
      data-page-id="{{ p.id }}"
      data-type="{{ p.type }}"
      data-taken-at="{{ p.photo_taken_at or '' }}"
+     data-anchor-id="{{ p.anchor_page_id or '' }}"
      data-is-margin="1">
   {% if p.photo_path %}
     <a class="page-photo rail-note-photo" href="javascript:void(0)" onclick="openViewer({{ p.id }})">
@@ -21,9 +23,24 @@
     <textarea class="page-caption rail-note-caption" placeholder="Une légende…" rows="1"
               data-page-id="{{ p.id }}">{{ p.caption or '' }}</textarea>
   {% endif %}
+  {% if p.anchor_page_id %}
+  <a class="rail-note-anchor" href="javascript:void(0)"
+     onclick="scrollToPage({{ p.anchor_page_id }})"
+     title="Cette note est reliée à une photo — toucher pour la retrouver">
+    {% if p.anchor_thumb %}
+    <img src="{{ url_for('serve_upload', filename=p.anchor_thumb) }}" alt="" loading="lazy">
+    {% endif %}
+    <span>↳ reliée</span>
+  </a>
+  {% endif %}
   <button type="button" class="page-more rail-note-more" onclick="toggleTools(this)" aria-label="Actions">⋯</button>
   <div class="page-tools">
     <div class="page-actions">
+      {% if p.anchor_page_id %}
+      <button class="page-action-btn" type="button" onclick="unlinkNote({{ p.id }})">✕ Détacher</button>
+      {% else %}
+      <button class="page-action-btn" type="button" onclick="startLinking({{ p.id }}, this)">🔗 Relier à une photo</button>
+      {% endif %}
       <button class="page-action-btn" type="button" onclick="toggleMargin({{ p.id }})">↓ Album</button>
       <button class="page-action-btn page-action-danger" type="button" onclick="armDelete(this, {{ p.id }})">✕ Supprimer</button>
     </div>
