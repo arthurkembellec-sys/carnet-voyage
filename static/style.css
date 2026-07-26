@@ -3840,3 +3840,12 @@ body.photo-roll-open .album-footer { opacity: 0; pointer-events: none; }
   cursor: pointer; padding: 8px;
 }
 .pr-lead:active { background: var(--accent-soft); }
+
+/* v4.9.1 : la carte d'abord — les étiquettes s'effacent quand le zoom
+   ne leur laisse pas la place (divulgation progressive) */
+.labels-hidden .pin-label { display: none !important; }
+.pin-label {
+  max-width: 128px;
+  overflow: hidden; text-overflow: ellipsis;
+  transition: opacity .2s;
+}

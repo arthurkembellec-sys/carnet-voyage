@@ -767,8 +767,10 @@
       icon: pinIcon(null, g.pin_kind, g.planned_day),
       draggable: g.kind === 'location',
     }).addTo(map);
-    // v4.7 : nom apparent sous l'épingle
-    var label = (g.title || '').slice(0, 26) + ((g.title || '').length > 26 ? '…' : '');
+    // v4.7 : nom apparent sous l'épingle — v4.9.1 : texte propre (sans URL),
+    // et visible seulement quand le zoom laisse la place (divulgation progressive)
+    var raw = (g.title || '').replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim();
+    var label = raw.slice(0, 22) + (raw.length > 22 ? '…' : '');
     if (label) m.bindTooltip(label, { permanent: true, direction: 'bottom',
       className: 'pin-label', offset: [0, 6], opacity: 1 });
     var html = '<strong>' + (g.title || (g.kind === 'photo' ? 'Photo' : 'Lieu')) + '</strong>';
@@ -831,12 +833,25 @@
     } catch(e) { setError('Réseau'); }
   };
 
+  // v4.9.1 : les étiquettes n'apparaissent qu'à partir d'un zoom où elles
+  // ont la place (sinon elles recouvrent la carte). Seuil adaptatif : plus
+  // il y a d'épingles, plus il faut zoomer pour les afficher.
+  function updatePinLabels() {
+    if (!map) return;
+    var n = Object.keys(routePins).length;
+    var threshold = n <= 4 ? 8 : (n <= 10 ? 10 : 11);
+    var el = map.getContainer();
+    el.classList.toggle('labels-hidden', map.getZoom() < threshold);
+  }
+  if (map) map.on('zoomend', updatePinLabels);
+
   if (map) GEO_ITEMS.forEach(addPinToMap);
   if (map && GEO_ITEMS.length) {
     map.fitBounds(GEO_ITEMS.map(function(g){ return [g.lat, g.lng]; }), { padding: [30, 30], maxZoom: 12 });
   } else if (map) {
     map.setView([46.6, 2.4], 5); // France, en attendant les premières idées
   }
+  if (map) setTimeout(updatePinLabels, 200);
 
   /* ─ Épingler une idée : clic sur la carte ─ */
   var pendingMarker = null;
