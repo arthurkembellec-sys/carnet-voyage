@@ -50,7 +50,7 @@
       <div class="route-bar-actions">
         <button type="button" class="btn btn-secondary btn-sm" id="btn-route-cancel">Annuler</button>
         <button type="button" class="btn btn-primary btn-sm" id="btn-route-validate" disabled>
-          ✨ Valider ce parcours
+          ✓ Attribuer ce trajet
         </button>
       </div>
     </div>
@@ -71,10 +71,18 @@
         ✨ Passer en voyage
       </button>
     </div>
-    <p class="planning-hint" id="planning-hint">Pose des dates : les journées apparaissent, et tu y glisses tes épingles.</p>
-    <div class="planning-days" id="planning-days"></div>
+    <p class="planning-hint" id="planning-hint">Pose des dates : le fil des journées apparaît — trace des trajets sur la carte et attribue-les aux jours.</p>
+    <div class="pearl-row" id="pearl-row"></div>
+    <div class="pearl-detail" id="pearl-detail" hidden>
+      <div class="pearl-detail-head">
+        <span class="pearl-detail-date" id="pd-date"></span>
+        <span class="pearl-detail-time" id="pd-time"></span>
+      </div>
+      <ul class="day-card-steps" id="pd-steps"></ul>
+      <p class="pearl-detail-empty" id="pd-empty" hidden>Rien ce jour-là — trace un trajet sur la carte, ou glisse une idée depuis « à caser ».</p>
+    </div>
     <div class="planning-pool" id="planning-pool-wrap" hidden>
-      <span class="planning-pool-label">À caser</span>
+      <span class="planning-pool-label">À caser — glisse vers le jour ouvert</span>
       <ul class="day-card-steps planning-pool-list" id="planning-pool"></ul>
     </div>
     <p class="planning-save" id="planning-save"></p>
@@ -189,43 +197,21 @@
   </div>
 </div>
 
-<!-- Modal validation du parcours -->
+<!-- Modal : attribuer le trajet tracé à un jour du jalon -->
 <div class="souhait-modal" id="route-modal" hidden>
   <div class="souhait-modal-card">
     <div class="souhait-modal-head">
-      <h3>Valider le parcours</h3>
+      <h3>Ce trajet, quel jour ?</h3>
       <button type="button" class="souhait-modal-close" onclick="closeRouteModal()">✕</button>
     </div>
-    <p class="route-modal-sub">
-      <span id="route-modal-count"></span> étapes partent en voyage, dans l'ordre tracé.
-      Les autres idées restent dans la rêverie.
+    <p class="route-modal-sub" id="route-modal-sub"></p>
+    <div class="assign-pearls" id="assign-pearls"></div>
+    <p class="route-days-hint">
+      Le trajet devient celui du jour choisi — tu pourras le retoucher dans le planning, même après le passage en voyage.
     </p>
-    <form method="POST" action="{{ url_for('carnet_transformer', cid_carnet=carnet.id) }}" id="route-form">
-      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-      <input type="hidden" name="ordered" value="1">
-      <div id="route-form-ids"></div>
-      <label class="field"><span class="label">Titre du voyage</span>
-        <input type="text" name="title" id="route-title" maxlength="80" value="{{ carnet.title }}">
-      </label>
-      <div class="field-row">
-        <label class="field"><span class="label">Du</span>
-          <input type="date" name="date_start">
-        </label>
-        <label class="field"><span class="label">Au</span>
-          <input type="date" name="date_end">
-        </label>
-      </div>
-      <p class="route-total" id="route-total"></p>
-      <div class="route-days" id="route-days"></div>
-      <ol class="route-steps" id="route-steps"></ol>
-      <p class="route-days-hint" id="route-days-hint" hidden>
-        Esquisse indicative — glisse une étape d'un jour à l'autre si tu préfères. Rien n'est figé.
-      </p>
-      <div class="form-actions">
-        <button type="button" class="btn btn-ghost" onclick="closeRouteModal()">Retour à la carte</button>
-        <button type="submit" class="btn btn-primary">✨ Créer le voyage</button>
-      </div>
-    </form>
+    <div class="form-actions">
+      <button type="button" class="btn btn-ghost" onclick="closeRouteModal()">Retour à la carte</button>
+    </div>
   </div>
 </div>
 
@@ -488,7 +474,10 @@
         routeGeomLine = L.polyline(d.geometry, { color: '#A8503D', weight: 3.5, opacity: 0.85 }).addTo(map);
       }
       updateRouteTimeLabel();
-      if (!document.getElementById('route-modal').hidden) buildPlanning();
+      if (!document.getElementById('route-modal').hidden) {
+        var sub = document.getElementById('route-modal-sub');
+        if (sub && routeOrder.length) sub.textContent = routeOrder.length + ' étape(s), dans l\'ordre tracé · ≈ ' + fmtDur(d.duration_s) + (routeProfile === 'car' ? ' 🚗' : ' 🚶') + '.';
+      }
     } catch(e) { console.warn('route', e); }
   }
   document.querySelectorAll('#route-profile button').forEach(function(b){
@@ -597,13 +586,20 @@
     return GEO_ITEMS.filter(function(g){ return g.kind === 'location' && !placed[g.itemId]; })
                     .map(function(g){ return g.itemId; });
   }
-  function planStepHtml(id) {
+  function planStepHtml(id, removable) {
     var g = routePins[id] ? routePins[id].data : GEO_ITEMS.find(function(x){ return x.itemId === id; });
     if (!g) return '';
     return '<li class="day-step" data-item-id="' + id + '">' +
       '<span class="day-step-kind">' + (pinEmoji(g.pin_kind) || '📍') + '</span> ' +
-      (g.title || 'Idée') + '</li>';
+      '<span class="day-step-title">' + (g.title || 'Idée') + '</span>' +
+      (removable ? '<button type="button" class="day-step-out" onclick="stepToPool(' + id + ')" title="Renvoyer vers à caser">✕</button>' : '') +
+      '</li>';
   }
+  window.stepToPool = function(id){
+    planDays = planDays.map(function(day){ return day.filter(function(x){ return x !== id; }); });
+    renderPlanning(); planScheduleSave(); planRefreshPinDays();
+  };
+
   function planRefreshPinDays() {
     // couleur de jour des épingles = état courant du planning
     var dayOf = {};
@@ -611,100 +607,24 @@
     Object.keys(routePins).forEach(function(id){
       var p = routePins[id];
       if (p.data.kind !== 'location') return;
-      p.data.planned_day = (id in dayOf) ? dayOf[id] : null;
+      p.data.planned_day = (id in dayOf) ? dayOf[Number(id)] : (dayOf[id] != null ? dayOf[id] : null);
+      if (p.data.planned_day === undefined) p.data.planned_day = null;
       if (!routeMode) p.marker.setIcon(pinIcon(null, p.data.pin_kind, p.data.planned_day));
     });
   }
-  function renderPlanning() {
-    var daysEl = document.getElementById('planning-days');
-    var poolWrap = document.getElementById('planning-pool-wrap');
-    var poolEl = document.getElementById('planning-pool');
-    var hint = document.getElementById('planning-hint');
-    var nb = planNbDays();
-    if (!nb) {
-      daysEl.innerHTML = ''; poolWrap.hidden = true; hint.hidden = false;
-      return;
-    }
-    hint.hidden = true;
-    if (planDays.length !== nb) {
-      // Redimensionner en conservant ce qui tient ; l'excédent retourne au pool
-      var flat = [];
-      planDays.slice(nb).forEach(function(day){ flat = flat.concat(day); });
-      planDays = planDays.slice(0, nb);
-      while (planDays.length < nb) planDays.push([]);
-    }
-    var ds = planDates().ds;
-    daysEl.innerHTML = '';
-    planDays.forEach(function(day, k){
-      var card = document.createElement('div');
-      card.className = 'day-card';
-      card.style.borderLeft = '4px solid ' + DAY_COLORS[k % DAY_COLORS.length];
-      card.innerHTML = '<div class="day-card-head"><span class="day-card-date">' +
-        fmtDayLabel(ds, k) + '</span><span class="day-card-time" data-day="' + k + '"></span></div>';
-      var ul = document.createElement('ul');
-      ul.className = 'day-card-steps';
-      ul.dataset.planDay = k;
-      ul.innerHTML = day.map(planStepHtml).join('');
-      card.appendChild(ul);
-      daysEl.appendChild(card);
-    });
-    var pool = planPool();
-    poolWrap.hidden = false;
-    poolEl.innerHTML = pool.map(planStepHtml).join('');
-    if (window.Sortable) {
-      daysEl.querySelectorAll('.day-card-steps').forEach(function(ul){ planSortable(ul); });
-      planSortable(poolEl);
-    }
-    planUpdateTimes();
-  }
-  function planSortable(ul) {
-    if (ul._sortable) { ul._sortable.destroy(); }
-    ul._sortable = new Sortable(ul, {
-      group: 'planning', animation: 150,
-      onEnd: function(){ planReadDom(); planScheduleSave(); planUpdateTimes(); planRefreshPinDays(); }
-    });
-  }
-  function planReadDom() {
-    planDays = Array.from(document.querySelectorAll('#planning-days .day-card-steps')).map(function(ul){
-      return Array.from(ul.querySelectorAll('.day-step')).map(function(li){ return Number(li.dataset.itemId); });
-    });
-  }
-  async function planUpdateTimes() {
-    var seq = ++planTimesSeq;
-    for (var k = 0; k < planDays.length; k++) {
-      var el = document.querySelector('#planning-days .day-card-time[data-day="' + k + '"]');
-      if (!el) continue;
-      // Trajet du jour : depuis la dernière étape de la veille, puis les étapes du jour
-      var coords = [];
-      for (var p = k - 1; p >= 0; p--) {
-        if (planDays[p].length) { coords.push(planDays[p][planDays[p].length - 1]); break; }
-      }
-      coords = coords.concat(planDays[k]);
-      if (coords.length < 2) { el.textContent = planDays[k].length ? 'sur place' : ''; continue; }
-      el.textContent = '…';
-      var qs = coords.map(function(id){
-        var g = routePins[id] ? routePins[id].data : null;
-        return g ? g.lat.toFixed(6) + ',' + g.lng.toFixed(6) : null;
-      }).filter(Boolean).join(';');
-      try {
-        var d = await fetch('/geo/route?coords=' + encodeURIComponent(qs) + '&profile=car')
-          .then(function(r){ return r.json(); });
-        if (seq !== planTimesSeq) return;
-        el.textContent = d.ok ? '≈ ' + fmtDur(d.duration_s) + ' 🚗' : '';
-      } catch(e) { el.textContent = ''; }
-    }
-  }
+
+  var planSaveTimer2 = null;
   function planScheduleSave() {
-    clearTimeout(planSaveTimer);
+    clearTimeout(planSaveTimer2);
     var st = document.getElementById('planning-save');
     st.textContent = 'Enregistrement…';
-    planSaveTimer = setTimeout(async function(){
+    planSaveTimer2 = setTimeout(async function(){
       var d = planDates();
       try {
         var r = await fetch("{{ url_for('carnet_planning_save', cid_carnet=carnet.id) }}", {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
-          body: JSON.stringify({ _csrf: CSRF, date_start: d.ds, date_end: d.de, days: planDays })
+          body: JSON.stringify({ date_start: d.ds, date_end: d.de, days: planDays })
         });
         var j = await r.json();
         st.textContent = j.ok ? '✓ Planning enregistré' : (j.error || 'Erreur');
@@ -712,6 +632,172 @@
       } catch(e) { st.textContent = 'Réseau'; }
     }, 700);
   }
+
+  var selectedDay = null;
+  function selectDay(k, fromMap) {
+    selectedDay = (selectedDay === k && !fromMap) ? null : k;
+    renderPearlRow();
+    renderPearlDetail();
+    highlightDayRoute(selectedDay);
+  }
+  window.selectDay = selectDay;
+
+  function renderPearlRow() {
+    var row = document.getElementById('pearl-row');
+    var nb = planNbDays();
+    row.innerHTML = '';
+    if (!nb) return;
+    for (var k = 0; k < nb; k++) {
+      (function(k){
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'pearl' + (selectedDay === k ? ' is-active' : '');
+        b.style.setProperty('--pearl', DAY_COLORS[k % DAY_COLORS.length]);
+        var parts = fmtPearlLabel(k).split('|');
+        b.innerHTML = '<span class="pearl-dow">' + (parts[0] || '') + '</span>' +
+                      '<span class="pearl-num">' + (parts[1] || (k+1)) + '</span>' +
+                      ((planDays[k] && planDays[k].length) ? '<span class="pearl-count">' + planDays[k].length + '</span>' : '');
+        b.addEventListener('click', function(){ selectDay(k); });
+        row.appendChild(b);
+      })(k);
+    }
+  }
+
+  function renderPearlDetail() {
+    var det = document.getElementById('pearl-detail');
+    if (selectedDay == null || !planNbDays()) { det.hidden = true; return; }
+    det.hidden = false;
+    var k = selectedDay;
+    det.style.setProperty('--pearl', DAY_COLORS[k % DAY_COLORS.length]);
+    var parts = fmtPearlLabel(k).split('|');
+    var d = planDates();
+    var full = '';
+    try {
+      var dt = new Date(d.ds + 'T12:00:00'); dt.setDate(dt.getDate() + k);
+      full = dt.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+    } catch(e) { full = 'Jour ' + (k+1); }
+    document.getElementById('pd-date').textContent = full;
+    document.getElementById('pd-time').textContent = dayRoutes[k] && dayRoutes[k].duration_s
+      ? '≈ ' + fmtDur(dayRoutes[k].duration_s) + ' 🚗' : '';
+    var ul = document.getElementById('pd-steps');
+    ul.innerHTML = (planDays[k] || []).map(function(id){ return planStepHtml(id, true); }).join('');
+    document.getElementById('pd-empty').hidden = !!(planDays[k] && planDays[k].length);
+    if (window.Sortable) {
+      if (ul._sortable) ul._sortable.destroy();
+      ul._sortable = new Sortable(ul, {
+        group: 'planning', animation: 150,
+        onEnd: function(){
+          planDays[k] = Array.from(ul.querySelectorAll('.day-step')).map(function(li){ return Number(li.dataset.itemId); });
+          syncPoolAfterDrag();
+          renderPlanning(); planScheduleSave(); planRefreshPinDays();
+        }
+      });
+    }
+  }
+
+  function syncPoolAfterDrag() {
+    // un drag du pool vers le jour ouvert a pu retirer un élément du pool :
+    // recalcul intégral depuis le DOM du jour + purge des doublons
+    var k = selectedDay;
+    if (k == null) return;
+    var ids = planDays[k];
+    planDays = planDays.map(function(day, i){
+      if (i === k) return day;
+      return day.filter(function(id){ return ids.indexOf(id) < 0; });
+    });
+  }
+
+  function renderPlanning() {
+    var nb = planNbDays();
+    var hint = document.getElementById('planning-hint');
+    var poolWrap = document.getElementById('planning-pool-wrap');
+    hint.hidden = !!nb;
+    if (!nb) {
+      document.getElementById('pearl-row').innerHTML = '';
+      document.getElementById('pearl-detail').hidden = true;
+      poolWrap.hidden = true;
+      clearDayRoutes();
+      return;
+    }
+    if (planDays.length !== nb) {
+      planDays = planDays.slice(0, nb);
+      while (planDays.length < nb) planDays.push([]);
+    }
+    if (selectedDay != null && selectedDay >= nb) selectedDay = null;
+    renderPearlRow();
+    renderPearlDetail();
+    var poolEl = document.getElementById('planning-pool');
+    var pool = planPool();
+    poolWrap.hidden = pool.length === 0;
+    poolEl.innerHTML = pool.map(function(id){ return planStepHtml(id, false); }).join('');
+    if (window.Sortable) {
+      if (poolEl._sortable) poolEl._sortable.destroy();
+      poolEl._sortable = new Sortable(poolEl, { group: 'planning', animation: 150 });
+    }
+    updateDayRoutes();
+  }
+
+  /* ── Les trajets prévus, dessinés en permanence, couleur du jour ── */
+  var dayRoutes = {};   // k -> {sig, line, duration_s}
+  function clearDayRoutes() {
+    Object.keys(dayRoutes).forEach(function(k){
+      if (dayRoutes[k].line) map.removeLayer(dayRoutes[k].line);
+    });
+    dayRoutes = {};
+  }
+  async function updateDayRoutes() {
+    if (!map) return;
+    var nb = planNbDays();
+    // purge des jours disparus
+    Object.keys(dayRoutes).forEach(function(k){
+      if (k >= nb || !planDays[k] || planDays[k].length < 2) {
+        if (dayRoutes[k] && dayRoutes[k].line) map.removeLayer(dayRoutes[k].line);
+        delete dayRoutes[k];
+      }
+    });
+    for (var k = 0; k < nb; k++) {
+      var ids = (planDays[k] || []).filter(function(id){ return routePins[id]; });
+      if (ids.length < 2) continue;
+      var sig = ids.join(';') + ':' + routeProfile;
+      if (dayRoutes[k] && dayRoutes[k].sig === sig) continue;
+      var coords = ids.map(function(id){
+        var g = routePins[id].data;
+        return g.lat.toFixed(6) + ',' + g.lng.toFixed(6);
+      }).join(';');
+      try {
+        var d = await fetch('/geo/route?coords=' + encodeURIComponent(coords) + '&profile=car')
+          .then(function(r){ return r.json(); });
+        if (dayRoutes[k] && dayRoutes[k].line) map.removeLayer(dayRoutes[k].line);
+        if (!d.ok || !d.geometry) { dayRoutes[k] = { sig: sig, line: null, duration_s: null }; continue; }
+        var color = DAY_COLORS[k % DAY_COLORS.length];
+        var line = L.polyline(d.geometry, { color: color, weight: 4, opacity: 0.7 }).addTo(map);
+        (function(k){
+          line.on('click', function(e){
+            L.DomEvent.stopPropagation(e);
+            selectDay(k, true);
+            var el = document.getElementById('planning-card');
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          });
+        })(k);
+        dayRoutes[k] = { sig: sig, line: line, duration_s: d.duration_s };
+        if (selectedDay != null) highlightDayRoute(selectedDay);
+        if (selectedDay === k) renderPearlDetail();
+      } catch(e) { console.warn('trajet jour', k, e); }
+    }
+  }
+  function highlightDayRoute(k) {
+    Object.keys(dayRoutes).forEach(function(i){
+      var r = dayRoutes[i];
+      if (!r.line) return;
+      if (k == null) r.line.setStyle({ opacity: 0.7, weight: 4 });
+      else if (Number(i) === k) r.line.setStyle({ opacity: 0.95, weight: 6 });
+      else r.line.setStyle({ opacity: 0.18, weight: 3 });
+    });
+    if (k != null && dayRoutes[k] && dayRoutes[k].line) {
+      map.fitBounds(dayRoutes[k].line.getBounds(), { padding: [40, 40], maxZoom: 12 });
+    }
+  }
+
   ['plan-ds', 'plan-de'].forEach(function(id){
     document.getElementById(id).addEventListener('change', function(){
       renderPlanning(); planScheduleSave();
@@ -720,7 +806,6 @@
 
   /* Basculement : le planning devient un carnet de voyage */
   function goVoyage() {
-    planReadDom();
     var ordered = [].concat.apply([], planDays);
     if (!ordered.length) {
       // pas de planning : on emmène toutes les épingles dans l'ordre actuel
@@ -846,6 +931,8 @@
   if (map) map.on('zoomend', updatePinLabels);
 
   if (map) GEO_ITEMS.forEach(addPinToMap);
+  // v5.0 : les épingles étant posées, colorer par jour et dessiner les trajets prévus
+  if (map) { planRefreshPinDays(); updateDayRoutes(); }
   if (map && GEO_ITEMS.length) {
     map.fitBounds(GEO_ITEMS.map(function(g){ return [g.lat, g.lng]; }), { padding: [30, 30], maxZoom: 12 });
   } else if (map) {
@@ -952,177 +1039,70 @@
   });
   document.getElementById('btn-route-cancel').addEventListener('click', function(){ setRouteMode(false); });
 
-  /* ─ Esquisse de journées : répartition auto par temps de route, ajustable ─ */
-  var dayGroups = [];   // [[itemId,...], ...] — un tableau par jour
+  /* ══════════ v5.0 : LE TRAJET S'ATTRIBUE À UN JOUR ══════════
+     Valider un tracé ne crée plus de carnet : il devient LE trajet du jour
+     choisi. Le planning-perles et la carte se mettent à jour ensemble. */
 
-  function splitByTime(order, legs, nbDays) {
-    // Répartition contiguë équilibrée : leg[i] relie order[i] -> order[i+1],
-    // attribué au jour de l'étape d'arrivée (on roule le matin).
-    if (nbDays <= 1 || order.length <= 1) return [order.slice()];
-    nbDays = Math.min(nbDays, order.length);
-    var total = (legs || []).reduce(function(a, l){ return a + (l.duration_s || 0); }, 0);
-    if (!total) {
-      // Pas de temps connus : répartition égale en nombre d'étapes
-      var per = Math.ceil(order.length / nbDays), gs = [];
-      for (var i = 0; i < order.length; i += per) gs.push(order.slice(i, i + per));
-      return gs;
-    }
-    var groups = [], cur = [order[0]], acc = 0;
-    for (var i = 1; i < order.length; i++) {
-      var legT = legs[i-1] ? (legs[i-1].duration_s || 0) : 0;
-      var remainingSteps = order.length - i;
-      var remainingDays = nbDays - groups.length - 1;
-      var target = total * (groups.length + 1) / nbDays;
-      if (groups.length < nbDays - 1 &&
-          (acc + legT > target || remainingSteps <= remainingDays)) {
-        groups.push(cur); cur = [];
-      }
-      acc += legT;
-      cur.push(order[i]);
-    }
-    groups.push(cur);
-    return groups;
-  }
-
-  function dayDriveTime(groups, k, legs) {
-    // Temps du jour k = tous les tronçons dont l'étape d'ARRIVÉE est dans ce jour
-    if (!legs || !legs.length) return null;
-    var flat = [].concat.apply([], groups);
-    var start = 0;
-    for (var i = 0; i < k; i++) start += groups[i].length;
-    var t = 0;
-    for (var j = 0; j < groups[k].length; j++) {
-      var idx = start + j;             // position globale de l'étape
-      if (idx === 0) continue;         // la 1re étape du voyage n'arrive de nulle part
-      t += legs[idx-1] ? (legs[idx-1].duration_s || 0) : 0;
-    }
-    return t;
-  }
-
-  function fmtDayLabel(dateStart, k) {
+  function fmtPearlLabel(k) {
+    var d = planDates();
+    if (!d.ds) return 'J' + (k + 1);
     try {
-      var d = new Date(dateStart + 'T12:00:00');
-      d.setDate(d.getDate() + k);
-      return d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
-    } catch(e) { return 'Jour ' + (k+1); }
-  }
-
-  function currentOrder() {
-    return dayGroups.length ? [].concat.apply([], dayGroups) : routeOrder.slice();
-  }
-
-  function syncFormIds() {
-    var idsDiv = document.getElementById('route-form-ids');
-    idsDiv.innerHTML = '';
-    currentOrder().forEach(function(id){
-      var inp = document.createElement('input');
-      inp.type = 'hidden'; inp.name = 'item_ids'; inp.value = id;
-      idsDiv.appendChild(inp);
-    });
-  }
-
-  function buildPlanning() {
-    var ds = document.querySelector('#route-form input[name="date_start"]').value;
-    var de = document.querySelector('#route-form input[name="date_end"]').value;
-    var daysEl = document.getElementById('route-days');
-    var stepsEl = document.getElementById('route-steps');
-    var totalEl = document.getElementById('route-total');
-    var hintEl = document.getElementById('route-days-hint');
-    var legs = lastRoute ? lastRoute.legs : null;
-    totalEl.textContent = lastRoute
-      ? '≈ ' + fmtDur(lastRoute.duration_s) + (routeProfile === 'car' ? ' de route' : ' de marche') + ' au total'
-      : (routeOrder.length >= 2 ? 'Temps de trajet en cours de calcul…' : '');
-    // Sans dates : simple liste ordonnée
-    if (!ds || !de || de < ds) {
-      dayGroups = [];
-      daysEl.innerHTML = ''; hintEl.hidden = true; stepsEl.hidden = false;
-      stepsEl.innerHTML = '';
-      routeOrder.forEach(function(id){
-        var li = document.createElement('li');
-        li.textContent = routePins[id].data.title;
-        stepsEl.appendChild(li);
-      });
-      syncFormIds();
-      return;
-    }
-    // Avec dates : cartes par jour, glissables
-    var nbDays = Math.min(21, Math.round((new Date(de) - new Date(ds)) / 86400000) + 1);
-    dayGroups = splitByTime(currentOrder(), legs, nbDays);
-    stepsEl.hidden = true; hintEl.hidden = false;
-    daysEl.innerHTML = '';
-    dayGroups.forEach(function(g, k){
-      var card = document.createElement('div');
-      card.className = 'day-card';
-      var t = dayDriveTime(dayGroups, k, legs);
-      card.innerHTML = '<div class="day-card-head"><span class="day-card-date">' +
-        fmtDayLabel(ds, k) + '</span><span class="day-card-time">' +
-        (t != null && t > 0 ? '≈ ' + fmtDur(t) + (routeProfile === 'car' ? ' 🚗' : ' 🚶') : (t === 0 ? 'sur place' : '')) +
-        '</span></div>';
-      var ul = document.createElement('ul');
-      ul.className = 'day-card-steps';
-      ul.dataset.day = k;
-      g.forEach(function(id){
-        var li = document.createElement('li');
-        li.className = 'day-step';
-        li.dataset.itemId = id;
-        li.textContent = routePins[id].data.title;
-        ul.appendChild(li);
-      });
-      card.appendChild(ul);
-      daysEl.appendChild(card);
-    });
-    syncFormIds();
-    // Glisser une étape d'un jour à l'autre
-    if (window.Sortable) {
-      daysEl.querySelectorAll('.day-card-steps').forEach(function(ul){
-        new Sortable(ul, {
-          group: 'jours', animation: 150,
-          onEnd: function(){
-            dayGroups = Array.from(daysEl.querySelectorAll('.day-card-steps')).map(function(u){
-              return Array.from(u.querySelectorAll('.day-step')).map(function(li){
-                return Number(li.dataset.itemId);
-              });
-            }).filter(function(g){ return true; });
-            var newOrder = currentOrder();
-            var changed = JSON.stringify(newOrder) !== JSON.stringify(routeOrder);
-            syncFormIds();
-            if (changed) {
-              routeOrder = newOrder;
-              refreshPinIcons();          // renumérote + re-calcule l'itinéraire
-            } else {
-              rerenderDayTimes();
-            }
-          }
-        });
-      });
-    }
-  }
-  function rerenderDayTimes() {
-    var legs = lastRoute ? lastRoute.legs : null;
-    document.querySelectorAll('#route-days .day-card').forEach(function(card, k){
-      var t = dayDriveTime(dayGroups, k, legs);
-      var el = card.querySelector('.day-card-time');
-      if (el) el.textContent = t != null && t > 0
-        ? '≈ ' + fmtDur(t) + (routeProfile === 'car' ? ' 🚗' : ' 🚶')
-        : (t === 0 ? 'sur place' : '');
-    });
+      var dt = new Date(d.ds + 'T12:00:00');
+      dt.setDate(dt.getDate() + k);
+      return dt.toLocaleDateString('fr-FR', { weekday: 'short' }).replace('.', '') +
+        '|' + dt.getDate();
+    } catch(e) { return 'J' + (k + 1); }
   }
 
   document.getElementById('btn-route-validate').addEventListener('click', function(){
     if (!routeOrder.length) return;
-    dayGroups = [];
-    document.getElementById('route-modal-count').textContent = routeOrder.length;
-    buildPlanning();
+    var nb = planNbDays();
+    var sub = document.getElementById('route-modal-sub');
+    var wrap = document.getElementById('assign-pearls');
+    wrap.innerHTML = '';
+    if (!nb) {
+      sub.textContent = 'Pose d\'abord les dates du séjour dans « Le planning » — les jours apparaîtront ici.';
+    } else {
+      sub.textContent = routeOrder.length + ' étape(s), dans l\'ordre tracé' +
+        (lastRoute ? ' · ≈ ' + fmtDur(lastRoute.duration_s) + (routeProfile === 'car' ? ' 🚗' : ' 🚶') : '') + '.';
+      for (var k = 0; k < nb; k++) {
+        (function(k){
+          var b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'pearl';
+          b.style.setProperty('--pearl', DAY_COLORS[k % DAY_COLORS.length]);
+          var parts = fmtPearlLabel(k).split('|');
+          b.innerHTML = '<span class="pearl-dow">' + (parts[0] || '') + '</span>' +
+                        '<span class="pearl-num">' + (parts[1] || (k+1)) + '</span>';
+          if (planDays[k] && planDays[k].length) {
+            b.innerHTML += '<span class="pearl-count">' + planDays[k].length + '</span>';
+          }
+          b.addEventListener('click', function(){ assignRouteToDay(k); });
+          wrap.appendChild(b);
+        })(k);
+      }
+    }
     document.getElementById('route-modal').hidden = false;
     document.body.style.overflow = 'hidden';
   });
-  ['date_start', 'date_end'].forEach(function(n){
-    document.querySelector('#route-form input[name="' + n + '"]')
-      .addEventListener('change', function(){ dayGroups = []; buildPlanning(); });
-  });
-  document.getElementById('route-form').addEventListener('submit', function(){
-    syncFormIds();   // l'ordre final = concaténation des jours ajustés
-  });
+
+  function assignRouteToDay(k) {
+    // Le tracé devient LE trajet du jour k : il remplace l'existant,
+    // les épingles du tracé quittent leurs autres jours.
+    var ids = routeOrder.slice();
+    planDays = planDays.map(function(day){
+      return day.filter(function(id){ return ids.indexOf(id) < 0; });
+    });
+    planDays[k] = ids;
+    closeRouteModal();
+    setRouteMode(false);
+    renderPlanning();
+    planScheduleSave();
+    planRefreshPinDays();
+    selectDay(k);
+    setSaved('Trajet attribué au ' + fmtPearlLabel(k).replace('|', ' '));
+  }
+
   function closeRouteModal() {
     document.getElementById('route-modal').hidden = true;
     document.body.style.overflow = '';

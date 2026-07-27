@@ -3849,3 +3849,96 @@ body.photo-roll-open .album-footer { opacity: 0; pointer-events: none; }
   overflow: hidden; text-overflow: ellipsis;
   transition: opacity .2s;
 }
+
+/* ════════════════════════════════════════════════════════════════════
+   v5.0 — le planning-perles : un fil de journées, ludique et épuré
+   (les trajets s'attribuent aux jours, la carte les dessine)
+   ════════════════════════════════════════════════════════════════════ */
+
+.pearl-row {
+  display: flex; gap: 12px; align-items: flex-start;
+  overflow-x: auto; padding: 14px 4px 10px;
+  scrollbar-width: none;
+  position: relative;
+}
+.pearl-row::-webkit-scrollbar { display: none; }
+.pearl {
+  position: relative;
+  flex-shrink: 0;
+  width: 58px; height: 58px;
+  border-radius: 50%;
+  border: 2.5px solid var(--pearl, var(--accent));
+  background: color-mix(in srgb, var(--pearl, var(--accent)) 10%, #fff);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: transform .18s var(--ease-out), box-shadow .18s;
+}
+.pearl:hover { transform: translateY(-2px); }
+.pearl.is-active {
+  transform: scale(1.12) translateY(-2px);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--pearl) 45%, transparent);
+  background: var(--pearl);
+}
+.pearl.is-active .pearl-dow, .pearl.is-active .pearl-num { color: #fff; }
+.pearl-dow {
+  font-family: var(--font-ui); font-size: 9.5px;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--ink-muted); line-height: 1;
+}
+.pearl-num {
+  font-family: var(--font-display); font-style: italic;
+  font-size: 21px; color: var(--ink-primary); line-height: 1.1;
+}
+.pearl-count {
+  position: absolute; top: -4px; right: -4px;
+  background: var(--pearl, var(--accent));
+  color: #fff;
+  font-family: var(--font-ui); font-size: 10px; font-weight: 600;
+  width: 19px; height: 19px; line-height: 19px;
+  border-radius: 50%; text-align: center;
+  border: 2px solid var(--bg-card);
+}
+
+/* Le jour déplié : carte douce teintée de sa couleur */
+.pearl-detail {
+  margin-top: 6px;
+  background: color-mix(in srgb, var(--pearl, var(--accent)) 6%, var(--bg-card));
+  border-left: 4px solid var(--pearl, var(--accent));
+  border-radius: 12px;
+  padding: 12px 14px;
+  animation: pearl-open .2s var(--ease-out);
+}
+@keyframes pearl-open { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.pearl-detail-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 8px;
+}
+.pearl-detail-date {
+  font-family: var(--font-display); font-style: italic;
+  font-size: 16px; color: var(--ink-primary);
+  text-transform: capitalize;
+}
+.pearl-detail-time {
+  font-size: 12.5px; color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+.pearl-detail-empty {
+  margin: 4px 0;
+  font-family: var(--font-display); font-style: italic;
+  font-size: 12.5px; color: var(--ink-whisper);
+}
+.day-step { display: flex; align-items: center; gap: 6px; }
+.day-step-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.day-step-out {
+  border: none; background: transparent; cursor: pointer;
+  color: var(--ink-whisper); font-size: 12px;
+  padding: 6px 8px; border-radius: 6px;
+}
+.day-step-out:hover { color: var(--color-danger); background: rgba(168,80,61,0.08); }
+
+/* Modale d'attribution : les perles en grille */
+.assign-pearls {
+  display: flex; gap: 12px; flex-wrap: wrap;
+  padding: 6px 0 2px;
+}
