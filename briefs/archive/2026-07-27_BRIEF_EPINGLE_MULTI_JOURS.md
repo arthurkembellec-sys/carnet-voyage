@@ -1,5 +1,22 @@
 # BRIEF — Une épingle doit pouvoir appartenir à plusieurs jours (multi-trajets)
 
+> ✅ **Exécuté le 2026-07-27** (v5.1). Tous les points livrés.
+> Notes d'exécution :
+> - §4.4 : l'album lit `trajet_steps` et chaque occurrence porte SON jour
+>   (`planned_day` par occurrence) — le JS `album.html` fonctionne tel quel, non touché.
+>   `etapes_all` (compteur + ancres de notes) reste dédoublonné : une note ancrée
+>   sur une étape partagée pointe sur son PREMIER jour.
+> - §4.5 : déduplication faite côté serveur ET côté client (ceinture + bretelles).
+> - Mode COPIE de la transformation : l'`INSERT..SELECT` en bloc est devenu une
+>   boucle, seul moyen de récupérer l'id de chaque copie pour recâbler ses jours.
+> - **Hors brief, trouvé en route** : `carnet_transformer` ne vérifiait pas que les
+>   `item_ids` reçus appartenaient au carnet source — un POST forgé copiait (et en
+>   mode déplacement VOLAIT) un item d'un autre espace. Fermé ici (D1/R1), test de
+>   non-fuite ajouté.
+> - Non fait : §5.6 (backfill vérifié sur une copie de la DB PROD). La seule sauvegarde
+>   prod locale date du 2026-05-16, antérieure à `planned_day` — le backfill est donc
+>   testé sur données synthétiques, pas sur le vrai volume. À revérifier après déploiement.
+
 Priorité : haute · Périmètre : rêveries (carte + planning-perles) et retombées voyage/album
 Rédigé par Fable (session v5.0, 2026-07-26) pour exécution par Claude Opus.
 Lire d'abord `CLAUDE.md` (workflow briefs, vérifs bash, confirmation avant commit/push).

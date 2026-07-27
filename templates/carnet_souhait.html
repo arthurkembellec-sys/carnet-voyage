@@ -354,9 +354,13 @@
     {% for g in geo_items %}
     { itemId: {{ g.item_id }}, lat: {{ g.lat }}, lng: {{ g.lng }}, kind: "{{ g.kind }}",
       pin_kind: {{ (g.pin_kind or '')|tojson }}, planned_day: {{ g.planned_day if g.planned_day is not none else 'null' }},
+      planned_days: {{ (g.planned_days or [])|tojson }},
       title: {{ (g.title or '')|tojson }}{% if g.thumb %}, thumb: "{{ g.thumb }}"{% endif %} },
     {% endfor %}
   ];
+  // v5.1 : le trajet par jour vient de trajet_steps (une épingle peut tenir
+  // plusieurs jours), plus de planned_day qui n'en portait qu'un.
+  var DAYS_STEPS = {{ (days_steps or [])|tojson }};
 
   if (!window.L) {
     document.getElementById('reverie-map').innerHTML =
@@ -381,16 +385,19 @@
     for (var i = 0; i < PIN_KINDS.length; i++) if (PIN_KINDS[i][0] === kind) return PIN_KINDS[i][1];
     return '';
   }
-  function pinIcon(num, kind, plannedDay) {
+  function pinIcon(num, kind, plannedDay, multi) {
     if (num) {
       return L.divIcon({ className: 'pin-icon pin-icon-num', html: '<span>' + num + '</span>',
                          iconSize: [26, 26], iconAnchor: [13, 24] });
     }
     // Couleur du JOUR planifié prioritaire (le planning se lit sur la carte),
     // sinon couleur du type d'épingle ; l'emoji du type reste dedans.
+    // v5.1 : une épingle partagée entre plusieurs jours prend la couleur du
+    // PREMIER, plus un liseré pointillé (pin-multi) pour se signaler.
     var cls = 'pin-icon';
     if (kind) cls += ' pin-icon-' + kind;
     if (plannedDay != null && plannedDay >= 0) cls += ' pin-day-' + (plannedDay % DAY_COLORS.length);
+    if (multi) cls += ' pin-multi';
     var em = pinEmoji(kind);
     return L.divIcon({ className: cls,
                        html: em ? '<span class="pk">' + em + '</span>' : '',
@@ -411,7 +418,9 @@
   function refreshPinIcons() {
     Object.keys(routePins).forEach(function(id){
       var idx = routeOrder.indexOf(Number(id));
-      routePins[id].marker.setIcon(pinIcon(idx >= 0 ? idx + 1 : null, routePins[id].data.pin_kind, routePins[id].data.planned_day));
+      var d = routePins[id].data;
+      routePins[id].marker.setIcon(pinIcon(idx >= 0 ? idx + 1 : null, d.pin_kind,
+        d.planned_day, (d.planned_days || []).length > 1));
     });
     var line = routeOrder.map(function(id){ return [routePins[id].data.lat, routePins[id].data.lng]; });
     if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
@@ -575,9 +584,13 @@
     var nb = planNbDays();
     planDays = [];
     for (var k = 0; k < nb; k++) planDays.push([]);
-    GEO_ITEMS.filter(function(g){ return g.kind === 'location'; }).forEach(function(g){
-      var d = g.planned_day;
-      if (d != null && d >= 0 && d < nb) planDays[d].push(g.itemId);
+    // v5.1 : lecture directe des jours du serveur — un même itemId peut
+    // apparaître dans plusieurs jours (une seule fois par jour).
+    DAYS_STEPS.forEach(function(day, k){
+      if (k >= nb) return;
+      (day || []).forEach(function(id){
+        if (planDays[k].indexOf(id) < 0) planDays[k].push(id);
+      });
     });
   }
   function planPool() {
@@ -596,20 +609,36 @@
       '</li>';
   }
   window.stepToPool = function(id){
-    planDays = planDays.map(function(day){ return day.filter(function(x){ return x !== id; }); });
+    // v5.1 : ne retire QUE du jour ouvert — l'épingle peut tenir un autre jour
+    // (B ferme le jour 1 et ouvre le jour 2 : le sortir du 2 le laisse au 1).
+    if (selectedDay != null && planDays[selectedDay]) {
+      planDays[selectedDay] = planDays[selectedDay].filter(function(x){ return x !== id; });
+    } else {
+      planDays = planDays.map(function(day){ return day.filter(function(x){ return x !== id; }); });
+    }
     renderPlanning(); planScheduleSave(); planRefreshPinDays();
   };
 
   function planRefreshPinDays() {
-    // couleur de jour des épingles = état courant du planning
-    var dayOf = {};
-    planDays.forEach(function(day, k){ day.forEach(function(id){ dayOf[id] = k; }); });
+    // couleur de jour des épingles = état courant du planning ; v5.1 : une
+    // épingle partagée entre plusieurs jours prend la couleur du PREMIER et
+    // porte un liseré, ses jours sont listés dans son popup.
+    var daysOf = {};
+    planDays.forEach(function(day, k){
+      day.forEach(function(id){
+        if (!daysOf[id]) daysOf[id] = [];
+        if (daysOf[id].indexOf(k) < 0) daysOf[id].push(k);
+      });
+    });
     Object.keys(routePins).forEach(function(id){
       var p = routePins[id];
       if (p.data.kind !== 'location') return;
-      p.data.planned_day = (id in dayOf) ? dayOf[Number(id)] : (dayOf[id] != null ? dayOf[id] : null);
-      if (p.data.planned_day === undefined) p.data.planned_day = null;
-      if (!routeMode) p.marker.setIcon(pinIcon(null, p.data.pin_kind, p.data.planned_day));
+      var ds = daysOf[id] || [];
+      p.data.planned_days = ds;
+      p.data.planned_day = ds.length ? ds[0] : null;
+      if (!routeMode) p.marker.setIcon(pinIcon(null, p.data.pin_kind, p.data.planned_day, ds.length > 1));
+      // popup non rouvert de force : on ne réécrit pas sous les doigts de l'user
+      if (!p.marker.isPopupOpen()) p.marker.setPopupContent(pinPopupHtml(p.data));
     });
   }
 
@@ -697,13 +726,16 @@
 
   function syncPoolAfterDrag() {
     // un drag du pool vers le jour ouvert a pu retirer un élément du pool :
-    // recalcul intégral depuis le DOM du jour + purge des doublons
+    // recalcul intégral depuis le DOM du jour.
+    // v5.1 : on ne purge plus l'épingle des AUTRES jours — on ne garantit
+    // que son unicité DANS le jour ouvert.
     var k = selectedDay;
     if (k == null) return;
-    var ids = planDays[k];
-    planDays = planDays.map(function(day, i){
-      if (i === k) return day;
-      return day.filter(function(id){ return ids.indexOf(id) < 0; });
+    var vus = {};
+    planDays[k] = (planDays[k] || []).filter(function(id){
+      if (vus[id]) return false;
+      vus[id] = 1;
+      return true;
     });
   }
 
@@ -806,7 +838,12 @@
 
   /* Basculement : le planning devient un carnet de voyage */
   function goVoyage() {
-    var ordered = [].concat.apply([], planDays);
+    // v5.1 : une épingle partagée entre deux jours ne part qu'UNE fois —
+    // on garde sa première occurrence (le serveur dédoublonne aussi).
+    var ordered = [], vusV = {};
+    [].concat.apply([], planDays).forEach(function(id){
+      if (!vusV[id]) { vusV[id] = 1; ordered.push(id); }
+    });
     if (!ordered.length) {
       // pas de planning : on emmène toutes les épingles dans l'ordre actuel
       ordered = GEO_ITEMS.filter(function(g){ return g.kind === 'location'; })
@@ -847,19 +884,20 @@
     if (i >= 0) { routeOrder.splice(i, 1); refreshPinIcons(); }
   }
 
-  function addPinToMap(g) {
-    var m = L.marker([g.lat, g.lng], {
-      icon: pinIcon(null, g.pin_kind, g.planned_day),
-      draggable: g.kind === 'location',
-    }).addTo(map);
-    // v4.7 : nom apparent sous l'épingle — v4.9.1 : texte propre (sans URL),
-    // et visible seulement quand le zoom laisse la place (divulgation progressive)
-    var raw = (g.title || '').replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim();
-    var label = raw.slice(0, 22) + (raw.length > 22 ? '…' : '');
-    if (label) m.bindTooltip(label, { permanent: true, direction: 'bottom',
-      className: 'pin-label', offset: [0, 6], opacity: 1 });
+  // v5.1 : les jours d'une épingle, listés dans son popup (« Jour 1 · Jour 2 »)
+  function pinDaysHtml(g) {
+    var ds = g.planned_days || [];
+    if (!ds.length) return '';
+    return '<div class="pin-pop-days">' + ds.map(function(k){
+      return '<span class="pin-pop-day pin-day-' + (k % DAY_COLORS.length) + '">Jour ' +
+             (k + 1) + '</span>';
+    }).join('') + '</div>';
+  }
+
+  function pinPopupHtml(g) {
     var html = '<strong>' + (g.title || (g.kind === 'photo' ? 'Photo' : 'Lieu')) + '</strong>';
     if (g.thumb) html = '<img src="' + g.thumb + '" style="max-width:160px;display:block;margin-bottom:6px;border-radius:6px">' + html;
+    html += pinDaysHtml(g);
     // v4.7 : les idées rattachées (liens & co) directement dans le popup
     var kids = PIN_CHILDREN[String(g.itemId)] || [];
     if (kids.length) {
@@ -875,7 +913,21 @@
       html += kindSelectorHtml(g.pin_kind || '', 'pin' + g.itemId) +
         '<button type="button" class="btn btn-secondary btn-sm pin-kind-save" onclick="savePinKind(' + g.itemId + ')">OK</button>';
     }
-    m.bindPopup(html);
+    return html;
+  }
+
+  function addPinToMap(g) {
+    var m = L.marker([g.lat, g.lng], {
+      icon: pinIcon(null, g.pin_kind, g.planned_day, (g.planned_days || []).length > 1),
+      draggable: g.kind === 'location',
+    }).addTo(map);
+    // v4.7 : nom apparent sous l'épingle — v4.9.1 : texte propre (sans URL),
+    // et visible seulement quand le zoom laisse la place (divulgation progressive)
+    var raw = (g.title || '').replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim();
+    var label = raw.slice(0, 22) + (raw.length > 22 ? '…' : '');
+    if (label) m.bindTooltip(label, { permanent: true, direction: 'bottom',
+      className: 'pin-label', offset: [0, 6], opacity: 1 });
+    m.bindPopup(pinPopupHtml(g));
     m.on('click', function(e){
       if (pinLinkItemId && g.kind === 'location') {
         m.closePopup();
@@ -912,7 +964,12 @@
       var d = await fetch('/item/' + itemId + '/pin_kind', { method: 'POST', body: fd }).then(function(r){ return r.json(); });
       if (!d.ok) { setError(d.error || 'Erreur'); return; }
       var p = routePins[itemId];
-      if (p) { p.data.pin_kind = kind; p.marker.setIcon(pinIcon(null, kind, p.data.planned_day)); p.marker.closePopup(); }
+      if (p) {
+        p.data.pin_kind = kind;
+        p.marker.setIcon(pinIcon(null, kind, p.data.planned_day, (p.data.planned_days || []).length > 1));
+        p.marker.closePopup();
+        p.marker.setPopupContent(pinPopupHtml(p.data));
+      }
       setSaved('Type d\'épingle enregistré');
       renderPlanning();
     } catch(e) { setError('Réseau'); }
@@ -1087,11 +1144,13 @@
   });
 
   function assignRouteToDay(k) {
-    // Le tracé devient LE trajet du jour k : il remplace l'existant,
-    // les épingles du tracé quittent leurs autres jours.
-    var ids = routeOrder.slice();
-    planDays = planDays.map(function(day){
-      return day.filter(function(id){ return ids.indexOf(id) < 0; });
+    // Le tracé devient LE trajet du jour k : il remplace l'existant.
+    // v5.1 : il ne retire PLUS les épingles des autres jours — une étape peut
+    // fermer un jour et ouvrir le suivant (la nuit d'étape). Unicité gardée
+    // dans le jour seulement.
+    var ids = [], vus = {};
+    routeOrder.forEach(function(id){
+      if (!vus[id]) { vus[id] = 1; ids.push(id); }
     });
     planDays[k] = ids;
     closeRouteModal();

@@ -483,6 +483,19 @@ def init_db():
             last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (user_id, couple_id)
         )""",
+        # ── v5.1 — une epingle peut appartenir a PLUSIEURS jours ────────
+        # (la nuit d'etape ferme le jour k et ouvre le jour k+1).
+        # carnet_items.planned_day devient une valeur DERIVEE = premier jour
+        # d'apparition, conservee pour la couleur des epingles et la retro-compat.
+        """CREATE TABLE IF NOT EXISTS trajet_steps (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            carnet_id  INTEGER NOT NULL REFERENCES carnets(id) ON DELETE CASCADE,
+            day        INTEGER NOT NULL,
+            position   INTEGER NOT NULL DEFAULT 0,
+            item_id    INTEGER NOT NULL REFERENCES carnet_items(id) ON DELETE CASCADE,
+            UNIQUE(carnet_id, day, item_id)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_trajet_steps ON trajet_steps(carnet_id, day, position)",
     ]
     for sql in migrations:
         try:
@@ -490,6 +503,23 @@ def init_db():
         except Exception:
             pass
     conn.commit()
+
+    # v5.1 — backfill des trajets existants (planned_day -> trajet_steps).
+    # Hors de la boucle ci-dessus : celle-ci avale les exceptions, un echec de
+    # backfill doit se VOIR dans les logs. Idempotent (INSERT OR IGNORE sur la
+    # contrainte UNIQUE), donc rejouable a chaque demarrage sans effet de bord.
+    try:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO trajet_steps (carnet_id, day, position, item_id) "
+            "SELECT carnet_id, planned_day, position, id FROM carnet_items "
+            "WHERE planned_day IS NOT NULL AND planned_day >= 0 AND carnet_id IS NOT NULL"
+        )
+        if cur.rowcount:
+            log.info("v5.1 backfill trajet_steps : %d etape(s) reprises", cur.rowcount)
+        conn.commit()
+    except Exception as e:
+        log.error("v5.1 backfill trajet_steps ECHEC : %s", e)
+
     conn.close()
 
 
@@ -944,6 +974,74 @@ def _next_item_position(carnet_id):
     return r['next'] if r else 0
 
 
+def _trajet_days(carnet_id, nb_days=None):
+    """v5.1 : les jours du trajet, lus dans trajet_steps.
+    Retourne [[item_id, ...], ...] indexe par jour ; une meme epingle peut
+    figurer dans PLUSIEURS jours (la nuit d'etape ferme le jour k et ouvre
+    le jour k+1), mais une seule fois par jour.
+    Repli explicite : si la table ne dit rien de ce carnet (planning fait
+    avant la v5.1 et jamais resauvegarde depuis), on derive de planned_day."""
+    rows = query("SELECT day, item_id FROM trajet_steps WHERE carnet_id=? "
+                 "ORDER BY day ASC, position ASC, id ASC", (carnet_id,))
+    if not rows:
+        rows = query("SELECT planned_day AS day, id AS item_id FROM carnet_items "
+                     "WHERE carnet_id=? AND planned_day IS NOT NULL "
+                     "ORDER BY planned_day ASC, position ASC", (carnet_id,))
+    days = []
+    for r in rows:
+        k = r['day']
+        if k is None or k < 0 or k > 30:
+            continue
+        while len(days) <= k:
+            days.append([])
+        if r['item_id'] not in days[k]:
+            days[k].append(r['item_id'])
+    if nb_days is not None:
+        while len(days) < nb_days:
+            days.append([])
+        days = days[:nb_days]
+    return days
+
+
+def _trajet_save(carnet_id, days):
+    """v5.1 : reecrit le trajet du carnet. days = [[item_id, ...], ...].
+    Un item peut figurer dans plusieurs jours, une seule fois par jour ;
+    seuls les items DU carnet sont acceptes (cloisonnement).
+    planned_day / position restent maintenus comme valeurs DERIVEES
+    (premier jour d'apparition) : couleur des epingles + retro-compat."""
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM trajet_steps WHERE carnet_id=?", (carnet_id,))
+        conn.execute("UPDATE carnet_items SET planned_day=NULL WHERE carnet_id=?",
+                     (carnet_id,))
+        pos = 0
+        vus = set()
+        for k, day in enumerate(days[:31]):
+            vus_jour = set()
+            for p, iid in enumerate(day or []):
+                if not str(iid).isdigit():
+                    continue
+                iid = int(iid)
+                if iid in vus_jour:
+                    continue
+                vus_jour.add(iid)
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO trajet_steps (carnet_id, day, position, item_id) "
+                    "SELECT ?, ?, ?, id FROM carnet_items WHERE id=? AND carnet_id=?",
+                    (carnet_id, k, p, iid, carnet_id)
+                )
+                if not cur.rowcount:
+                    continue          # item d'un autre carnet : ignore
+                if iid not in vus:
+                    vus.add(iid)
+                    conn.execute("UPDATE carnet_items SET planned_day=?, position=? "
+                                 "WHERE id=? AND carnet_id=?", (k, pos, iid, carnet_id))
+                    pos += 1
+        conn.commit()
+    finally:
+        conn.close()
+
+
 @app.route('/carnet/<int:cid_carnet>/souhait')
 @couple_required
 def carnet_souhait_view(cid_carnet):
@@ -969,16 +1067,24 @@ def carnet_souhait_view(cid_carnet):
         "WHERE parent_souhait_id=? AND deleted_at IS NULL ORDER BY created_at DESC",
         (cid_carnet,)
     )
+    # v5.1 : le trajet vit dans trajet_steps — une epingle peut tenir plusieurs jours
+    days_steps = _trajet_days(cid_carnet)
+    days_of = {}
+    for k, day in enumerate(days_steps):
+        for iid in day:
+            days_of.setdefault(iid, []).append(k)
     # Brief 07 : carte des lieux de la reverie (items location + photos avec GPS)
     geo_items = []
     for it in items:
         if it.get('kind') == 'location' and it.get('geo_lat') is not None and it.get('geo_lng') is not None:
+            pdays = days_of.get(it['id']) or []
             geo_items.append({
                 'item_id': it['id'],
                 'lat': it['geo_lat'], 'lng': it['geo_lng'],
                 'kind': 'location',
                 'pin_kind': it.get('pin_kind') or '',
-                'planned_day': it.get('planned_day'),
+                'planned_day': pdays[0] if pdays else None,
+                'planned_days': pdays,
                 'title': it.get('title') or it.get('address') or 'Lieu',
                 'address': it.get('address') or '',
             })
@@ -1005,6 +1111,7 @@ def carnet_souhait_view(cid_carnet):
         voyages=[dict(v) for v in voyages], item_kinds=ITEM_KINDS,
         pin_kinds=PIN_KINDS, children_by_parent=children_by_parent,
         children_slim=children_slim,
+        days_steps=days_steps,
         geo_items=geo_items)
 
 
@@ -1145,6 +1252,9 @@ def carnet_planning_save(cid_carnet):
     """v4.5 : sauvegarde le pre-planning de la reverie.
     JSON : {date_start, date_end, days: [[item_id,...], ...]} —
     days[k] = etapes du jour k dans l'ordre. Les items absents -> planned_day NULL.
+    v5.1 : un meme item_id peut figurer dans PLUSIEURS jours (nuit d'etape) ;
+    le trajet est ecrit dans trajet_steps, planned_day en devient la valeur
+    derivee (premier jour d'apparition).
     Modifiable a volonte jusqu'au basculement en voyage."""
     c = _get_carnet_or_404(cid_carnet)
     # v4.6 : le planning se met a jour aussi sur un VOYAGE (prevu -> reel,
@@ -1159,17 +1269,7 @@ def carnet_planning_save(cid_carnet):
     days = data.get('days') or []
     execute("UPDATE carnets SET date_start=?, date_end=? WHERE id=?",
             (ds, de, cid_carnet))
-    execute("UPDATE carnet_items SET planned_day=NULL WHERE carnet_id=?",
-            (cid_carnet,))
-    pos = 0
-    for k, day in enumerate(days[:31]):
-        for iid in day:
-            if not str(iid).isdigit():
-                continue
-            execute("UPDATE carnet_items SET planned_day=?, position=? "
-                    "WHERE id=? AND carnet_id=?",
-                    (k, pos, int(iid), cid_carnet))
-            pos += 1
+    _trajet_save(cid_carnet, days)
     return jsonify({'ok': True})
 
 
@@ -1206,7 +1306,21 @@ def carnet_transformer(cid_carnet):
         location = (request.form.get('location') or c['location'] or '').strip()
         date_start = (request.form.get('date_start') or '').strip() or None
         date_end = (request.form.get('date_end') or '').strip() or None
-        selected_ids = [int(x) for x in request.form.getlist('item_ids') if str(x).isdigit()]
+        # v5.1 : l'ordre envoye est la concatenation des jours — une epingle
+        # partagee entre deux jours y apparait deux fois. On DEDUPLIQUE en
+        # gardant la premiere occurrence : un item ne se deplace qu'une fois.
+        selected_ids = list(dict.fromkeys(
+            int(x) for x in request.form.getlist('item_ids') if str(x).isdigit()))
+        # CLOISONNEMENT (D1) : on ne transforme QUE des items de CE carnet.
+        # Sans ce filtre, un POST forge avec l'id d'un item d'un autre espace
+        # le copiait — et en mode deplacement, le VOLAIT. Trou pre-existant,
+        # ferme ici parce qu'on touche deja a cette route (2026-07-27).
+        if selected_ids:
+            ph_own = ','.join('?' * len(selected_ids))
+            a_moi = {r['id'] for r in query(
+                f"SELECT id FROM carnet_items WHERE carnet_id=? AND id IN ({ph_own})",
+                tuple([cid_carnet] + selected_ids))}
+            selected_ids = [i for i in selected_ids if i in a_moi]
         duplicate = request.form.get('duplicate') == '1'
 
         # Atomique : transaction
@@ -1222,33 +1336,29 @@ def carnet_transformer(cid_carnet):
             # v4.1 : ordered=1 (parcours trace sur la carte) -> les positions
             # dans le voyage suivent l'ordre de selection des etapes.
             ordered = request.form.get('ordered') == '1'
+            id_map = {}          # v5.1 : item du souhait -> item du voyage (mode copie)
             if selected_ids:
                 placeholders = ','.join('?' * len(selected_ids))
                 if duplicate:
-                    if ordered:
-                        for pos, iid in enumerate(selected_ids):
-                            conn.execute(
-                                "INSERT INTO carnet_items (carnet_id, position, kind, title, "
-                                "body, url, photo_id, address, geo_lat, geo_lng, amount, currency, "
-                                "pin_kind, planned_day, parent_item_id, added_by) "
-                                "SELECT ?, ?, kind, title, body, url, photo_id, address, "
-                                "geo_lat, geo_lng, amount, currency, pin_kind, planned_day, "
-                                "parent_item_id, added_by "
-                                "FROM carnet_items WHERE id=?",
-                                (new_cid, pos, iid)
-                            )
-                    else:
-                        # Copier les items au lieu de les deplacer
-                        conn.execute(
+                    # v5.1 : boucle dans les deux cas (au lieu d'un INSERT..SELECT
+                    # en bloc) pour recuperer l'id de chaque copie — sans quoi les
+                    # trajet_steps ne peuvent pas suivre le voyage.
+                    for pos, iid in enumerate(selected_ids):
+                        if ordered:
+                            sql_pos, params = "?", (new_cid, pos, iid)
+                        else:
+                            sql_pos, params = "position", (new_cid, iid)
+                        cur2 = conn.execute(
                             f"INSERT INTO carnet_items (carnet_id, position, kind, title, "
                             f"body, url, photo_id, address, geo_lat, geo_lng, amount, currency, "
                             f"pin_kind, planned_day, parent_item_id, added_by) "
-                            f"SELECT ?, position, kind, title, body, url, photo_id, address, "
+                            f"SELECT ?, {sql_pos}, kind, title, body, url, photo_id, address, "
                             f"geo_lat, geo_lng, amount, currency, pin_kind, planned_day, "
                             f"parent_item_id, added_by "
-                            f"FROM carnet_items WHERE id IN ({placeholders})",
-                            tuple([new_cid] + selected_ids)
+                            f"FROM carnet_items WHERE id=?",
+                            params
                         )
+                        id_map[iid] = cur2.lastrowid
                 else:
                     # Deplacer : changer carnet_id (le souhait n'a plus l'item)
                     conn.execute(
@@ -1262,6 +1372,31 @@ def carnet_transformer(cid_carnet):
                                 "UPDATE carnet_items SET position=? WHERE id=?",
                                 (pos, iid)
                             )
+                # v5.1 : les jours du trajet suivent le voyage (une etape peut
+                # figurer dans deux jours — c'est voulu, on ne deduplique pas ici).
+                if duplicate:
+                    for src in conn.execute(
+                            "SELECT day, position, item_id FROM trajet_steps WHERE carnet_id=?",
+                            (cid_carnet,)).fetchall():
+                        nid = id_map.get(src['item_id'])
+                        if nid:
+                            conn.execute(
+                                "INSERT OR IGNORE INTO trajet_steps "
+                                "(carnet_id, day, position, item_id) VALUES (?,?,?,?)",
+                                (new_cid, src['day'], src['position'], nid)
+                            )
+                else:
+                    conn.execute(
+                        f"UPDATE trajet_steps SET carnet_id=? "
+                        f"WHERE carnet_id=? AND item_id IN ({placeholders})",
+                        tuple([new_cid, cid_carnet] + selected_ids)
+                    )
+                # Filet : aucune etape fantome ne reste sur le souhait
+                conn.execute(
+                    "DELETE FROM trajet_steps WHERE carnet_id=? AND item_id NOT IN "
+                    "(SELECT id FROM carnet_items WHERE carnet_id=?)",
+                    (cid_carnet, cid_carnet)
+                )
             conn.commit()
         except Exception as e:
             conn.rollback()
@@ -3169,23 +3304,39 @@ def carnet_album(cid_carnet):
     etapes_by_day = {}
     etapes_all = []
     if c.get('date_start'):
-        rows_et = query("""
-            SELECT id, title, pin_kind, planned_day, position FROM carnet_items
-            WHERE carnet_id=? AND kind='location' AND planned_day IS NOT NULL
-            ORDER BY planned_day ASC, position ASC
-        """, (cid_carnet,))
+        # v5.1 : les jours viennent de trajet_steps — une meme etape peut
+        # figurer dans DEUX jours du squelette (nuit au gite : soir du J1 et
+        # matin du J2). etapes_all reste dedoublonne (compteur + ancres).
+        days_steps = _trajet_days(cid_carnet)
+        ids_et = list(dict.fromkeys(iid for day in days_steps for iid in day))
+        infos = {}
+        if ids_et:
+            ph_et = ','.join('?' * len(ids_et))
+            for r_ in query(f"""
+                SELECT id, title, pin_kind, planned_day, position FROM carnet_items
+                WHERE carnet_id=? AND kind='location' AND id IN ({ph_et})
+            """, tuple([cid_carnet] + ids_et)):
+                infos[r_['id']] = dict(r_)
         from datetime import date as _date, timedelta as _td
         try:
             d0 = _date.fromisoformat(str(c['date_start'])[:10])
         except ValueError:
             d0 = None
-        for r_ in rows_et:
-            r_ = dict(r_)
-            etapes_all.append(r_)
-            if d0 is not None:
-                day_key = (d0 + _td(days=r_['planned_day'])).isoformat()
-                r_['day'] = day_key
-                etapes_by_day.setdefault(day_key, []).append(r_)
+        vus_et = set()
+        for k, day in enumerate(days_steps):
+            for iid in day:
+                base = infos.get(iid)
+                if not base:
+                    continue
+                r_ = dict(base)
+                r_['planned_day'] = k          # le jour de CETTE occurrence
+                if iid not in vus_et:
+                    vus_et.add(iid)
+                    etapes_all.append(r_)
+                if d0 is not None:
+                    day_key = (d0 + _td(days=k)).isoformat()
+                    r_['day'] = day_key
+                    etapes_by_day.setdefault(day_key, []).append(r_)
     etape_by_id = {e['id']: e for e in etapes_all}
     # v4.2 : enrichir les notes ancrees (vignette + chronologie de la photo)
     anchors = {}
