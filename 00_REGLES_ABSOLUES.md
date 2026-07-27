@@ -147,8 +147,9 @@ Voir `briefs/VIGILANCE_VERIFICATION_CODE.md` §3 pour la batterie détaillée. E
 4. `grep "@app.route" app.py | sort | uniq -d` → comparé au même grep AVANT le diff.
 5. Migrations rejouées deux fois de suite sans erreur.
 6. Un test négatif au moins : le comportement interdit échoue vraiment.
-7. Message de commit proposé, **attendre confirmation** avant `git commit`, puis avant `git push`.
-8. Brief exécuté archivé dans `briefs/archive/AAAA-MM-JJ_BRIEF_*.md`.
+7. **Commit + push autonomes** (règle du 2026-07-27) — après la batterie, jamais avant.
+   `git add` **nommément**, jamais `-A`.
+8. Brief exécuté archivé dans `briefs/archive/AAAA-MM-JJ_BRIEF_*.md`, dans le même commit.
 
 ---
 
@@ -158,8 +159,8 @@ Ces points existent chez AqGK mais n'ont **pas** d'équivalent décidé ici — 
 
 - **Suite de tests** : Carnet_Voyage n'a pas de dossier `tests/`. AqGK a une batterie complète.
   Question : créer `tests/` (smoke des GET + cloisonnement espace) ?
-- **`deploy.sh`** : AqGK déploie via `./deploy.sh "message"`. Ici c'est `git commit` + `git push` manuels,
-  avec confirmation de l'utilisateur à chaque étape (règle actuelle du `CLAUDE.md`).
-- **Déploiement autonome** : chez AqGK l'assistant commit/push seul depuis le 2026-07-25.
-  Ici, **non** : on demande toujours.
+- **`deploy.sh`** : AqGK déploie via `./deploy.sh "message"`. Ici c'est `git commit` + `git push`
+  directs. Question : vaut-il le coup d'avoir un `deploy.sh` ici aussi ?
+- ~~Déploiement autonome~~ : **tranché le 2026-07-27** — l'assistant commit et pousse seul,
+  comme chez AqGK. Voir `briefs/VIGILANCE_VERIFICATION_CODE.md` §6.
 - **Journal de bord** : AqGK tient un `JOURNAL_DE_BORD.md`. Ici il n'y en a pas.

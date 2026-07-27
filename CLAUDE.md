@@ -24,10 +24,10 @@ Quand l'utilisateur te demande d'exécuter un brief :
    (syntaxe, imports, doublons de fonctions ET de routes, migrations rejouées,
    au moins un test négatif, smoke des GET)
 6. Rends le rapport de lot (§4) : chiffres, limites honnêtes, décisions prises
-7. Propose un commit message clair, attends confirmation avant `git commit`
-8. Propose le push, attends confirmation avant `git push`
-9. Une fois validé, déplace le brief vers briefs/archive/ avec préfixe date ISO :
-   `briefs/archive/AAAA-MM-JJ_BRIEF_*.md`
+7. **Commit et push sans rien demander** (règle Arthur du 2026-07-27) — la batterie
+   du §5 passe AVANT le push, jamais après ; un doute = pas de push
+8. Déplace le brief vers briefs/archive/ avec préfixe date ISO :
+   `briefs/archive/AAAA-MM-JJ_BRIEF_*.md` (dans le même commit)
 
 ## Règles de modification du code
 

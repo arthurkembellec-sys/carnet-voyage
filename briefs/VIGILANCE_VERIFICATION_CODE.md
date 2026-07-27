@@ -117,14 +117,18 @@ PY
 En cas de 500, le traceback complet part dans le log (`@app.errorhandler(500)` fait
 `traceback.format_exc()`) : le lire, corriger, **prouver**, seulement ensuite pousser.
 
-## 6. Déploiement
+## 6. Déploiement AUTONOME (règle Arthur du 2026-07-27)
+
+**Commit et push se font seuls, sans demander.** Le sas humain a disparu — ces règles
+le remplacent, elles ne sont pas optionnelles :
 
 - **Un deploy n'est JAMAIS un test.** La batterie (§3) passe AVANT le push, pas après.
   Un doute = pas de push.
 - `git status` **avant** `git add` : la liste des fichiers embarqués se LIT. Jamais de
-  `git add -A` aveugle (la DB, les uploads et les backups doivent rester dehors).
-- Ici, **commit et push se font avec la confirmation d'Arthur** (contrairement à AqGK) :
-  l'assistant propose le message, attend le OK, puis propose le push, attend le OK.
+  `git add -A` aveugle (la DB, les uploads et les backups doivent rester dehors) —
+  on ajoute les fichiers **nommément**.
+- Le rapport de lot (§4) est rendu **avec** le commit, pas à la place des vérifications.
+- Pouvoir déployer n'est **pas** pouvoir décider : tout le §7 reste interdit sans Arthur.
 - Push sur `main` → Railway (`confident-gratitude` / service `web`) auto-déploie.
   Vérifier ensuite que `https://histoire.aqgk.fr/healthz` répond et que les routes touchées vivent.
 - **Un deploy cassé se répare par un fix AVANT, jamais par des redéploiements exploratoires.**
