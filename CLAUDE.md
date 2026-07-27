@@ -1,5 +1,13 @@
 # CLAUDE.md — Carnet_Voyage
 
+## 🚨 Avant TOUTE modification, lire ces deux fichiers :
+
+1. `00_REGLES_ABSOLUES.md` — décisions produit verrouillées + règles d'architecture non négociables
+2. `briefs/VIGILANCE_VERIFICATION_CODE.md` — pièges vécus du dépôt, batterie de fin de lot
+   OBLIGATOIRE, quand ne pas décider seul
+
+**Tu confirmes avoir lu ces deux fichiers avant de proposer le moindre changement de code.**
+
 ## Mission
 
 Carnet_Voyage est une application web de carnets de voyage partagés en couple/famille.
@@ -8,14 +16,17 @@ Stack : Flask + SQLite + Railway. Hébergé sur https://histoire.aqgk.fr.
 ## Workflow
 
 Quand l'utilisateur te demande d'exécuter un brief :
-1. Lis d'abord ce fichier CLAUDE.md
+1. Lis `00_REGLES_ABSOLUES.md` puis `briefs/VIGILANCE_VERIFICATION_CODE.md`
 2. Lis le brief demandé (dans briefs/)
 3. Pose tes questions de clarification AVANT de modifier le code
-4. Applique les changements
-5. Lance les vérifications bash (py_compile, import check)
-6. Propose un commit message clair, attends confirmation avant `git commit`
-7. Propose le push, attends confirmation avant `git push`
-8. Une fois validé, déplace le brief vers briefs/archive/ avec préfixe date ISO :
+4. Applique les changements — **une seule feature par session**
+5. Lance la batterie complète de `VIGILANCE_VERIFICATION_CODE.md` §3
+   (syntaxe, imports, doublons de fonctions ET de routes, migrations rejouées,
+   au moins un test négatif, smoke des GET)
+6. Rends le rapport de lot (§4) : chiffres, limites honnêtes, décisions prises
+7. Propose un commit message clair, attends confirmation avant `git commit`
+8. Propose le push, attends confirmation avant `git push`
+9. Une fois validé, déplace le brief vers briefs/archive/ avec préfixe date ISO :
    `briefs/archive/AAAA-MM-JJ_BRIEF_*.md`
 
 ## Règles de modification du code
@@ -72,11 +83,20 @@ Les briefs déjà exécutés sont déplacés vers `briefs/archive/` avec un pré
 
 ## Vérifications bash obligatoires avant push
 
+Batterie minimale (la version complète, avec l'ordre et les tests négatifs, est dans
+`briefs/VIGILANCE_VERIFICATION_CODE.md` §3) :
+
 ```bash
 python -c "import ast; ast.parse(open('app.py').read())"  # syntaxe valide
-python -c "from app import app"                            # imports OK
-grep -n "^def " app.py | sort | uniq -d                    # pas de doublons de fonctions
+python -c "from app import app"                            # imports + init_db OK
+python -c "from app import app"                            # 2e passage : migrations idempotentes
+grep "^def " app.py | sort | uniq -d                       # pas de doublons de fonctions
+
+grep "@app.route" app.py | sort | uniq -d                  # pas de doublons de routes
 ```
+
+Un template touché ne se vérifie PAS par `py_compile` : rendre la page réellement
+(client de test Flask, cf. `VIGILANCE_VERIFICATION_CODE.md` §5).
 
 ## Ne jamais
 
@@ -85,3 +105,7 @@ grep -n "^def " app.py | sort | uniq -d                    # pas de doublons de 
   — déjà dans `.gitignore`, mais à vérifier
 - Pousser avec un `SECRET_KEY` hardcodé (utiliser env var Railway)
 - Casser le format des routes existantes (les URLs sont des contrats avec les utilisateurs)
+- Déployer pour tester : la batterie passe AVANT le push, jamais après
+- Diagnostiquer un 500 par redéploiements successifs : reproduction locale obligatoire
+- Livrer un repli silencieux (géocodage, itinéraire, EXIF) : tout fallback se voit à l'écran
+- Réécrire une fonction existante pour la « nettoyer » : on étend, on ne réécrit pas
