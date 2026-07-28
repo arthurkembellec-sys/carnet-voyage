@@ -35,6 +35,9 @@
 
       <button type="submit" class="btn btn-primary btn-block" id="submit-btn">Se connecter</button>
     </form>
+    <p class="auth-forgot" id="auth-forgot">
+      <a href="{{ url_for('mot_de_passe_oublie') }}">Mot de passe oublié ?</a>
+    </p>
   </section>
 </main>
 
@@ -46,6 +49,7 @@
     var submit = document.getElementById('submit-btn');
     var pwInput = document.getElementById('password');
     var pwHint = document.getElementById('pw-hint');
+    var forgot = document.getElementById('auth-forgot');
     tabs.forEach(function(t){
       t.addEventListener('click', function(){
         tabs.forEach(function(x){x.classList.remove('active');});
@@ -57,11 +61,13 @@
           submit.textContent = 'Creer mon compte';
           pwInput.setAttribute('autocomplete', 'new-password');
           pwHint.style.display = '';
+          if (forgot) forgot.style.display = 'none';   // rien a oublier quand on cree
         } else {
           fieldName.style.display = 'none';
           submit.textContent = 'Se connecter';
           pwInput.setAttribute('autocomplete', 'current-password');
           pwHint.style.display = 'none';
+          if (forgot) forgot.style.display = '';
         }
       });
     });

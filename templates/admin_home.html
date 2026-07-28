@@ -1,0 +1,38 @@
+{% extends '_base.html' %}
+{% block title %}Administration — Notre Histoire{% endblock %}
+{% block back_link %}
+  <a href="{{ url_for('profil') }}" class="brand">← Profil</a>
+{% endblock %}
+
+{% block content %}
+<main class="page">
+
+  <section class="hero">
+    <p class="kicker">Administration</p>
+    <h1 class="display"><em>L'espace admin.</em></h1>
+    <p class="lead">
+      Celui de Carnet de voyage. AqGK a le sien, de son côté : deux applications,
+      deux bases, deux espaces — aucune ne peut lire les comptes de l'autre.
+    </p>
+  </section>
+
+  <ul class="admin-stats">
+    <li><strong>{{ stats.n_users or 0 }}</strong><span>compte{{ 's' if (stats.n_users or 0) > 1 }}</span></li>
+    <li><strong>{{ stats.n_espaces or 0 }}</strong><span>espace{{ 's' if (stats.n_espaces or 0) > 1 }}</span></li>
+    <li><strong>{{ stats.n_carnets or 0 }}</strong><span>carnet{{ 's' if (stats.n_carnets or 0) > 1 }}</span></li>
+    <li><strong>{{ stats.n_liens or 0 }}</strong><span>lien{{ 's' if (stats.n_liens or 0) > 1 }} de réinitialisation en cours</span></li>
+  </ul>
+
+  <div class="admin-cards">
+    <a class="admin-card" href="{{ url_for('admin_comptes') }}">
+      <h2>Les comptes</h2>
+      <p>Retrouver quelqu'un, et lui créer un lien pour choisir un nouveau mot de passe.</p>
+    </a>
+    <a class="admin-card" href="{{ url_for('admin_backups_list') }}">
+      <h2>Les sauvegardes</h2>
+      <p>Copies de la base : carnets, photos, souhaits, membres.</p>
+    </a>
+  </div>
+
+</main>
+{% endblock %}

@@ -1,0 +1,60 @@
+{% extends '_base.html' %}
+{% block title %}Mot de passe oublié — Notre Histoire{% endblock %}
+{% block back_link %}
+  <a href="{{ url_for('login') }}" class="brand">← Connexion</a>
+{% endblock %}
+
+{% block content %}
+<main class="page page-narrow">
+
+  <section class="hero">
+    <p class="kicker">Notre Histoire</p>
+    <h1 class="display"><em>Mot de passe oublié ?</em></h1>
+    <p class="lead">Ça arrive. On le remet en trois gestes.</p>
+  </section>
+
+  <ol class="notice-steps">
+    <li>
+      <span class="notice-num">1</span>
+      <div>
+        <h2>Demandez votre lien</h2>
+        <p>
+          Écrivez ou téléphonez à
+          {% if contact %}<a href="mailto:{{ contact }}">{{ contact }}</a>{% else %}la personne qui gère l'application{% endif %}.
+          Dites simplement&nbsp;: «&nbsp;je n'arrive plus à me connecter&nbsp;».
+        </p>
+      </div>
+    </li>
+    <li>
+      <span class="notice-num">2</span>
+      <div>
+        <h2>Ouvrez le lien reçu</h2>
+        <p>
+          Vous recevrez un lien par SMS ou par message. Touchez-le&nbsp;: il ouvre
+          directement la page où choisir votre mot de passe. Rien à recopier.
+        </p>
+      </div>
+    </li>
+    <li>
+      <span class="notice-num">3</span>
+      <div>
+        <h2>Choisissez votre mot de passe</h2>
+        <p>
+          Huit caractères au minimum. Écrivez-le deux fois pour être sûr, validez,
+          et reconnectez-vous avec.
+        </p>
+      </div>
+    </li>
+  </ol>
+
+  <p class="notice-aside">
+    Le lien ne fonctionne qu'une seule fois et cesse d'être valable au bout de
+    24&nbsp;heures. S'il ne marche plus, redemandez-en un&nbsp;: c'est sans souci.
+  </p>
+
+  <p class="notice-back">
+    <a class="btn btn-primary" href="{{ url_for('login') }}">Retour à la connexion</a>
+  </p>
+
+</main>
+{% endblock %}

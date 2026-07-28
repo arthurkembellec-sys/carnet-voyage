@@ -1,0 +1,80 @@
+{% extends '_base.html' %}
+{% block title %}Les comptes — Notre Histoire{% endblock %}
+{% block back_link %}
+  <a href="{{ url_for('admin_home') }}" class="brand">← Administration</a>
+{% endblock %}
+
+{% block content %}
+<main class="page">
+
+  <section class="hero">
+    <p class="kicker">Administration</p>
+    <h1 class="display"><em>Les comptes.</em></h1>
+    <p class="lead">
+      Quelqu'un ne sait plus son mot de passe : trouve-le ici, crée son lien,
+      envoie-le lui. Il choisira son mot de passe lui-même.
+    </p>
+  </section>
+
+  {% if lien %}
+  {# Le lien ne s'affiche qu'ici, qu'une fois. Ni la base ni les logs ne le gardent. #}
+  <section class="reset-lien">
+    <p class="reset-lien-pour">
+      Lien pour <strong>{{ lien_pour.display_name }}</strong> — {{ lien_pour.email }}
+    </p>
+    <input type="text" class="reset-lien-champ" id="reset-lien" value="{{ lien }}" readonly
+           onclick="this.select()" aria-label="Lien de réinitialisation">
+    <div class="reset-lien-actions">
+      <button type="button" class="btn btn-primary btn-sm" onclick="copierLien()">Copier le lien</button>
+      <a class="btn btn-secondary btn-sm"
+         href="sms:?&body={{ ('Voici ton lien pour choisir un nouveau mot de passe sur Notre Histoire : ' ~ lien)|urlencode }}">
+        Envoyer par SMS
+      </a>
+    </div>
+    <p class="reset-lien-note">
+      Il vaut <strong>{{ ttl }} heures</strong> et ne sert qu'<strong>une fois</strong>.
+      Il ne se réaffichera pas : si tu le perds, refais-en un — le précédent cessera de marcher.
+    </p>
+  </section>
+  {% endif %}
+
+  <form class="admin-search" method="get" action="{{ url_for('admin_comptes') }}">
+    <input type="search" name="q" value="{{ q }}" placeholder="Chercher un nom ou un email…">
+    <button type="submit" class="btn btn-secondary btn-sm">Chercher</button>
+  </form>
+
+  {% if not comptes %}
+    <p class="empty-note">Aucun compte ne correspond{% if q %} à « {{ q }} »{% endif %}.</p>
+  {% endif %}
+
+  <ul class="admin-list">
+    {% for c in comptes %}
+    <li class="admin-row">
+      <div class="admin-row-who">
+        <strong>{{ c.display_name or '—' }}</strong>
+        <span class="admin-row-mail">{{ c.email }}</span>
+        <span class="admin-row-meta">
+          {{ c.n_espaces }} espace{{ 's' if c.n_espaces > 1 }}
+          {%- if c.pw_changed_at %} · mot de passe changé le {{ c.pw_changed_at[:10] }}{% endif %}
+        </span>
+      </div>
+      <form method="post" action="{{ url_for('admin_compte_lien', uid_cible=c.id) }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-secondary btn-sm">Créer un lien</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+
+</main>
+
+<script>
+  function copierLien() {
+    var el = document.getElementById('reset-lien');
+    el.select();
+    navigator.clipboard.writeText(el.value).then(function(){
+      setSaved ? setSaved('Lien copié') : null;
+    }).catch(function(){ document.execCommand('copy'); });
+  }
+</script>
+{% endblock %}

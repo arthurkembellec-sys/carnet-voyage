@@ -96,6 +96,34 @@ def _make_session_permanent():
         session.permanent = True
 
 
+@app.before_request
+def _session_apres_reset():
+    """v5.4 : une session ouverte AVANT le dernier changement de mot de passe
+    tombe. Sans ca, reinitialiser ne chasse pas celui qui est deja entre.
+
+    Tolerant par construction : une session d'avant la v5.4 n'a pas de repere,
+    on lui en pose un au lieu de la fermer — personne n'est deconnecte par le
+    deploiement, et la revocation vaut pour tout ce qui s'ouvre ensuite."""
+    uid = session.get('uid')
+    if not uid:
+        return
+    try:
+        r = query("SELECT pw_changed_at FROM users WHERE id=?", (uid,), one=True)
+    except Exception:
+        return                      # migration pas encore passee : on ne bloque rien
+    if not r:
+        return
+    change = str(r['pw_changed_at'] or '')[:19]
+    if not change:
+        return
+    depuis = str(session.get('pw_at') or '')[:19]
+    if not depuis:
+        session['pw_at'] = change   # session d'avant : on l'adopte, on ne la casse pas
+        return
+    if depuis < change:
+        session.clear()
+
+
 # ── DB helpers ────────────────────────────────────────────────────────
 def get_db():
     conn = sqlite3.connect(DB_PATH, timeout=10)
@@ -581,6 +609,23 @@ def init_db():
         )""",
         "CREATE INDEX IF NOT EXISTS idx_trajets_carnet ON trajets(carnet_id, day, ordre)",
         "CREATE INDEX IF NOT EXISTS idx_trajet_steps ON trajet_steps(trajet_id, position)",
+        # ── v5.4 — reinitialisation de mot de passe par lien a usage unique
+        # Le jeton n'est JAMAIS stocke en clair : la base ne garde que son
+        # empreinte SHA-256. Il ne s'affiche qu'une fois, a l'admin qui le cree.
+        """CREATE TABLE IF NOT EXISTS password_resets (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at TIMESTAMP NOT NULL,
+            used_at    TIMESTAMP,
+            created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_pwreset_user ON password_resets(user_id, expires_at)",
+        # Horodatage du dernier changement de mot de passe : sert a couper les
+        # sessions ouvertes AVANT le changement (un reset qui laisse la session
+        # d'un intrus ouverte ne protege de rien).
+        "ALTER TABLE users ADD COLUMN pw_changed_at TIMESTAMP",
         # ── v5.2 — cache des itineraires OSRM ───────────────────────────
         # Sans lui, chaque affichage de la reverie rejoue un appel par bloc
         # sur un service public en fair use (et la page attend le reseau).
@@ -764,6 +809,76 @@ def admin_required(view):
             abort(403)
         return view(*a, **kw)
     return wrapper
+
+
+# ── v5.4 — reinitialisation de mot de passe ───────────────────────────
+# Chemin retenu (2026-07-28) : pas d'email sur Carnet, donc pas de « mot de
+# passe oublie » autonome. L'admin genere un LIEN A USAGE UNIQUE et le
+# transmet (SMS, WhatsApp) ; la personne clique et choisit son mot de passe.
+# Rien a retenir, rien a recopier — ca marche a tout age.
+RESET_TTL_HEURES = 24
+
+
+def _maintenant():
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+
+def _reset_hash(token):
+    """La base ne connait que l'empreinte. Un vol de base ne donne aucun lien."""
+    return hashlib.sha256((token or '').encode('utf-8')).hexdigest()
+
+
+def _reset_creer(user_id, par_uid=None):
+    """Cree un lien a usage unique et renvoie le jeton EN CLAIR — la seule
+    fois ou il existera ailleurs que dans la tete de celui qui le lit.
+    Tout jeton encore valide de cette personne est annule au passage."""
+    execute("UPDATE password_resets SET used_at=CURRENT_TIMESTAMP "
+            "WHERE user_id=? AND used_at IS NULL", (user_id,))
+    token = secrets.token_urlsafe(32)
+    expire = (datetime.now() + timedelta(hours=RESET_TTL_HEURES)
+              ).strftime('%Y-%m-%d %H:%M:%S')
+    execute("INSERT INTO password_resets (user_id, token_hash, expires_at, created_by) "
+            "VALUES (?,?,?,?)", (user_id, _reset_hash(token), expire, par_uid))
+    return token
+
+
+def _reset_lire(token):
+    """Retourne l'utilisateur si le jeton est bon, None sinon.
+    Inconnu, expire, deja servi, compte supprime : MEME reponse. On ne dit
+    jamais laquelle des quatre — sinon le lien devient un detecteur de comptes."""
+    if not token or len(token) < 20:
+        return None
+    r = query("SELECT * FROM password_resets WHERE token_hash=?",
+              (_reset_hash(token),), one=True)
+    if not r or r['used_at']:
+        return None
+    try:
+        if datetime.strptime(str(r['expires_at'])[:19], '%Y-%m-%d %H:%M:%S') < datetime.now():
+            return None
+    except ValueError:
+        return None
+    u = query("SELECT * FROM users WHERE id=? AND deleted_at IS NULL",
+              (r['user_id'],), one=True)
+    return dict(u) if u else None
+
+
+def _reset_consommer(token, user_id, nouveau_mdp):
+    """Pose le nouveau mot de passe et brule le jeton, dans la meme transaction.
+    Marque aussi pw_changed_at : les sessions ouvertes avant tombent."""
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "UPDATE password_resets SET used_at=CURRENT_TIMESTAMP "
+            "WHERE token_hash=? AND used_at IS NULL", (_reset_hash(token),))
+        if not cur.rowcount:
+            conn.rollback()
+            return False              # deja servi entre-temps : on ne rejoue pas
+        conn.execute("UPDATE users SET password_hash=?, pw_changed_at=CURRENT_TIMESTAMP "
+                     "WHERE id=?", (hash_pw(nouveau_mdp), user_id))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
 
 
 def csrf_token():
@@ -4486,6 +4601,7 @@ def login():
                 (email, display_name or email.split('@')[0], hash_pw(password))
             )
             session['uid'] = uid
+            session['pw_at'] = _maintenant()   # v5.4 : repere de revocation
             session.permanent = True  # Brief 08 §1 : rester connecte
             session.pop('couple_id', None); session.pop('espace_id', None)
             return redirect(next_url if next_url.startswith('/') else '/')
@@ -4497,6 +4613,7 @@ def login():
                 flash("Compte supprime. Contactez le support pour restaurer (30j max).", "err")
                 return render_template('login.html', email=email, next_url=next_url)
             session['uid'] = existing['id']
+            session['pw_at'] = str(existing['pw_changed_at'] or _maintenant())[:19]
             session.permanent = True  # Brief 08 §1 : rester connecte
             # Brief 08 §2 : on n'auto-selectionne PAS un espace.
             # L'utilisateur passe par le selecteur (/espace/choisir) au prochain
@@ -4779,6 +4896,7 @@ def invite_accept(token):
                 (eid, uid, 'member'))
         # v4.4 : lien multi-usage, on ne le grille plus
         session['uid'] = uid
+        session['pw_at'] = _maintenant()   # v5.4 : repere de revocation
         session['espace_id'] = eid
         session['couple_id'] = eid
         return redirect(url_for('home'))
@@ -5786,6 +5904,108 @@ def admin_backup_run():
     except Exception as e:
         log.error("backup ECHEC: %s\n%s", e, traceback.format_exc())
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════
+#          v5.4 — ESPACE ADMIN : LES COMPTES ET LEURS MOTS DE PASSE
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route('/admin')
+@admin_required
+def admin_home():
+    """Le tableau de bord de l'espace admin de Carnet.
+    (AqGK a le sien, chez lui : deux apps, deux bases, deux espaces.)"""
+    stats = query("""
+        SELECT (SELECT COUNT(*) FROM users WHERE deleted_at IS NULL)   AS n_users,
+               (SELECT COUNT(*) FROM couples)                          AS n_espaces,
+               (SELECT COUNT(*) FROM carnets WHERE deleted_at IS NULL) AS n_carnets,
+               (SELECT COUNT(*) FROM password_resets
+                 WHERE used_at IS NULL AND expires_at > ?)             AS n_liens
+    """, (_maintenant(),), one=True)
+    return render_template('admin_home.html', stats=dict(stats) if stats else {})
+
+
+@app.route('/admin/comptes')
+@admin_required
+def admin_comptes():
+    """Liste des comptes, avec de quoi retrouver quelqu'un qui appelle."""
+    q = (request.args.get('q') or '').strip()
+    sql = """
+        SELECT u.id, u.email, u.display_name, u.created_at, u.pw_changed_at,
+               (SELECT COUNT(*) FROM espace_members em WHERE em.user_id = u.id) AS n_espaces
+        FROM users u WHERE u.deleted_at IS NULL
+    """
+    params = []
+    if q:
+        sql += " AND (LOWER(u.email) LIKE ? OR LOWER(u.display_name) LIKE ?)"
+        params += ['%' + q.lower() + '%', '%' + q.lower() + '%']
+    sql += " ORDER BY u.created_at DESC LIMIT 200"
+    comptes = [dict(r) for r in query(sql, tuple(params))]
+    return render_template('admin_comptes.html', comptes=comptes, q=q,
+                           lien=None, lien_pour=None, ttl=RESET_TTL_HEURES)
+
+
+@app.route('/admin/comptes/<int:uid_cible>/lien', methods=['POST'])
+@admin_required
+def admin_compte_lien(uid_cible):
+    """Cree le lien de reinitialisation. Il s'affiche UNE fois : ni la base ni
+    les logs ne le reverront. S'il se perd, on en refait un (le precedent meurt)."""
+    if not csrf_check():
+        flash("Session expiree, recommencez.", "err")
+        return redirect(url_for('admin_comptes'))
+    u = query("SELECT id, email, display_name FROM users "
+              "WHERE id=? AND deleted_at IS NULL", (uid_cible,), one=True)
+    if not u:
+        flash("Compte introuvable.", "err")
+        return redirect(url_for('admin_comptes'))
+    token = _reset_creer(u['id'], session.get('uid'))
+    log.info("lien de reinitialisation cree pour le compte %s par %s",
+             u['id'], session.get('uid'))       # jamais le jeton dans les logs
+    comptes = [dict(r) for r in query("""
+        SELECT u.id, u.email, u.display_name, u.created_at, u.pw_changed_at,
+               (SELECT COUNT(*) FROM espace_members em WHERE em.user_id = u.id) AS n_espaces
+        FROM users u WHERE u.deleted_at IS NULL ORDER BY u.created_at DESC LIMIT 200
+    """)]
+    return render_template('admin_comptes.html', comptes=comptes, q='',
+                           lien=url_for('reset_password', token=token, _external=True),
+                           lien_pour=dict(u), ttl=RESET_TTL_HEURES)
+
+
+@app.route('/mot-de-passe-oublie')
+def mot_de_passe_oublie():
+    """Ce que voit quelqu'un qui ne sait plus son mot de passe. C'est la
+    notice, a l'ecran, au moment ou il en a besoin."""
+    return render_template('mot_de_passe_oublie.html',
+                           contact=sorted(ADMIN_EMAILS)[0] if ADMIN_EMAILS else '')
+
+
+@app.route('/reset/<token>', methods=['GET', 'POST'])
+def reset_password(token):
+    """Le lien recu. Une seule chose a faire : choisir un nouveau mot de passe."""
+    u = _reset_lire(token)
+    if not u:
+        # inconnu, expire, deja servi : meme page, meme mot. On ne renseigne pas.
+        return render_template('reset_password.html', invalide=True,
+                               contact=sorted(ADMIN_EMAILS)[0] if ADMIN_EMAILS else ''), 400
+    if request.method == 'POST':
+        if not csrf_check():
+            flash("Session expiree, recommencez.", "err")
+            return render_template('reset_password.html', invalide=False, prenom=u['display_name'])
+        mdp = request.form.get('password') or ''
+        mdp2 = request.form.get('password2') or ''
+        if len(mdp) < 8:
+            flash("Le mot de passe doit faire 8 caracteres au minimum.", "err")
+            return render_template('reset_password.html', invalide=False, prenom=u['display_name'])
+        if mdp != mdp2:
+            flash("Les deux mots de passe ne sont pas identiques.", "err")
+            return render_template('reset_password.html', invalide=False, prenom=u['display_name'])
+        if not _reset_consommer(token, u['id'], mdp):
+            return render_template('reset_password.html', invalide=True,
+                                   contact=sorted(ADMIN_EMAILS)[0] if ADMIN_EMAILS else ''), 400
+        session.clear()        # on repart d'une page propre, y compris pour un intrus
+        flash("Mot de passe enregistre. Connectez-vous avec le nouveau.", "ok")
+        return redirect(url_for('login'))
+    return render_template('reset_password.html', invalide=False, prenom=u['display_name'])
 
 
 @app.route('/admin/backups')
