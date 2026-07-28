@@ -3956,6 +3956,102 @@ body.photo-roll-open .album-footer { opacity: 0; pointer-events: none; }
   padding: 6px 8px; border-radius: 6px;
 }
 .day-step-out:hover { color: var(--color-danger); background: rgba(168,80,61,0.08); }
+.day-step-again {
+  border: none; background: transparent; cursor: pointer;
+  color: var(--ink-whisper); font-size: 13px;
+  padding: 6px 6px; border-radius: 6px;
+}
+.day-step-again:hover { color: var(--accent); background: var(--accent-soft); }
+.day-step-add {
+  border: none; background: transparent; cursor: pointer;
+  color: var(--accent); font-size: 16px; font-weight: 600;
+  padding: 6px 8px; border-radius: 6px; min-height: 34px;
+}
+.day-step-add:hover { background: var(--accent-soft); }
+
+/* ════════════════════════════════════════════════════════════════════
+   v5.2 — LA JOURNÉE EN BLOCS
+   Un bloc = un mode + une heure optionnelle + des étapes ordonnées.
+   ≥2 étapes = un trajet (temps calculé) ; 1 étape = une halte.
+   ════════════════════════════════════════════════════════════════════ */
+.pearl-time {
+  position: absolute; bottom: -5px; left: 50%; transform: translateX(-50%);
+  background: var(--bg-card);
+  border: 1px solid color-mix(in srgb, var(--pearl, var(--accent)) 40%, transparent);
+  color: var(--ink-secondary);
+  font-family: var(--font-ui); font-size: 9px; font-variant-numeric: tabular-nums;
+  padding: 1px 5px; border-radius: 999px; white-space: nowrap;
+}
+.day-bloc {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.day-bloc-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--pearl, var(--accent)) 8%, var(--bg-card));
+  border-bottom: 1px solid var(--border-subtle);
+}
+.bloc-heure {
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--ink-secondary);
+  font-family: var(--font-ui); font-size: 12px;
+  padding: 4px 4px; min-height: 32px;
+  /* c'est l'heure qui cède la place, jamais la durée — mais elle ne descend
+     pas sous la largeur ou « 09:30 » et son horloge tiennent entiers */
+  flex: 0 1 90px; min-width: 76px; width: auto;
+}
+.bloc-modes { display: flex; gap: 0; flex: none; }
+.bloc-mode {
+  border: 1px solid transparent; background: transparent;
+  cursor: pointer; font-size: 14px; line-height: 1;
+  padding: 6px 5px; border-radius: 8px;
+  filter: grayscale(1) opacity(0.45);
+}
+.bloc-mode.is-active {
+  filter: none;
+  border-color: color-mix(in srgb, var(--pearl, var(--accent)) 45%, transparent);
+  background: var(--bg-card);
+}
+.bloc-halte {
+  font-family: var(--font-display); font-style: italic;
+  font-size: 12px; color: var(--ink-muted);
+}
+.bloc-duree {
+  flex: 1 1 auto; min-width: 56px; text-align: right;
+  font-family: var(--font-ui); font-size: 11.5px;
+  color: var(--ink-muted); font-variant-numeric: tabular-nums;
+  white-space: nowrap;          /* ni cassée en trois lignes, ni tronquée */
+}
+.bloc-out {
+  border: none; background: transparent; cursor: pointer;
+  color: var(--ink-whisper); font-size: 12px;
+  padding: 8px 8px; border-radius: 6px; min-height: 34px;
+}
+.bloc-out:hover { color: var(--color-danger); background: rgba(168,80,61,0.08); }
+.day-bloc-steps { list-style: none; margin: 0; padding: 4px 6px; min-height: 34px; }
+.day-halte-drop {
+  list-style: none; margin: 2px 0 0; padding: 8px;
+  min-height: 42px;
+  border: 1px dashed var(--border-default);
+  border-radius: 10px;
+  background: transparent;
+}
+.day-halte-hint {
+  margin: 4px 0 0;
+  font-family: var(--font-display); font-style: italic;
+  font-size: 11.5px; color: var(--ink-whisper);
+}
+@media (max-width: 600px) {
+  .bloc-mode { padding: 9px 5px; font-size: 15px; }    /* cible tactile confortable */
+  .bloc-heure { min-height: 38px; font-size: 12.5px; }
+  .bloc-duree { font-size: 11px; min-width: 52px; }
+}
 
 /* Modale d'attribution : les perles en grille */
 .assign-pearls {

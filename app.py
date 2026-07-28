@@ -16,6 +16,7 @@ import os
 import io
 import sqlite3
 import secrets
+import hashlib
 import logging
 import traceback
 import zipfile
@@ -143,6 +144,77 @@ def _migrate_album_pages_video(conn):
         log.error("migration album_pages video: %s", e)
 
 
+def _migrate_trajets_v52(conn):
+    """v5.2 — la journee devient une suite de BLOCS.
+
+    La v5.1 stockait des etapes plates : trajet_steps(carnet_id, day, position,
+    item_id) avec UNIQUE(carnet_id, day, item_id). Deux besoins la cassent :
+    plusieurs trajets par jour (chacun son mode) et la meme epingle deux fois
+    dans un trajet (l'aller-retour A->B->A). SQLite ne sait pas retirer une
+    contrainte -> reconstruction.
+
+    Un bloc de la v5.1 = un jour entier -> on cree UN trajet 'car' par
+    (carnet_id, day) et on y reverse ses etapes dans l'ordre.
+
+    Idempotente : on ne reconstruit que si l'ancienne forme est encore la.
+    Les comptes sont verifies AVANT de detruire quoi que ce soit ; en cas
+    d'ecart on abandonne en laissant la base intacte et on le DIT (l'app
+    retombe alors sur la derivation planned_day, cf. _trajet_blocs)."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(trajet_steps)")]
+        if not cols:
+            return                      # base neuve : init_db cree la forme v5.2
+        if 'trajet_id' in cols:
+            return                      # deja en v5.2
+        n_avant = conn.execute("SELECT COUNT(*) FROM trajet_steps").fetchone()[0]
+        log.info("v5.2 migration trajet_steps : %d etape(s) a reprendre", n_avant)
+        conn.executescript("""
+            PRAGMA foreign_keys=OFF;
+            CREATE TABLE IF NOT EXISTS trajets (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                carnet_id  INTEGER NOT NULL REFERENCES carnets(id) ON DELETE CASCADE,
+                day        INTEGER NOT NULL,
+                ordre      INTEGER NOT NULL DEFAULT 0,
+                mode       TEXT NOT NULL DEFAULT 'car',
+                heure      TEXT NOT NULL DEFAULT ''
+            );
+            -- on n'entre ici que depuis la v5.1, ou l'app n'ecrivait jamais
+            -- dans trajets : ce qui s'y trouve vient d'une tentative avortee.
+            DELETE FROM trajets;
+            CREATE TABLE trajet_steps_v52 (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                trajet_id  INTEGER NOT NULL REFERENCES trajets(id) ON DELETE CASCADE,
+                position   INTEGER NOT NULL DEFAULT 0,
+                item_id    INTEGER NOT NULL REFERENCES carnet_items(id) ON DELETE CASCADE
+            );
+            INSERT INTO trajets (carnet_id, day, ordre, mode, heure)
+                SELECT DISTINCT carnet_id, day, 0, 'car', '' FROM trajet_steps;
+            INSERT INTO trajet_steps_v52 (trajet_id, position, item_id)
+                SELECT t.id, ts.position, ts.item_id
+                FROM trajet_steps ts
+                JOIN trajets t ON t.carnet_id = ts.carnet_id AND t.day = ts.day;
+        """)
+        n_apres = conn.execute("SELECT COUNT(*) FROM trajet_steps_v52").fetchone()[0]
+        if n_apres != n_avant:
+            conn.executescript("DROP TABLE trajet_steps_v52; PRAGMA foreign_keys=ON;")
+            conn.commit()
+            log.error("v5.2 migration ABANDONNEE : %d etapes avant, %d apres. "
+                      "Base laissee en v5.1, le planning retombe sur planned_day.",
+                      n_avant, n_apres)
+            return
+        conn.executescript("""
+            DROP TABLE trajet_steps;
+            ALTER TABLE trajet_steps_v52 RENAME TO trajet_steps;
+            CREATE INDEX IF NOT EXISTS idx_trajets_carnet ON trajets(carnet_id, day, ordre);
+            CREATE INDEX IF NOT EXISTS idx_trajet_steps ON trajet_steps(trajet_id, position);
+            PRAGMA foreign_keys=ON;
+        """)
+        conn.commit()
+        log.info("v5.2 migration trajet_steps : OK (%d etapes reprises)", n_apres)
+    except Exception as e:
+        log.error("v5.2 migration trajet_steps ECHEC : %s\n%s", e, traceback.format_exc())
+
+
 def _migrate_carnets_souhait(conn):
     """v1.4 — recree la table carnets pour autoriser type='souhait'
     et ajouter la colonne parent_souhait_id. Idempotente."""
@@ -205,6 +277,8 @@ def init_db():
     _migrate_carnets_souhait(conn)
     # v4.4 — migration speciale album_pages (CHECK -> autorise 'video')
     _migrate_album_pages_video(conn)
+    # v5.2 — trajet_steps v5.1 (plat, UNIQUE) -> blocs (trajets + etapes)
+    _migrate_trajets_v52(conn)
 
     migrations = [
         # ── v1.0 — couple : users + couples + invitations ─────────────
@@ -483,19 +557,42 @@ def init_db():
             last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (user_id, couple_id)
         )""",
-        # ── v5.1 — une epingle peut appartenir a PLUSIEURS jours ────────
-        # (la nuit d'etape ferme le jour k et ouvre le jour k+1).
-        # carnet_items.planned_day devient une valeur DERIVEE = premier jour
-        # d'apparition, conservee pour la couleur des epingles et la retro-compat.
-        """CREATE TABLE IF NOT EXISTS trajet_steps (
+        # ── v5.1/v5.2 — la journee est une suite de BLOCS ───────────────
+        # Un bloc = un mode + une heure optionnelle + des etapes ordonnees.
+        # >= 2 etapes -> un trajet (trace, temps) ; 1 etape -> une halte
+        # (le restaurant de midi). AUCUNE unicite sur item_id : une epingle
+        # peut revenir dans le meme bloc (aller-retour A->B->A), dans deux
+        # blocs, dans deux jours. L'identite d'une etape est sa POSITION.
+        # carnet_items.planned_day reste une valeur DERIVEE = premier jour
+        # d'apparition (couleur des epingles, album, retro-compat).
+        """CREATE TABLE IF NOT EXISTS trajets (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             carnet_id  INTEGER NOT NULL REFERENCES carnets(id) ON DELETE CASCADE,
             day        INTEGER NOT NULL,
-            position   INTEGER NOT NULL DEFAULT 0,
-            item_id    INTEGER NOT NULL REFERENCES carnet_items(id) ON DELETE CASCADE,
-            UNIQUE(carnet_id, day, item_id)
+            ordre      INTEGER NOT NULL DEFAULT 0,
+            mode       TEXT NOT NULL DEFAULT 'car',
+            heure      TEXT NOT NULL DEFAULT ''
         )""",
-        "CREATE INDEX IF NOT EXISTS idx_trajet_steps ON trajet_steps(carnet_id, day, position)",
+        """CREATE TABLE IF NOT EXISTS trajet_steps (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            trajet_id  INTEGER NOT NULL REFERENCES trajets(id) ON DELETE CASCADE,
+            position   INTEGER NOT NULL DEFAULT 0,
+            item_id    INTEGER NOT NULL REFERENCES carnet_items(id) ON DELETE CASCADE
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_trajets_carnet ON trajets(carnet_id, day, ordre)",
+        "CREATE INDEX IF NOT EXISTS idx_trajet_steps ON trajet_steps(trajet_id, position)",
+        # ── v5.2 — cache des itineraires OSRM ───────────────────────────
+        # Sans lui, chaque affichage de la reverie rejoue un appel par bloc
+        # sur un service public en fair use (et la page attend le reseau).
+        """CREATE TABLE IF NOT EXISTS route_cache (
+            key        TEXT PRIMARY KEY,
+            profile    TEXT NOT NULL DEFAULT 'car',
+            duration_s INTEGER,
+            distance_m INTEGER,
+            legs       TEXT DEFAULT '',
+            geometry   TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
     ]
     for sql in migrations:
         try:
@@ -504,21 +601,42 @@ def init_db():
             pass
     conn.commit()
 
-    # v5.1 — backfill des trajets existants (planned_day -> trajet_steps).
+    # v5.1/v5.2 — backfill des plannings d'avant les blocs : un carnet qui a
+    # des planned_day mais AUCUN bloc recoit un bloc 'car' par jour.
     # Hors de la boucle ci-dessus : celle-ci avale les exceptions, un echec de
-    # backfill doit se VOIR dans les logs. Idempotent (INSERT OR IGNORE sur la
-    # contrainte UNIQUE), donc rejouable a chaque demarrage sans effet de bord.
+    # backfill doit se VOIR dans les logs. Idempotent : on ne touche qu'aux
+    # carnets sans aucun bloc, donc rejouable a chaque demarrage.
     try:
-        cur = conn.execute(
-            "INSERT OR IGNORE INTO trajet_steps (carnet_id, day, position, item_id) "
-            "SELECT carnet_id, planned_day, position, id FROM carnet_items "
-            "WHERE planned_day IS NOT NULL AND planned_day >= 0 AND carnet_id IS NOT NULL"
-        )
-        if cur.rowcount:
-            log.info("v5.1 backfill trajet_steps : %d etape(s) reprises", cur.rowcount)
+        orphelins = conn.execute("""
+            SELECT DISTINCT ci.carnet_id FROM carnet_items ci
+            WHERE ci.planned_day IS NOT NULL AND ci.planned_day >= 0
+              AND ci.carnet_id IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM trajets t WHERE t.carnet_id = ci.carnet_id)
+        """).fetchall()
+        n_blocs = 0
+        for (cid_,) in orphelins:
+            jours = conn.execute(
+                "SELECT DISTINCT planned_day FROM carnet_items "
+                "WHERE carnet_id=? AND planned_day IS NOT NULL AND planned_day >= 0 "
+                "ORDER BY planned_day", (cid_,)
+            ).fetchall()
+            for (jour,) in jours:
+                tid = conn.execute(
+                    "INSERT INTO trajets (carnet_id, day, ordre, mode, heure) "
+                    "VALUES (?,?,0,'car','')", (cid_, jour)
+                ).lastrowid
+                conn.execute(
+                    "INSERT INTO trajet_steps (trajet_id, position, item_id) "
+                    "SELECT ?, position, id FROM carnet_items "
+                    "WHERE carnet_id=? AND planned_day=? ORDER BY position",
+                    (tid, cid_, jour)
+                )
+                n_blocs += 1
+        if n_blocs:
+            log.info("v5.2 backfill : %d bloc(s) recree(s) depuis planned_day", n_blocs)
         conn.commit()
     except Exception as e:
-        log.error("v5.1 backfill trajet_steps ECHEC : %s", e)
+        log.error("v5.2 backfill blocs ECHEC : %s", e)
 
     conn.close()
 
@@ -974,28 +1092,56 @@ def _next_item_position(carnet_id):
     return r['next'] if r else 0
 
 
-def _trajet_days(carnet_id, nb_days=None):
-    """v5.1 : les jours du trajet, lus dans trajet_steps.
-    Retourne [[item_id, ...], ...] indexe par jour ; une meme epingle peut
-    figurer dans PLUSIEURS jours (la nuit d'etape ferme le jour k et ouvre
-    le jour k+1), mais une seule fois par jour.
-    Repli explicite : si la table ne dit rien de ce carnet (planning fait
-    avant la v5.1 et jamais resauvegarde depuis), on derive de planned_day."""
-    rows = query("SELECT day, item_id FROM trajet_steps WHERE carnet_id=? "
-                 "ORDER BY day ASC, position ASC, id ASC", (carnet_id,))
-    if not rows:
-        rows = query("SELECT planned_day AS day, id AS item_id FROM carnet_items "
-                     "WHERE carnet_id=? AND planned_day IS NOT NULL "
-                     "ORDER BY planned_day ASC, position ASC", (carnet_id,))
-    days = []
+TRAJET_MODES = ('car', 'foot', 'bike')
+
+
+def _trajet_blocs(carnet_id, nb_days=None):
+    """v5.2 : la journee comme suite de BLOCS.
+    Retourne [ [ {mode, heure, steps:[item_id, ...]}, ... ], ... ] indexe par jour.
+    Un bloc a >=2 etapes est un trajet (trace + temps), un bloc a 1 etape est
+    une halte (le restaurant de midi). Une epingle peut revenir dans le meme
+    bloc (A->B->A), dans deux blocs, dans deux jours.
+    Repli explicite (bruyant) : si les blocs sont illisibles ou absents pour ce
+    carnet, on derive un bloc par jour depuis planned_day."""
+    try:
+        rows = query("""
+            SELECT t.id AS tid, t.day, t.ordre, t.mode, t.heure, s.item_id, s.position
+            FROM trajets t LEFT JOIN trajet_steps s ON s.trajet_id = t.id
+            WHERE t.carnet_id = ?
+            ORDER BY t.day ASC, t.ordre ASC, t.id ASC, s.position ASC, s.id ASC
+        """, (carnet_id,))
+    except Exception as e:
+        log.error("blocs illisibles (carnet %s) : %s — repli sur planned_day",
+                  carnet_id, e)
+        rows = []
+    days, blocs = [], {}
     for r in rows:
         k = r['day']
         if k is None or k < 0 or k > 30:
             continue
         while len(days) <= k:
             days.append([])
-        if r['item_id'] not in days[k]:
-            days[k].append(r['item_id'])
+        b = blocs.get(r['tid'])
+        if b is None:
+            b = {'mode': r['mode'] or 'car', 'heure': r['heure'] or '', 'steps': []}
+            blocs[r['tid']] = b
+            days[k].append(b)
+        if r['item_id'] is not None:
+            b['steps'].append(r['item_id'])
+    if not rows:
+        # planning d'avant les blocs : un bloc 'car' par jour
+        legacy = query("SELECT planned_day AS day, id AS item_id FROM carnet_items "
+                       "WHERE carnet_id=? AND planned_day IS NOT NULL "
+                       "ORDER BY planned_day ASC, position ASC", (carnet_id,))
+        for r in legacy:
+            k = r['day']
+            if k is None or k < 0 or k > 30:
+                continue
+            while len(days) <= k:
+                days.append([])
+            if not days[k]:
+                days[k].append({'mode': 'car', 'heure': '', 'steps': []})
+            days[k][0]['steps'].append(r['item_id'])
     if nb_days is not None:
         while len(days) < nb_days:
             days.append([])
@@ -1004,42 +1150,69 @@ def _trajet_days(carnet_id, nb_days=None):
 
 
 def _trajet_save(carnet_id, days):
-    """v5.1 : reecrit le trajet du carnet. days = [[item_id, ...], ...].
-    Un item peut figurer dans plusieurs jours, une seule fois par jour ;
-    seuls les items DU carnet sont acceptes (cloisonnement).
-    planned_day / position restent maintenus comme valeurs DERIVEES
-    (premier jour d'apparition) : couleur des epingles + retro-compat."""
+    """v5.2 : reecrit le planning du carnet.
+    days = [ [ {mode, heure, steps:[item_id, ...]}, ... ], ... ] par jour.
+    Tolere l'ANCIEN format (days = [[item_id, ...], ...], un client reste
+    ouvert sur la page d'avant) : chaque jour devient alors un bloc unique.
+    Seuls les items DU carnet sont acceptes (cloisonnement D1).
+    planned_day / position restent des valeurs DERIVEES (premier jour
+    d'apparition) : couleur des epingles, album, retro-compat."""
+    a_moi = {r['id'] for r in query(
+        "SELECT id FROM carnet_items WHERE carnet_id=?", (carnet_id,))}
     conn = get_db()
     try:
-        conn.execute("DELETE FROM trajet_steps WHERE carnet_id=?", (carnet_id,))
+        conn.execute("DELETE FROM trajet_steps WHERE trajet_id IN "
+                     "(SELECT id FROM trajets WHERE carnet_id=?)", (carnet_id,))
+        conn.execute("DELETE FROM trajets WHERE carnet_id=?", (carnet_id,))
         conn.execute("UPDATE carnet_items SET planned_day=NULL WHERE carnet_id=?",
                      (carnet_id,))
-        pos = 0
-        vus = set()
-        for k, day in enumerate(days[:31]):
-            vus_jour = set()
-            for p, iid in enumerate(day or []):
-                if not str(iid).isdigit():
+        pos, vus = 0, set()
+        for k, jour in enumerate(days[:31]):
+            jour = jour or []
+            # ANCIEN format (client reste ouvert sur la page d'avant la v5.2) :
+            # la journee est une liste plate d'item_id -> elle devient UN bloc.
+            if jour and not isinstance(jour[0], dict):
+                jour = [{'mode': 'car', 'heure': '', 'steps': list(jour)}]
+            for ordre, bloc in enumerate(jour):
+                if not isinstance(bloc, dict):
                     continue
-                iid = int(iid)
-                if iid in vus_jour:
-                    continue
-                vus_jour.add(iid)
-                cur = conn.execute(
-                    "INSERT OR IGNORE INTO trajet_steps (carnet_id, day, position, item_id) "
-                    "SELECT ?, ?, ?, id FROM carnet_items WHERE id=? AND carnet_id=?",
-                    (carnet_id, k, p, iid, carnet_id)
-                )
-                if not cur.rowcount:
-                    continue          # item d'un autre carnet : ignore
-                if iid not in vus:
-                    vus.add(iid)
-                    conn.execute("UPDATE carnet_items SET planned_day=?, position=? "
-                                 "WHERE id=? AND carnet_id=?", (k, pos, iid, carnet_id))
-                    pos += 1
+                mode = bloc.get('mode') if bloc.get('mode') in TRAJET_MODES else 'car'
+                heure = str(bloc.get('heure') or '')[:5]
+                steps = [int(x) for x in (bloc.get('steps') or [])
+                         if str(x).isdigit() and int(x) in a_moi]
+                if not steps:
+                    continue                    # un bloc vide ne se garde pas
+                tid = conn.execute(
+                    "INSERT INTO trajets (carnet_id, day, ordre, mode, heure) "
+                    "VALUES (?,?,?,?,?)", (carnet_id, k, ordre, mode, heure)
+                ).lastrowid
+                for p, iid in enumerate(steps):
+                    conn.execute(
+                        "INSERT INTO trajet_steps (trajet_id, position, item_id) "
+                        "VALUES (?,?,?)", (tid, p, iid))
+                    if iid not in vus:
+                        vus.add(iid)
+                        conn.execute("UPDATE carnet_items SET planned_day=?, position=? "
+                                     "WHERE id=? AND carnet_id=?",
+                                     (k, pos, iid, carnet_id))
+                        pos += 1
         conn.commit()
     finally:
         conn.close()
+
+
+def _trajet_days(carnet_id, nb_days=None):
+    """Vue aplatie des blocs : [[item_id, ...], ...] par jour, sans doublon.
+    Ce que consomment l'album et la transformation, qui se moquent des blocs."""
+    days = []
+    for jour in _trajet_blocs(carnet_id, nb_days):
+        plat = []
+        for bloc in jour:
+            for iid in bloc['steps']:
+                if iid not in plat:
+                    plat.append(iid)
+        days.append(plat)
+    return days
 
 
 @app.route('/carnet/<int:cid_carnet>/souhait')
@@ -1067,12 +1240,14 @@ def carnet_souhait_view(cid_carnet):
         "WHERE parent_souhait_id=? AND deleted_at IS NULL ORDER BY created_at DESC",
         (cid_carnet,)
     )
-    # v5.1 : le trajet vit dans trajet_steps — une epingle peut tenir plusieurs jours
-    days_steps = _trajet_days(cid_carnet)
+    # v5.2 : la journee est une suite de blocs (trajets + haltes)
+    days_blocs = _trajet_blocs(cid_carnet)
     days_of = {}
-    for k, day in enumerate(days_steps):
-        for iid in day:
-            days_of.setdefault(iid, []).append(k)
+    for k, jour in enumerate(days_blocs):
+        for bloc in jour:
+            for iid in bloc['steps']:
+                if k not in days_of.setdefault(iid, []):
+                    days_of[iid].append(k)
     # Brief 07 : carte des lieux de la reverie (items location + photos avec GPS)
     geo_items = []
     for it in items:
@@ -1111,7 +1286,7 @@ def carnet_souhait_view(cid_carnet):
         voyages=[dict(v) for v in voyages], item_kinds=ITEM_KINDS,
         pin_kinds=PIN_KINDS, children_by_parent=children_by_parent,
         children_slim=children_slim,
-        days_steps=days_steps,
+        days_blocs=days_blocs,
         geo_items=geo_items)
 
 
@@ -1372,30 +1547,47 @@ def carnet_transformer(cid_carnet):
                                 "UPDATE carnet_items SET position=? WHERE id=?",
                                 (pos, iid)
                             )
-                # v5.1 : les jours du trajet suivent le voyage (une etape peut
-                # figurer dans deux jours — c'est voulu, on ne deduplique pas ici).
+                # v5.2 : les BLOCS de la journee suivent le voyage — modes,
+                # heures et ordre compris. Une etape peut figurer dans deux
+                # blocs ou deux jours : c'est voulu, on ne deduplique pas ici.
                 if duplicate:
-                    for src in conn.execute(
-                            "SELECT day, position, item_id FROM trajet_steps WHERE carnet_id=?",
+                    for tr in conn.execute(
+                            "SELECT id, day, ordre, mode, heure FROM trajets "
+                            "WHERE carnet_id=? ORDER BY day, ordre, id",
                             (cid_carnet,)).fetchall():
-                        nid = id_map.get(src['item_id'])
-                        if nid:
+                        steps = conn.execute(
+                            "SELECT position, item_id FROM trajet_steps "
+                            "WHERE trajet_id=? ORDER BY position, id", (tr['id'],)
+                        ).fetchall()
+                        copies = [(s['position'], id_map[s['item_id']])
+                                  for s in steps if s['item_id'] in id_map]
+                        if not copies:
+                            continue          # aucune etape copiee : pas de bloc vide
+                        ntid = conn.execute(
+                            "INSERT INTO trajets (carnet_id, day, ordre, mode, heure) "
+                            "VALUES (?,?,?,?,?)",
+                            (new_cid, tr['day'], tr['ordre'], tr['mode'], tr['heure'])
+                        ).lastrowid
+                        for p, (_, nid) in enumerate(copies):
                             conn.execute(
-                                "INSERT OR IGNORE INTO trajet_steps "
-                                "(carnet_id, day, position, item_id) VALUES (?,?,?,?)",
-                                (new_cid, src['day'], src['position'], nid)
-                            )
+                                "INSERT INTO trajet_steps (trajet_id, position, item_id) "
+                                "VALUES (?,?,?)", (ntid, p, nid))
                 else:
+                    # les blocs partent avec le carnet...
+                    conn.execute("UPDATE trajets SET carnet_id=? WHERE carnet_id=?",
+                                 (new_cid, cid_carnet))
+                    # ...puis on retire les etapes dont l'epingle est restee au souhait
                     conn.execute(
-                        f"UPDATE trajet_steps SET carnet_id=? "
-                        f"WHERE carnet_id=? AND item_id IN ({placeholders})",
-                        tuple([new_cid, cid_carnet] + selected_ids)
+                        "DELETE FROM trajet_steps WHERE trajet_id IN "
+                        "(SELECT id FROM trajets WHERE carnet_id=?) AND item_id NOT IN "
+                        "(SELECT id FROM carnet_items WHERE carnet_id=?)",
+                        (new_cid, new_cid)
                     )
-                # Filet : aucune etape fantome ne reste sur le souhait
+                # Filet : aucun bloc vide ne survit (ni ici ni la-bas)
                 conn.execute(
-                    "DELETE FROM trajet_steps WHERE carnet_id=? AND item_id NOT IN "
-                    "(SELECT id FROM carnet_items WHERE carnet_id=?)",
-                    (cid_carnet, cid_carnet)
+                    "DELETE FROM trajets WHERE carnet_id IN (?,?) AND NOT EXISTS "
+                    "(SELECT 1 FROM trajet_steps s WHERE s.trajet_id = trajets.id)",
+                    (cid_carnet, new_cid)
                 )
             conn.commit()
         except Exception as e:
@@ -2915,6 +3107,42 @@ def geo_search():
     return jsonify({'ok': True, 'results': _forward_geocode(q)})
 
 
+def _route_cache_key(coords, profile):
+    """Cle stable : le profil + les coordonnees arrondies a 5 decimales
+    (~1 m — deux traces du meme parcours tombent sur la meme cle)."""
+    brut = profile + '|' + ';'.join(f"{lat:.5f},{lng:.5f}" for lat, lng in coords)
+    return hashlib.sha1(brut.encode('utf-8')).hexdigest()
+
+
+def _route_cache_get(coords, profile):
+    import json as _json
+    try:
+        r = query("SELECT duration_s, distance_m, legs, geometry FROM route_cache "
+                  "WHERE key=?", (_route_cache_key(coords, profile),), one=True)
+        if not r:
+            return None
+        return {'duration_s': r['duration_s'], 'distance_m': r['distance_m'],
+                'legs': _json.loads(r['legs'] or '[]'),
+                'geometry': _json.loads(r['geometry'] or '[]')}
+    except Exception as e:
+        log.warning("route_cache lecture: %s", e)   # repli : on rappellera OSRM
+        return None
+
+
+def _route_cache_put(coords, profile, route):
+    import json as _json
+    try:
+        execute("INSERT OR REPLACE INTO route_cache "
+                "(key, profile, duration_s, distance_m, legs, geometry) "
+                "VALUES (?,?,?,?,?,?)",
+                (_route_cache_key(coords, profile), profile,
+                 route.get('duration_s'), route.get('distance_m'),
+                 _json.dumps(route.get('legs') or []),
+                 _json.dumps(route.get('geometry') or [])))
+    except Exception as e:
+        log.warning("route_cache ecriture: %s", e)
+
+
 def _osrm_route(coords, profile='car'):
     """v4.3 : itineraire reel via OSRM (instances FOSSGIS, fair use).
     coords = [(lat, lng), ...] ordonnees. profile 'car' ou 'foot'.
@@ -2964,9 +3192,15 @@ def geo_route():
         coords.append((lat, lng))
     if len(coords) < 2 or len(coords) > 25:
         return jsonify({'ok': False, 'error': '2 a 25 etapes'}), 400
+    # v5.2 : cache disque. Sans lui, chaque affichage de la reverie rejoue un
+    # appel par bloc sur un service public en fair use — et la page attend.
+    cached = _route_cache_get(coords, profile)
+    if cached:
+        return jsonify({'ok': True, 'cached': True, **cached})
     route = _osrm_route(coords, profile)
     if not route:
         return jsonify({'ok': False, 'error': 'itineraire indisponible'})
+    _route_cache_put(coords, profile, route)
     return jsonify({'ok': True, **route})
 
 

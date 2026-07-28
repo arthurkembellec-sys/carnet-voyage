@@ -72,7 +72,9 @@ Idempotente : détection par `PRAGMA table_info`, rejouable sans effet.
   l'**ajoute à nouveau** (avant : ça la retirait). Réparation d'un faux geste : bouton
   **« ↩ Dernière étape »** dans la barre de tracé, plus « Annuler » qui vide tout.
 - **Pool → journée** : glisser une épingle dans un bloc l'y ajoute ; la déposer dans la
-  zone « halte » de la journée crée un bloc à 1 étape (le restaurant).
+  zone « halte » de la journée crée un bloc à 1 étape (le restaurant). **Ajouté en cours
+  de route** : chaque idée du pool porte aussi un **＋** quand un jour est ouvert — glisser
+  dans une page qui défile est pénible au doigt (D3), et le glisser reste possible.
 - **Dans un bloc** : réordonner par glisser, ✕ retire **cette occurrence seulement**,
   sélecteur de mode 🚗🚶🚲, champ heure optionnel, ✕ du bloc supprime le bloc entier.
 - Un bloc vidé de ses étapes disparaît ; une journée sans bloc revient à son état vide.
@@ -134,3 +136,22 @@ Batterie `test_journee_blocs.py`, sur copie de la DB, avec au moins :
 8. Cache : deux appels identiques → un seul appel OSRM.
 9. Ancien format de POST toujours accepté.
 10. Smoke : rêverie, album, aperçu, PDF.
+11. **Invariant v5.1 conservé** : la même épingle dans deux jours (la nuit d'étape).
+    La batterie v5.1 interrogeait le schéma plat et devient caduque ; son invariant
+    métier est **porté** ici, pas abandonné.
+
+## Journal d'exécution (2026-07-28)
+
+Livré. 45 assertions vertes. Ce que la vérification au navigateur a corrigé, et qui
+ne se serait pas vu autrement :
+
+- `selectDay()` ne redessinait pas le pool → le **＋** n'apparaissait jamais.
+- La durée du bloc se cassait en trois lignes, puis se faisait tronquer en « ≈ 3… »,
+  puis l'heure « 09:30 » s'affichait « 09: ». Trois passes de largeurs sur l'en-tête.
+- Le texte de la modale d'attribution mentait encore (« devient celui du jour choisi »).
+- La tolérance à l'ancien format était au mauvais niveau : l'ancien format envoie une
+  journée **plate**, pas une liste de blocs (attrapé par le test 9).
+
+**Limite dite** : le glisser-déposer vers la zone « halte » n'a pas pu être éprouvé en
+automation (SortableJS ignore un drag synthétique). Le chemin par **＋** l'est, et la
+persistance des haltes aussi. À confirmer au doigt sur un vrai téléphone.
