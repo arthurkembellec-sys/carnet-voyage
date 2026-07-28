@@ -342,7 +342,8 @@ def render_carnet_pdf(
             y -= line_height
         return len(lines)
 
-    def _draw_image_box(item, x, y, w, h, *, caption=None, with_letter=None):
+    def _draw_image_box(item, x, y, w, h, *, caption=None, with_letter=None,
+                        cap_lines=2):
         """Dessine une photo dans une boîte (cover ou contain).
 
         Retourne (placed_x, placed_y, placed_w, placed_h) ou None si raté.
@@ -355,7 +356,7 @@ def render_carnet_pdf(
             iw, ih = img.getSize()
         except Exception:
             return None
-        cap_h = 6 * mm if caption else 0
+        cap_h = (3 * mm * cap_lines) if caption else 0
         avail_h = h - cap_h
         ratio = min(w / iw, avail_h / ih)
         dw, dh = iw * ratio, ih * ratio
@@ -377,8 +378,8 @@ def render_carnet_pdf(
         if caption:
             pdf.setFont('Times-Italic', 8.5)
             pdf.setFillColorRGB(*INK_SOFT_RGB)
-            _wrap_text(caption, x + w / 2, y + 2 * mm,
-                       max_width=w, line_height=10, max_lines=2)
+            _wrap_text(caption, x + w / 2, y + cap_h / 2,
+                       max_width=w, line_height=10, max_lines=cap_lines)
         return (cx, cy, dw, dh)
 
     def _draw_image_full_bleed(item, side):
@@ -1016,6 +1017,7 @@ def render_carnet_pdf(
                     'letter': None,
                     'text': m.get('caption') or m.get('text_content') or '',
                     'thumb_path': m.get('photo_thumb'),
+                    'src': m,          # la page d'album d'origine, pour le report
                 })
 
             # 3) Mini-carte de section
@@ -1043,7 +1045,11 @@ def render_carnet_pdf(
                                       mini_map_label=mini_label) or []
             # on ne reporte que les NOTES : une legende suit sa photo, la
             # deplacer sur une autre page la rendrait incomprehensible
-            marge_reportee[:] = [it for it in reste if it.get('kind') != 'caption']
+            # on reporte les NOTES (une legende suit sa photo, la deplacer la
+            # rendrait incomprehensible) — sous leur forme d'origine, la seule
+            # que sachent dessiner les pages de fin.
+            marge_reportee[:] = [it['src'] for it in reste
+                                 if it.get('kind') != 'caption' and it.get('src')]
 
         _draw_page_number(page_num, side)
 
@@ -1075,7 +1081,7 @@ def render_carnet_pdf(
             my = cy + (1 - row) * (cell_h + 6 * mm)
             if m.get('photo_path'):
                 _draw_image_box(m, mx, my, cell_w, cell_h,
-                                caption=m.get('caption'))
+                                caption=m.get('caption'), cap_lines=5)
             elif m.get('text_content'):
                 _draw_text_box(m, mx, my, cell_w, cell_h)
         _draw_page_number(page_num, side)
@@ -1166,6 +1172,21 @@ def render_carnet_pdf(
         elif kind == 'margin_grid':
             _draw_margin_grid(entry['chunk'], side, page_num)
         elif kind == 'colophon':
+            # v5.6.1 : AVANT de fermer le livre, on regarde ce qui n'a jamais
+            # trouvé sa place dans une case et on lui donne des pages a la fin.
+            # Une note ecrite par la main de quelqu'un ne se perd pas parce que
+            # la mise en page manquait de hauteur. (5 notes sur 22 tombaient.)
+            if marge_reportee:
+                restes = list(marge_reportee)
+                marge_reportee[:] = []
+                page_num -= 1                 # on rendra le colophon apres
+                suite = [{'kind': 'margin_intro'}]
+                for s in range(0, len(restes), 4):
+                    suite.append({'kind': 'margin_grid', 'chunk': restes[s:s + 4]})
+                suite.append({'kind': 'colophon'})
+                program[i + 1:i + 1] = suite
+                i += 1
+                continue
             _draw_colophon(side, page_num)
         else:
             _draw_blank(side, page_num)
