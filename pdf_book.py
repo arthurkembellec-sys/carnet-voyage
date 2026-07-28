@@ -426,13 +426,20 @@ def render_carnet_pdf(
             iw, ih = img.getSize()
         except Exception:
             return None
-        qr_size = min(w, h) * 0.20
+        # v5.6 : le QR prend la LARGEUR de la vignette, plus un timbre perdu
+        # dessous. On resout le ratio pour que l'image et son QR carre de meme
+        # largeur tiennent ensemble dans la case : ih*r + iw*r + legende <= h.
         cap_h = 6 * mm if item.get('caption') else 0
-        avail_h = h - cap_h - qr_size - 2 * mm
-        ratio = min(w / iw, avail_h / ih)
+        gap = 2 * mm
+        a_un_qr = bool(item.get('video_token') and qr_make and video_url_for)
+        if a_un_qr:
+            ratio = min(w / iw, (h - cap_h - gap) / (ih + iw))
+        else:
+            ratio = min(w / iw, (h - cap_h) / ih)
         dw, dh = iw * ratio, ih * ratio
+        qr_size = dw if a_un_qr else 0
         cx = x + (w - dw) / 2
-        cy = y + cap_h + qr_size + 2 * mm + (avail_h - dh)
+        cy = y + cap_h + (qr_size + gap if a_un_qr else 0)
         try:
             pdf.drawImage(img, cx, cy, width=dw, height=dh, mask='auto')
         except Exception:
@@ -449,15 +456,15 @@ def render_carnet_pdf(
         p.lineTo(ccx + r * 0.6, ccy)
         p.close()
         pdf.drawPath(p, stroke=0, fill=1)
-        # QR
-        if item.get('video_token') and qr_make and video_url_for:
+        # QR — meme largeur que la vignette, aligne dessous
+        if a_un_qr:
             try:
                 video_url = video_url_for(item['video_token'])
                 qr_img = qr_make(video_url)
                 qr_buf = io.BytesIO()
                 qr_img.save(qr_buf, 'PNG')
                 qr_buf.seek(0)
-                qr_x = x + (w - qr_size) / 2
+                qr_x = cx
                 qr_y = y + cap_h
                 pdf.drawImage(ImageReader(qr_buf), qr_x, qr_y,
                               width=qr_size, height=qr_size, mask='auto')
@@ -500,10 +507,28 @@ def render_carnet_pdf(
         return None
 
     def _grid_layout(n, x, y, w, h, gap=3 * mm):
-        """Grille adaptative pour 1..4 photos."""
+        """Grille adaptative pour 1..6 cases.
+        v5.6 : 5 et 6 sont apparus quand la note en marge est devenue une case
+        de la grille comme une photo (avant, elle mangeait une bande sur toute
+        la hauteur). Sans eux, la 5e case n'existait pas et son contenu
+        disparaissait en silence."""
         boxes = []
+        if n <= 0:
+            return boxes
         if n == 1:
             boxes.append((x, y, w, h))
+        elif n >= 5:
+            # 5 : deux en haut, trois en bas — 6 : deux rangees de trois
+            haut = 2 if n == 5 else 3
+            bas = n - haut
+            top_h = (h - gap) * (0.52 if n == 5 else 0.5)
+            bot_h = h - top_h - gap
+            cw_top = (w - gap * (haut - 1)) / haut
+            cw_bot = (w - gap * (bas - 1)) / bas
+            for i in range(haut):
+                boxes.append((x + i * (cw_top + gap), y + bot_h + gap, cw_top, top_h))
+            for i in range(bas):
+                boxes.append((x + i * (cw_bot + gap), y, cw_bot, bot_h))
         elif n == 2:
             if h > w:
                 cell_h = (h - gap) / 2
@@ -590,15 +615,19 @@ def render_carnet_pdf(
             pdf.line(x, y_top, x + 12 * mm, y_top)
             y_top -= 3 * mm
 
-        # 3) Items
-        for item in items:
-            if y_top < area_y + 5 * mm:
+        # 3) Items — v5.6 : la marge est une CASE, pas une colonne infinie.
+        # Rien ne doit deborder hors de sa case : chaque bloc verifie la place
+        # qui reste AVANT de se dessiner, et on s'arrete des qu'il n'y en a plus.
+        bas = area_y + 3 * mm
+        non_dessines = []
+        for pos_item, item in enumerate(items):
+            if y_top - bas < 12:               # meme pas une ligne de texte
+                non_dessines = list(items[pos_item:])
                 break
             letter = item.get('letter')
             text = item.get('text') or ''
             thumb = item.get('thumb_path')
             kind = item.get('kind')
-            block_h_used = 0
             # Thumb si photo en marge
             if thumb:
                 try:
@@ -609,14 +638,21 @@ def render_carnet_pdf(
                     if th_h > 22 * mm:
                         th_h = 22 * mm
                         th_w = th_h * iw / ih
-                    pdf.drawImage(img, x, y_top - th_h,
-                                  width=th_w, height=th_h, mask='auto')
-                    y_top -= th_h + 2 * mm
-                    block_h_used += th_h + 2 * mm
+                    place = y_top - bas - (14 if (text or letter) else 0)
+                    if th_h > place:            # on retrecit plutot que deborder
+                        th_h = place
+                        th_w = th_h * iw / ih
+                    if th_h >= 8 * mm:
+                        pdf.drawImage(img, x, y_top - th_h,
+                                      width=th_w, height=th_h, mask='auto')
+                        y_top -= th_h + 2 * mm
                 except Exception:
                     pass
             # Lettre + texte
             if text or letter:
+                if y_top - bas < 12:
+                    non_dessines = list(items[pos_item:])
+                    break
                 if letter and show_letters:
                     pdf.setFont('Helvetica-Bold', 8)
                     pdf.setFillColorRGB(*ACCENT_RGB)
@@ -626,16 +662,25 @@ def render_carnet_pdf(
                     text_x = x
                 pdf.setFont('Times-Italic', 8.5)
                 pdf.setFillColorRGB(*INK_SOFT_RGB)
+                lignes_possibles = max(1, int((y_top - bas - 4) // 10))
+                # v5.6 : la case peut desormais faire toute la largeur de la
+                # page. On borne quand meme la mesure : au-dela, l'oeil perd
+                # la ligne suivante. C'est la regle typographique, pas la place
+                # disponible, qui decide.
+                mesure = min(area_w - (text_x - x) - 2, 95 * mm)
                 used = _wrap_text_left(text, text_x, y_top - 8,
-                                       max_width=area_w - (text_x - x) - 2,
-                                       line_height=10, max_lines=4)
+                                       max_width=mesure,
+                                       line_height=10,
+                                       max_lines=min(6, lignes_possibles))
                 y_top -= used * 10 + 4 * mm
             else:
                 y_top -= 2 * mm
             # Petit séparateur ligne fine
-            pdf.setStrokeColorRGB(*LINE_RGB)
-            pdf.setLineWidth(0.2)
-            pdf.line(x, y_top + 2, x + area_w * 0.4, y_top + 2)
+            if y_top - bas > 4:
+                pdf.setStrokeColorRGB(*LINE_RGB)
+                pdf.setLineWidth(0.2)
+                pdf.line(x, y_top + 2, x + area_w * 0.4, y_top + 2)
+        return non_dessines
 
     # Page program (recto/verso) ────────────────────────────────────────────
     program = []  # list of dicts {kind, ...}
@@ -862,6 +907,9 @@ def render_carnet_pdf(
             return
         _draw_page_number(page_num, side)
 
+    marge_reportee = []      # v5.6 : ce qui n'a pas tenu dans la case passe
+                             # a la page composite suivante, jamais a la trappe
+
     def _draw_composite(chunk, margin_items_for_page, side, page_num):
         _fill_page_cream()
         cx, cy, cw, ch = _content_box(side)
@@ -873,6 +921,11 @@ def render_carnet_pdf(
         mzone_x = mzone_y = mzone_w = mzone_h = 0
 
         # Marge dynamique : si rien à mettre en marge, l'album prend toute la place
+        # v5.6 : ce qui n'a pas tenu dans la case de la page precedente passe
+        # en tete ici — la note attend son tour, elle ne disparait pas.
+        if marge_reportee:
+            margin_items_for_page = list(marge_reportee) + list(margin_items_for_page or [])
+            marge_reportee[:] = []
         has_caption = any(it.get('caption') for it in chunk)
         has_margin_notes = bool(margin_items_for_page)
         has_section_map = (show_section_maps
@@ -881,36 +934,13 @@ def render_carnet_pdf(
         margin_has_content = has_caption or has_margin_notes or has_section_map
         margin_pos_local = margin_pos_eff if margin_has_content else 'end'
 
-        if margin_pos_local == 'outer':
-            # Notes côté extérieur (loin de la reliure)
-            margin_w = cw * 0.30
-            album_w = cw - margin_w - 4 * mm
-            if side == 'recto':
-                album_x = cx
-                mzone_x = cx + album_w + 4 * mm
-            else:
-                mzone_x = cx
-                album_x = cx + margin_w + 4 * mm
-            album_y = cy
-            album_h = ch
-            mzone_y = cy
-            mzone_w = margin_w
-            mzone_h = ch
-        elif margin_pos_local == 'inner':
-            # Notes côté reliure (proche de la couture)
-            margin_w = cw * 0.30
-            album_w = cw - margin_w - 4 * mm
-            if side == 'recto':
-                mzone_x = cx
-                album_x = cx + margin_w + 4 * mm
-            else:
-                album_x = cx
-                mzone_x = cx + album_w + 4 * mm
-            album_y = cy
-            album_h = ch
-            mzone_y = cy
-            mzone_w = margin_w
-            mzone_h = ch
+        # v5.6 : la marge n'est plus une bande sur toute la hauteur — elle
+        # occupe UNE CASE de la grille, comme une photo. Avant, trois lignes de
+        # légende réservaient 30 % de la page sur toute sa hauteur, et le reste
+        # de la colonne restait blanc. Le calepinage récupère cet espace.
+        marge_en_case = margin_pos_local in ('outer', 'inner')
+        if marge_en_case:
+            album_x, album_y, album_w, album_h = cx, cy, cw, ch
         elif margin_pos_local == 'bottom':
             margin_h = ch * 0.22
             album_h = ch - margin_h - 4 * mm
@@ -931,7 +961,21 @@ def render_carnet_pdf(
                 if i < len(letters_seq):
                     letter_for[id(item)] = letters_seq[i]
 
-        boxes = _grid_layout(n, album_x, album_y, album_w, album_h)
+        if marge_en_case:
+            # La grille compte une case de plus : celle de la marge. Elle se
+            # place du côté extérieur (loin de la reliure) ou intérieur, selon
+            # le réglage — donc en tête sur les pages où ce côté est à gauche.
+            cases = _grid_layout(n + 1, album_x, album_y, album_w, album_h)
+            cote_gauche = ((margin_pos_local == 'outer' and side == 'verso') or
+                           (margin_pos_local == 'inner' and side == 'recto'))
+            if cote_gauche:
+                mzone_x, mzone_y, mzone_w, mzone_h = cases[0]
+                boxes = cases[1:]
+            else:
+                mzone_x, mzone_y, mzone_w, mzone_h = cases[-1]
+                boxes = cases[:-1]
+        else:
+            boxes = _grid_layout(n, album_x, album_y, album_w, album_h)
         # Si on a une zone marge, les légendes vont dans la marge.
         captions_to_margin = (mzone_w > 0)
         for box, item in zip(boxes, chunk):
@@ -941,22 +985,16 @@ def render_carnet_pdf(
 
         # 2) Zone marge : mini-carte + légendes (a/b/c) + notes en marge
         if mzone_w > 0:
-            # Filet de séparation
-            pdf.setStrokeColorRGB(*LINE_RGB)
-            pdf.setDash(2, 2)
-            pdf.setLineWidth(0.4)
-            if margin_pos_local in ('outer', 'inner'):
-                # ligne verticale entre album et marge
-                if (margin_pos_local == 'outer' and side == 'recto') or \
-                   (margin_pos_local == 'inner' and side == 'verso'):
-                    sep_x = mzone_x - 2 * mm
-                else:
-                    sep_x = mzone_x + mzone_w + 2 * mm
-                pdf.line(sep_x, mzone_y, sep_x, mzone_y + mzone_h)
-            else:  # bottom
+            # Filet de séparation. En case de grille, un trait vertical
+            # couperait la page en deux au milieu des photos : c'est
+            # l'étiquette LÉGENDES qui distingue la case, pas un filet.
+            if not marge_en_case:
+                pdf.setStrokeColorRGB(*LINE_RGB)
+                pdf.setDash(2, 2)
+                pdf.setLineWidth(0.4)
                 pdf.line(mzone_x, mzone_y + mzone_h + 2 * mm,
                          mzone_x + mzone_w, mzone_y + mzone_h + 2 * mm)
-            pdf.setDash()
+                pdf.setDash()
 
             # Construction des items à mettre dans la marge :
             # 1) Légendes des photos principales (avec lettre)
@@ -999,10 +1037,13 @@ def render_carnet_pdf(
                     except Exception:
                         mini_png = None
 
-            _draw_margin_zone(margin_entries, mzone_x, mzone_y,
-                              mzone_w, mzone_h, side,
-                              mini_map_png=mini_png,
-                              mini_map_label=mini_label)
+            reste = _draw_margin_zone(margin_entries, mzone_x, mzone_y,
+                                      mzone_w, mzone_h, side,
+                                      mini_map_png=mini_png,
+                                      mini_map_label=mini_label) or []
+            # on ne reporte que les NOTES : une legende suit sa photo, la
+            # deplacer sur une autre page la rendrait incomprehensible
+            marge_reportee[:] = [it for it in reste if it.get('kind') != 'caption']
 
         _draw_page_number(page_num, side)
 

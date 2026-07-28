@@ -608,6 +608,11 @@ def init_db():
             item_id    INTEGER NOT NULL REFERENCES carnet_items(id) ON DELETE CASCADE
         )""",
         "CREATE INDEX IF NOT EXISTS idx_trajets_carnet ON trajets(carnet_id, day, ordre)",
+        # v5.6 — on n'a pas toujours fait ce qu'on avait prevu. Un bloc peut
+        # etre marque « pas fait » : il sort des temps, de l'album et du livre,
+        # mais il RESTE (on se souvient de ce qu'on avait imagine), et le geste
+        # se defait d'une touche.
+        "ALTER TABLE trajets ADD COLUMN fait INTEGER NOT NULL DEFAULT 1",
         "CREATE INDEX IF NOT EXISTS idx_trajet_steps ON trajet_steps(trajet_id, position)",
         # ── v5.4 — reinitialisation de mot de passe par lien a usage unique
         # Le jeton n'est JAMAIS stocke en clair : la base ne garde que son
@@ -1286,7 +1291,8 @@ def _trajet_blocs(carnet_id, nb_days=None):
     carnet, on derive un bloc par jour depuis planned_day."""
     try:
         rows = query("""
-            SELECT t.id AS tid, t.day, t.ordre, t.mode, t.heure, s.item_id, s.position
+            SELECT t.id AS tid, t.day, t.ordre, t.mode, t.heure, t.fait,
+                   s.item_id, s.position
             FROM trajets t LEFT JOIN trajet_steps s ON s.trajet_id = t.id
             WHERE t.carnet_id = ?
             ORDER BY t.day ASC, t.ordre ASC, t.id ASC, s.position ASC, s.id ASC
@@ -1304,7 +1310,10 @@ def _trajet_blocs(carnet_id, nb_days=None):
             days.append([])
         b = blocs.get(r['tid'])
         if b is None:
-            b = {'mode': r['mode'] or 'car', 'heure': r['heure'] or '', 'steps': []}
+            b = {'id': r['tid'], 'mode': r['mode'] or 'car',
+                 'heure': r['heure'] or '',
+                 'fait': 1 if (r['fait'] is None or r['fait']) else 0,
+                 'steps': []}
             blocs[r['tid']] = b
             days[k].append(b)
         if r['item_id'] is not None:
@@ -1321,7 +1330,8 @@ def _trajet_blocs(carnet_id, nb_days=None):
             while len(days) <= k:
                 days.append([])
             if not days[k]:
-                days[k].append({'mode': 'car', 'heure': '', 'steps': []})
+                days[k].append({'id': None, 'mode': 'car', 'heure': '',
+                                'fait': 1, 'steps': []})
             days[k][0]['steps'].append(r['item_id'])
     if nb_days is not None:
         while len(days) < nb_days:
@@ -1359,13 +1369,14 @@ def _trajet_save(carnet_id, days):
                     continue
                 mode = bloc.get('mode') if bloc.get('mode') in TRAJET_MODES else 'car'
                 heure = str(bloc.get('heure') or '')[:5]
+                fait = 0 if str(bloc.get('fait', 1)) in ('0', 'False', 'false') else 1
                 steps = [int(x) for x in (bloc.get('steps') or [])
                          if str(x).isdigit() and int(x) in a_moi]
                 if not steps:
                     continue                    # un bloc vide ne se garde pas
                 tid = conn.execute(
-                    "INSERT INTO trajets (carnet_id, day, ordre, mode, heure) "
-                    "VALUES (?,?,?,?,?)", (carnet_id, k, ordre, mode, heure)
+                    "INSERT INTO trajets (carnet_id, day, ordre, mode, heure, fait) "
+                    "VALUES (?,?,?,?,?,?)", (carnet_id, k, ordre, mode, heure, fait)
                 ).lastrowid
                 for p, iid in enumerate(steps):
                     conn.execute(
@@ -1389,6 +1400,8 @@ def _trajet_days(carnet_id, nb_days=None):
     for jour in _trajet_blocs(carnet_id, nb_days):
         plat = []
         for bloc in jour:
+            if not bloc.get('fait', 1):
+                continue          # pas fait : hors album, hors livre
             for iid in bloc['steps']:
                 if iid not in plat:
                     plat.append(iid)
@@ -1733,7 +1746,7 @@ def carnet_transformer(cid_carnet):
                 # blocs ou deux jours : c'est voulu, on ne deduplique pas ici.
                 if duplicate:
                     for tr in conn.execute(
-                            "SELECT id, day, ordre, mode, heure FROM trajets "
+                            "SELECT id, day, ordre, mode, heure, fait FROM trajets "
                             "WHERE carnet_id=? ORDER BY day, ordre, id",
                             (cid_carnet,)).fetchall():
                         steps = conn.execute(
@@ -1745,9 +1758,10 @@ def carnet_transformer(cid_carnet):
                         if not copies:
                             continue          # aucune etape copiee : pas de bloc vide
                         ntid = conn.execute(
-                            "INSERT INTO trajets (carnet_id, day, ordre, mode, heure) "
-                            "VALUES (?,?,?,?,?)",
-                            (new_cid, tr['day'], tr['ordre'], tr['mode'], tr['heure'])
+                            "INSERT INTO trajets (carnet_id, day, ordre, mode, heure, fait) "
+                            "VALUES (?,?,?,?,?,?)",
+                            (new_cid, tr['day'], tr['ordre'], tr['mode'],
+                             tr['heure'], tr['fait'])
                         ).lastrowid
                         for p, (_, nid) in enumerate(copies):
                             conn.execute(
@@ -3713,6 +3727,24 @@ def carnet_album(cid_carnet):
     c = _get_carnet_or_404(cid_carnet)
     sort_mode = c.get('sort_mode') or 'chrono'
     pages = _carnet_pages(cid_carnet, sort_mode=sort_mode)
+    # v5.6 : la carte du carnet montre la MEME chose que celle de la reverie —
+    # les etapes preparees, avec l'epingle deja choisie la-bas, plus les photos.
+    geo_etapes = []
+    for r_ in query("""
+        SELECT id, title, pin_kind, planned_day, geo_lat, geo_lng
+        FROM carnet_items
+        WHERE carnet_id=? AND kind='location'
+          AND geo_lat IS NOT NULL AND geo_lng IS NOT NULL
+        ORDER BY planned_day, position
+    """, (cid_carnet,)):
+        r_ = dict(r_)
+        geo_etapes.append({
+            'item_id': r_['id'],
+            'lat': r_['geo_lat'], 'lng': r_['geo_lng'],
+            'pin_kind': r_['pin_kind'] or '',
+            'planned_day': r_['planned_day'],
+            'title': r_['title'] or 'Etape',
+        })
     geo_photos = [p for p in pages['all']
                   if p.get('photo_gps_lat') is not None and p.get('photo_gps_lng') is not None]
     # v4.6 : etapes du planning du voyage, par date reelle (date_start + jour)
@@ -3840,7 +3872,8 @@ def carnet_album(cid_carnet):
         margin_by_day=margin_by_day, margin_rest=margin_rest,
         structured=pages.get('structured', []),
         orphans=pages.get('orphans', []),
-        geo_photos=geo_photos, types=CARNET_TYPES, sort_mode=sort_mode)
+        geo_photos=geo_photos, geo_etapes=geo_etapes,
+        types=CARNET_TYPES, sort_mode=sort_mode)
 
 
 def _safe_float(v):

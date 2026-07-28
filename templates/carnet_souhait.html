@@ -222,6 +222,8 @@
 <script src="{{ url_for('static', filename='vendor/Sortable.min.js') }}"></script>
 <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
 <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
+<script>window.PIN_KINDS = {{ pin_kinds|tojson }};</script>
+<script src="{{ url_for('static', filename='pins.js') }}"></script>
 <script>
   const CSRF = "{{ csrf_token() }}";
   const URL_ADD_ITEM = "{{ url_for('carnet_add_item', cid_carnet=carnet.id) }}";
@@ -380,43 +382,15 @@
   var routePins = {};           // itemId -> {marker, data}
   var routeLine = null;
 
-  var PIN_KINDS = {{ pin_kinds|tojson }};   // [ [kind, emoji, label], ... ]
   var PIN_CHILDREN = {{ (children_slim or {})|tojson }};   // idées rattachées par épingle
-  var DAY_COLORS = ['#A8503D','#5B7A9D','#5C7A5A','#B0713C','#8C6B7A','#4A97A8',
-                    '#7A7A4F','#B58373','#3D4A5C','#B8864B','#5E8D87','#96604F'];
-  function pinEmoji(kind) {
-    for (var i = 0; i < PIN_KINDS.length; i++) if (PIN_KINDS[i][0] === kind) return PIN_KINDS[i][1];
-    return '';
-  }
-  function pinIcon(num, kind, plannedDay, multi) {
-    if (num) {
-      return L.divIcon({ className: 'pin-icon pin-icon-num', html: '<span>' + num + '</span>',
-                         iconSize: [26, 26], iconAnchor: [13, 24] });
-    }
-    // Couleur du JOUR planifié prioritaire (le planning se lit sur la carte),
-    // sinon couleur du type d'épingle ; l'emoji du type reste dedans.
-    // v5.1 : une épingle partagée entre plusieurs jours prend la couleur du
-    // PREMIER, plus un liseré pointillé (pin-multi) pour se signaler.
-    var cls = 'pin-icon';
-    if (kind) cls += ' pin-icon-' + kind;
-    if (plannedDay != null && plannedDay >= 0) cls += ' pin-day-' + (plannedDay % DAY_COLORS.length);
-    if (multi) cls += ' pin-multi';
-    var em = pinEmoji(kind);
-    return L.divIcon({ className: cls,
-                       html: em ? '<span class="pk">' + em + '</span>' : '',
-                       iconSize: [28, 28], iconAnchor: [14, 25] });
-  }
-  function kindSelectorHtml(selected, idPrefix) {
-    return '<div class="pin-kinds" id="' + idPrefix + '-kinds">' + PIN_KINDS.map(function(k){
-      return '<button type="button" data-kind="' + k[0] + '" title="' + k[2] + '"' +
-        (k[0] === selected ? ' class="is-active"' : '') +
-        ' onclick="selectPinKind(this)">' + k[1] + '</button>';
-    }).join('') + '</div>';
-  }
-  window.selectPinKind = function(btn){
-    btn.parentElement.querySelectorAll('button').forEach(function(b){ b.classList.remove('is-active'); });
-    btn.classList.add('is-active');
-  };
+  // Les épingles viennent de static/pins.js — une seule définition pour la
+  // rêverie et le carnet, sinon les deux cartes divergent avec le temps.
+  var DAY_COLORS = NH_PINS.DAY_COLORS;
+  var pinEmoji = NH_PINS.emoji;
+  var pinIcon = NH_PINS.icon;
+
+  var kindSelectorHtml = NH_PINS.selecteurHtml;
+  window.selectPinKind = NH_PINS.choisir;
 
   function refreshPinIcons() {
     Object.keys(routePins).forEach(function(id){
@@ -595,6 +569,7 @@
       if (k >= nb) return;
       (jour || []).forEach(function(b){
         planBlocs[k].push({ mode: b.mode || 'car', heure: b.heure || '',
+                            fait: (b.fait === 0 ? 0 : 1),
                             steps: (b.steps || []).slice() });
       });
     });
@@ -628,7 +603,7 @@
   window.poolToHalte = function(id){
     if (selectedDay == null) return;
     if (!planBlocs[selectedDay]) planBlocs[selectedDay] = [];
-    planBlocs[selectedDay].push({ mode: 'car', heure: '', steps: [id] });
+    planBlocs[selectedDay].push({ mode: 'car', heure: '', fait: 1, steps: [id] });
     renderPlanning(); planScheduleSave(); planRefreshPinDays();
   };
   window.stepToPool = function(bi, si){
@@ -658,6 +633,14 @@
     if (!jour || !jour[bi]) return;
     jour[bi].heure = val || '';
     renderPearlDetail(); planScheduleSave();
+  };
+  window.blocFait = function(bi){
+    // « on ne l'a pas fait » : le bloc reste, grisé, hors des temps et hors
+    // du livre — et le geste se défait d'une touche.
+    var jour = planBlocs[selectedDay];
+    if (!jour || !jour[bi]) return;
+    jour[bi].fait = jour[bi].fait === 0 ? 1 : 0;
+    renderPlanning(); planScheduleSave(); planRefreshPinDays();
   };
   window.blocRemove = function(bi){
     var jour = planBlocs[selectedDay];
@@ -726,6 +709,7 @@
   function dayTotal(k) {
     var s = 0, partiel = false, jour = planBlocs[k] || [];
     jour.forEach(function(b, bi){
+      if (b.fait === 0) return;                     // pas fait : ne compte pas
       if (b.steps.length < 2) return;               // une halte ne coûte pas de trajet
       var r = dayRoutes[k + ':' + bi];
       if (r && r.duration_s != null) s += r.duration_s;
@@ -770,13 +754,17 @@
              '" onclick="blocSetMode(' + bi + ',\'' + m + '\')" title="' + m + '">' +
              MODE_LABEL[m] + '</button>';
     }).join('');
-    return '<div class="day-bloc" data-bloc="' + bi + '">' +
+    var pasFait = b.fait === 0;
+    return '<div class="day-bloc' + (pasFait ? ' est-annule' : '') + '" data-bloc="' + bi + '">' +
       '<div class="day-bloc-head">' +
         '<input type="time" class="bloc-heure" value="' + (b.heure || '') + '"' +
         ' onchange="blocSetHeure(' + bi + ', this.value)" title="Heure (facultative)">' +
         (estTrajet ? '<span class="bloc-modes">' + modes + '</span>' :
                      '<span class="bloc-halte">halte</span>') +
-        '<span class="bloc-duree">' + duree + '</span>' +
+        '<span class="bloc-duree">' + (pasFait ? 'pas fait' : duree) + '</span>' +
+        '<button type="button" class="bloc-fait" onclick="blocFait(' + bi + ')"' +
+        ' title="' + (pasFait ? 'Finalement, on l\'a fait' : 'On ne l\'a pas fait') + '">' +
+        (pasFait ? '↩' : '⊘') + '</button>' +
         '<button type="button" class="bloc-out" onclick="blocRemove(' + bi + ')"' +
         ' title="Supprimer ce bloc">✕</button>' +
       '</div>' +
@@ -819,7 +807,7 @@
         onAdd: function(evt){
           var id = Number(evt.item.dataset.itemId);
           evt.item.remove();
-          planBlocs[k].push({ mode: 'car', heure: '', steps: [id] });
+          planBlocs[k].push({ mode: 'car', heure: '', fait: 1, steps: [id] });
           renderPlanning(); planScheduleSave(); planRefreshPinDays();
         }
       });
@@ -838,7 +826,8 @@
       var steps = Array.from(ul.querySelectorAll('.day-step')).map(function(li){
         return Number(li.dataset.itemId);
       });
-      if (steps.length) neufs.push({ mode: ancien.mode, heure: ancien.heure, steps: steps });
+      if (steps.length) neufs.push({ mode: ancien.mode, heure: ancien.heure,
+                                     fait: ancien.fait === 0 ? 0 : 1, steps: steps });
     });
     planBlocs[k] = neufs;
     renderPlanning(); planScheduleSave(); planRefreshPinDays();
@@ -899,7 +888,7 @@
     Object.keys(dayRoutes).forEach(function(key){
       var p = key.split(':'), k = Number(p[0]), bi = Number(p[1]);
       var bloc = (planBlocs[k] || [])[bi];
-      if (k >= nb || !bloc || bloc.steps.length < 2) {
+      if (k >= nb || !bloc || bloc.steps.length < 2 || bloc.fait === 0) {
         if (dayRoutes[key] && dayRoutes[key].line) map.removeLayer(dayRoutes[key].line);
         delete dayRoutes[key];
       }
@@ -908,6 +897,7 @@
       var jour = planBlocs[k] || [];
       for (var bi = 0; bi < jour.length; bi++) {
         var bloc = jour[bi];
+        if (bloc.fait === 0) continue;              // pas fait : pas de tracé
         var ids = bloc.steps.filter(function(id){ return routePins[id]; });
         if (ids.length < 2) continue;
         var key = k + ':' + bi;
@@ -1295,7 +1285,8 @@
     // voiture, boucle à pied, retour en voiture. Rien n'est remplacé, et une
     // épingle peut revenir (le tracé garde ses répétitions telles quelles).
     if (!planBlocs[k]) planBlocs[k] = [];
-    planBlocs[k].push({ mode: routeProfile, heure: '', steps: routeOrder.slice() });
+    planBlocs[k].push({ mode: routeProfile, heure: '', fait: 1,
+                        steps: routeOrder.slice() });
     closeRouteModal();
     setRouteMode(false);
     renderPlanning();

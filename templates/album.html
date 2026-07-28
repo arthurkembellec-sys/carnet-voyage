@@ -60,14 +60,21 @@
     </div>
   </section>
 
-  {# ────── MINI CARTE (si photos géolocalisées) ────── #}
-  {% if geo_photos %}
+  {# ────── LA CARTE DU CARNET : étapes préparées + photos localisées ────── #}
+  {% if geo_photos or geo_etapes %}
   <section class="album-map-wrap">
     <div class="album-map-head">
       <span class="kicker">Sur la carte</span>
-      <span class="map-count">{{ geo_photos|length }} photo(s) localisée(s)</span>
+      <span class="map-count">
+        {%- if geo_etapes %}{{ geo_etapes|length }} étape(s){% endif -%}
+        {%- if geo_etapes and geo_photos %} · {% endif -%}
+        {%- if geo_photos %}{{ geo_photos|length }} photo(s) localisée(s){% endif -%}
+      </span>
     </div>
     <div id="album-map" class="album-map"></div>
+    {% if geo_etapes %}
+    <p class="album-map-hint">Touche une étape pour changer son épingle.</p>
+    {% endif %}
   </section>
   {% endif %}
 
@@ -347,10 +354,12 @@
 {# Libs : EXIF (extraction client) + SortableJS (drag & drop) #}
 <script src="{{ url_for('static', filename='vendor/exifr-lite.umd.js') }}"></script>
 <script src="{{ url_for('static', filename='vendor/Sortable.min.js') }}"></script>
-{# Lib Leaflet pour la mini-carte (uniquement si geo_photos) #}
-{% if geo_photos %}
+{# Leaflet + les épingles partagées avec la rêverie #}
+{% if geo_photos or geo_etapes %}
 <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
 <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
+<script>window.PIN_KINDS = {{ (pin_kinds or [])|tojson }};</script>
+<script src="{{ url_for('static', filename='pins.js') }}"></script>
 {% endif %}
 
 <script>
@@ -1426,12 +1435,15 @@
   window.openViewer = openViewer; window.closeViewer = closeViewer; window.viewerNav = viewerNav;
   window.deletePage = deletePage; window.addTextBlock = addTextBlock; window.toggleMargin = toggleMargin;
 
-  // ── Mini-carte (si geo_photos) ────────────────────────────────
-  {% if geo_photos %}
+  // ── Carte du carnet ───────────────────────────────────────────
+  // v5.6 : mêmes épingles que la rêverie (static/pins.js). Les étapes
+  // arrivent avec le type qu'on leur a donné là-bas ; on peut le changer ici.
+  {% if geo_photos or geo_etapes %}
   (function(){
     var el = document.getElementById('album-map');
-    if (!el || !window.L) return;
-    var pts = [
+    if (!el || !window.L || !window.NH_PINS) return;
+    var ETAPES = {{ (geo_etapes or [])|tojson }};
+    var PHOTOS = [
       {% for p in geo_photos %}
       { lat: {{ p.photo_gps_lat }}, lng: {{ p.photo_gps_lng }},
         thumb: "{{ url_for('serve_upload', filename=p.photo_thumb) }}",
@@ -1444,12 +1456,43 @@
       attribution: '© OpenStreetMap · © CARTO'
     }).addTo(map);
     var bounds = [];
-    pts.forEach(function(p){
-      var marker = L.marker([p.lat, p.lng]).addTo(map);
-      marker.bindPopup('<img src="' + p.thumb + '" style="max-width:160px;display:block;margin-bottom:6px"><div style="font-size:11px;color:#6C6E71">' + p.date + '</div>');
+
+    ETAPES.forEach(function(g){
+      var m = L.marker([g.lat, g.lng], {
+        icon: NH_PINS.icon(null, g.pin_kind, g.planned_day, false)
+      }).addTo(map);
+      var nom = (g.title || '').replace(/https?:\/\/\S+/g, '').trim().slice(0, 22);
+      if (nom) m.bindTooltip(nom, { permanent: true, direction: 'bottom',
+                                    className: 'pin-label', offset: [0, 6], opacity: 1 });
+      m.bindPopup('<strong>' + (g.title || 'Étape') + '</strong>' +
+        NH_PINS.selecteurHtml(g.pin_kind || '', 'ep' + g.itemId) +
+        '<button type="button" class="btn btn-secondary btn-sm pin-kind-save"' +
+        ' onclick="enregistrerEpingle(' + g.itemId + ')">OK</button>');
+      bounds.push([g.lat, g.lng]);
+    });
+
+    PHOTOS.forEach(function(p){
+      var m = L.marker([p.lat, p.lng], { icon: NH_PINS.iconPhoto(p.thumb) }).addTo(map);
+      m.bindPopup('<img src="' + p.thumb + '" style="max-width:160px;display:block;margin-bottom:6px">' +
+                  '<div style="font-size:11px;color:#6C6E71">' + p.date + '</div>');
       bounds.push([p.lat, p.lng]);
     });
+
     if (bounds.length) map.fitBounds(bounds, { padding: [24, 24], maxZoom: 14 });
+
+    window.enregistrerEpingle = async function(itemId){
+      var sel = document.querySelector('#ep' + itemId + '-kinds button.is-active');
+      var fd = new FormData();
+      fd.append('_csrf', CSRF);
+      fd.append('pin_kind', sel ? sel.dataset.kind : '');
+      try {
+        var d = await fetch('/item/' + itemId + '/pin_kind', { method: 'POST', body: fd })
+                        .then(function(r){ return r.json(); });
+        if (!d.ok) { setError(d.error || 'Erreur'); return; }
+        setSaved('Épingle enregistrée');
+        setTimeout(function(){ reloadKeepScroll(); }, 400);
+      } catch(e) { setError('Réseau'); }
+    };
   })();
   {% endif %}
 </script>
