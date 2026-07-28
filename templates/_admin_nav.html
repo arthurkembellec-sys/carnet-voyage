@@ -1,0 +1,14 @@
+{# Navigation de l'espace admin — une seule barre, partagée par toutes ses pages.
+   `actif` vaut 'accueil', 'comptes' ou 'sauvegardes'. #}
+<nav class="admin-nav" aria-label="Espace admin">
+  <a href="{{ url_for('admin_home') }}"
+     class="admin-nav-item{% if actif == 'accueil' %} is-here{% endif %}"
+     {% if actif == 'accueil' %}aria-current="page"{% endif %}>Tableau de bord</a>
+  <a href="{{ url_for('admin_comptes') }}"
+     class="admin-nav-item{% if actif == 'comptes' %} is-here{% endif %}"
+     {% if actif == 'comptes' %}aria-current="page"{% endif %}>Comptes</a>
+  <a href="{{ url_for('admin_backups_list') }}"
+     class="admin-nav-item{% if actif == 'sauvegardes' %} is-here{% endif %}"
+     {% if actif == 'sauvegardes' %}aria-current="page"{% endif %}>Sauvegardes</a>
+  <a href="{{ url_for('home') }}" class="admin-nav-item admin-nav-out">↩ Les carnets</a>
+</nav>

@@ -817,6 +817,72 @@ def admin_required(view):
 # transmet (SMS, WhatsApp) ; la personne clique et choisit son mot de passe.
 # Rien a retenir, rien a recopier — ca marche a tout age.
 RESET_TTL_HEURES = 24
+RESET_MAX_PAR_HEURE = 3        # demandes autonomes tolerees pour un meme compte
+
+# Envoi d'emails via Resend (meme fournisseur qu'AqGK). Tant que la cle n'est
+# pas posee, l'app ne fait PAS semblant : la page « mot de passe oublie » garde
+# le chemin par l'admin, et le dit. Aucun email fantome, aucun faux succes.
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
+MAIL_FROM = os.environ.get('MAIL_FROM', 'Notre Histoire <histoire@aqgk.fr>')
+
+
+def mail_configure():
+    return bool(RESEND_API_KEY)
+
+
+def _envoyer_mail(destinataire, sujet, html):
+    """Envoie un email. Retourne True seulement si Resend l'a accepte."""
+    if not RESEND_API_KEY:
+        log.warning("email non envoye a %s (%s) : RESEND_API_KEY absente",
+                    destinataire, sujet)
+        return False
+    import json as _json
+    import urllib.request as _url, urllib.error as _urlerr
+    corps = _json.dumps({'from': MAIL_FROM, 'to': [destinataire],
+                         'subject': sujet, 'html': html}).encode('utf-8')
+    req = _url.Request('https://api.resend.com/emails', data=corps, method='POST',
+                       headers={'Authorization': 'Bearer ' + RESEND_API_KEY,
+                                'Content-Type': 'application/json',
+                                'User-Agent': 'NotreHistoire/1.0'})
+    try:
+        with _url.urlopen(req, timeout=10) as resp:
+            if resp.status in (200, 201):
+                log.info("email envoye a %s (%s)", destinataire, sujet)
+                return True
+            log.error("Resend a repondu %s pour %s", resp.status, destinataire)
+    except _urlerr.HTTPError as e:
+        log.error("Resend HTTP %s pour %s : %s", e.code, destinataire,
+                  e.read().decode('utf-8', 'replace')[:300])
+    except Exception as e:
+        log.error("Resend injoignable pour %s : %s", destinataire, e)
+    return False
+
+
+def _mail_reset_html(prenom, lien):
+    """Le mail est court : une phrase, un bouton, une precaution."""
+    return (
+        '<!doctype html><html><head><meta charset="utf-8"></head>'
+        '<body style="margin:0;padding:28px;background:#FBFBFA;'
+        'font-family:Helvetica,Arial,sans-serif;color:#17181A">'
+        '<div style="max-width:480px;margin:0 auto;background:#fff;'
+        'border:1px solid rgba(23,24,26,0.08);border-radius:14px;padding:32px">'
+        '<p style="margin:0 0 6px;font-size:11px;letter-spacing:.12em;'
+        'text-transform:uppercase;color:#6C6E71">Notre Histoire</p>'
+        '<h1 style="margin:0 0 16px;font-size:22px;font-weight:400;font-style:italic">'
+        'Bonjour ' + (prenom or '') + ',</h1>'
+        '<p style="margin:0 0 24px;font-size:15px;line-height:1.6;color:#3B3D40">'
+        'Voici votre lien pour choisir un nouveau mot de passe. '
+        'Touchez le bouton, écrivez votre mot de passe deux fois, et c\'est réglé.</p>'
+        '<p style="margin:0 0 24px"><a href="' + lien + '" '
+        'style="display:inline-block;background:#A8503D;color:#fff;'
+        'text-decoration:none;padding:14px 26px;border-radius:999px;'
+        'font-size:15px">Choisir mon mot de passe</a></p>'
+        '<p style="margin:0;font-size:13px;line-height:1.6;color:#6C6E71">'
+        'Ce lien ne fonctionne qu\'une seule fois et expire dans ' +
+        str(RESET_TTL_HEURES) + ' heures. '
+        'Si vous n\'avez rien demandé, ignorez ce message : votre mot de passe '
+        'actuel reste valable.</p>'
+        '</div></body></html>')
 
 
 def _maintenant():
@@ -5971,12 +6037,40 @@ def admin_compte_lien(uid_cible):
                            lien_pour=dict(u), ttl=RESET_TTL_HEURES)
 
 
-@app.route('/mot-de-passe-oublie')
+@app.route('/mot-de-passe-oublie', methods=['GET', 'POST'])
 def mot_de_passe_oublie():
-    """Ce que voit quelqu'un qui ne sait plus son mot de passe. C'est la
-    notice, a l'ecran, au moment ou il en a besoin."""
-    return render_template('mot_de_passe_oublie.html',
-                           contact=sorted(ADMIN_EMAILS)[0] if ADMIN_EMAILS else '')
+    """Ce que voit quelqu'un qui ne sait plus son mot de passe.
+
+    Si l'envoi d'emails est branche, il demande son lien lui-meme et le
+    recoit. Sinon, la page reste la notice : il passe par l'admin. On ne
+    propose jamais un formulaire qui ne posterait nulle part."""
+    contact = sorted(ADMIN_EMAILS)[0] if ADMIN_EMAILS else ''
+    if request.method == 'POST' and mail_configure():
+        if not csrf_check():
+            flash("Session expiree, recommencez.", "err")
+            return redirect(url_for('mot_de_passe_oublie'))
+        email = (request.form.get('email') or '').strip().lower()
+        u = query("SELECT id, email, display_name FROM users "
+                  "WHERE LOWER(email)=? AND deleted_at IS NULL", (email,), one=True)
+        if u:
+            # Garde-fou : on ne transforme pas la page en machine a spammer
+            recents = query(
+                "SELECT COUNT(*) AS n FROM password_resets "
+                "WHERE user_id=? AND created_at > datetime('now', '-1 hour')",
+                (u['id'],), one=True)
+            if (recents['n'] if recents else 0) < RESET_MAX_PAR_HEURE:
+                token = _reset_creer(u['id'], None)
+                lien = url_for('reset_password', token=token, _external=True)
+                _envoyer_mail(u['email'], "Votre lien pour choisir un mot de passe",
+                              _mail_reset_html(u['display_name'], lien))
+            else:
+                log.warning("trop de demandes de reinitialisation pour le compte %s", u['id'])
+        # Reponse IDENTIQUE dans tous les cas : compte connu ou non, quota
+        # atteint ou non. La page ne doit jamais reveler qui a un compte ici.
+        return render_template('mot_de_passe_oublie.html', contact=contact,
+                               par_mail=True, envoye=True)
+    return render_template('mot_de_passe_oublie.html', contact=contact,
+                           par_mail=mail_configure(), envoye=False)
 
 
 @app.route('/reset/<token>', methods=['GET', 'POST'])

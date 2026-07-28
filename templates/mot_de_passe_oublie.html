@@ -13,16 +13,43 @@
     <p class="lead">Ça arrive. On le remet en trois gestes.</p>
   </section>
 
+  {% if envoye %}
+  {# Réponse volontairement identique, que le compte existe ou non. #}
+  <section class="notice-envoye">
+    <h2>C'est parti.</h2>
+    <p>
+      Si un compte existe avec cette adresse, le lien vient d'y être envoyé.
+      Regardez votre boîte mail dans un instant — pensez aux courriers indésirables.
+    </p>
+  </section>
+  {% endif %}
+
   <ol class="notice-steps">
     <li>
       <span class="notice-num">1</span>
       <div>
         <h2>Demandez votre lien</h2>
+        {% if par_mail %}
+        <p>Écrivez votre adresse email ici, et le lien vous arrive.</p>
+        <form method="post" class="notice-form">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <label class="sr-only" for="email">Votre adresse email</label>
+          <input type="email" id="email" name="email" required
+                 placeholder="votre@email.fr" autocomplete="email">
+          <button type="submit" class="btn btn-primary">Recevoir mon lien</button>
+        </form>
+        <p class="notice-form-aside">
+          Pas d'email sous la main&nbsp;? Écrivez à
+          {% if contact %}<a href="mailto:{{ contact }}">{{ contact }}</a>{% else %}la personne qui gère l'application{% endif %},
+          qui vous l'enverra par SMS.
+        </p>
+        {% else %}
         <p>
           Écrivez ou téléphonez à
           {% if contact %}<a href="mailto:{{ contact }}">{{ contact }}</a>{% else %}la personne qui gère l'application{% endif %}.
           Dites simplement&nbsp;: «&nbsp;je n'arrive plus à me connecter&nbsp;».
         </p>
+        {% endif %}
       </div>
     </li>
     <li>
@@ -30,8 +57,9 @@
       <div>
         <h2>Ouvrez le lien reçu</h2>
         <p>
-          Vous recevrez un lien par SMS ou par message. Touchez-le&nbsp;: il ouvre
-          directement la page où choisir votre mot de passe. Rien à recopier.
+          Vous recevrez un lien {% if par_mail %}par email{% else %}par SMS ou par message{% endif %}.
+          Touchez-le&nbsp;: il ouvre directement la page où choisir votre mot de passe.
+          Rien à recopier.
         </p>
       </div>
     </li>

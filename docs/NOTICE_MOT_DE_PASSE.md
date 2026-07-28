@@ -70,13 +70,59 @@ d'ouvrir `/admin` reçoit un 403.
 
 ---
 
-## Pourquoi pas un « mot de passe oublié » par email
+## Brancher l'envoi d'emails (Resend) — la manip
 
-Carnet de voyage n'a pas d'envoi d'emails configuré en production (aucune
-variable `SMTP_*` sur Railway). Tant que ce n'est pas branché, le lien passe
-par vous — c'est le chemin le plus sûr et le plus simple pour des personnes
-de tous âges : elles n'ont ni compte mail à retrouver, ni mot de passe
-provisoire à taper sans faute.
+Le code est **déjà en place**. Tant que la variable `RESEND_API_KEY` est
+absente, l'app ne fait pas semblant : la page « Mot de passe oublié » garde le
+chemin par l'administrateur. Dès que la clé est posée, la même page affiche un
+champ email et envoie le lien toute seule. **Aucun déploiement à refaire** —
+Railway redémarre le service quand une variable change.
 
-Le jour où l'envoi d'emails sera en place, la page « Mot de passe oublié »
-pourra envoyer le lien elle-même. Le reste du mécanisme ne changera pas.
+### Bonne nouvelle : la moitié du travail est déjà faite
+
+AqGK utilise déjà Resend avec le domaine `aqgk.fr` vérifié. Carnet est sur
+`histoire.aqgk.fr`, un sous-domaine du même domaine : **la même clé fonctionne**,
+et on peut envoyer depuis n'importe quelle adresse `@aqgk.fr`.
+
+### Le chemin le plus court (2 minutes)
+
+Réutiliser la clé d'AqGK. Depuis le tableau de bord Railway :
+
+1. Projet **AqGK** → service → onglet **Variables** → copier la valeur de
+   `RESEND_API_KEY`.
+2. Projet **confident-gratitude** (Carnet) → service **web** → **Variables**
+   → **New Variable** :
+   - `RESEND_API_KEY` = la valeur copiée
+   - `MAIL_FROM` = `Notre Histoire <histoire@aqgk.fr>`
+3. Railway redéploie tout seul (~1 min). Vérifier sur
+   `https://histoire.aqgk.fr/mot-de-passe-oublie` : un champ email doit être apparu.
+
+En ligne de commande, depuis le dossier du projet, même résultat :
+
+```bash
+railway variables --service web --set "MAIL_FROM=Notre Histoire <histoire@aqgk.fr>"
+```
+
+Puis la clé, à coller à la place de `LA_CLE` (elle ne doit apparaître ni dans un
+fichier du dépôt, ni dans un historique partagé) :
+
+```bash
+railway variables --service web --set "RESEND_API_KEY=LA_CLE"
+```
+
+### Si vous préférez une clé dédiée à Carnet
+
+Sur [resend.com](https://resend.com) → **API Keys** → **Create API Key**,
+permission *Sending access*, domaine `aqgk.fr`. Puis les deux mêmes variables.
+Une clé séparée se révoque sans toucher à AqGK — c'est plus propre si un jour
+les deux apps se séparent.
+
+### Une fois branché
+
+- La page « Mot de passe oublié » affiche un champ email et envoie le lien.
+- La réponse est **la même** que l'adresse existe ou non : la page ne dit jamais
+  qui a un compte.
+- **3 demandes par heure et par compte** au maximum, pour qu'on ne puisse pas
+  s'en servir pour inonder quelqu'un de messages.
+- Le chemin par l'administrateur (créer un lien à la main) **continue de
+  marcher** : c'est le secours pour qui n'a pas accès à sa boîte mail.

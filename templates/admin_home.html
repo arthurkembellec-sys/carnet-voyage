@@ -1,11 +1,13 @@
 {% extends '_base.html' %}
 {% block title %}Administration — Notre Histoire{% endblock %}
 {% block back_link %}
-  <a href="{{ url_for('profil') }}" class="brand">← Profil</a>
+  <a href="{{ url_for('home') }}" class="brand">← Les carnets</a>
 {% endblock %}
 
 {% block content %}
 <main class="page">
+
+  {% set actif = 'accueil' %}{% include '_admin_nav.html' %}
 
   <section class="hero">
     <p class="kicker">Administration</p>
