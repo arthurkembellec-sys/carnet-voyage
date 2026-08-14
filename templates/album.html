@@ -59,9 +59,12 @@
       <span class="sort-hint">Glisse-dépose les photos pour affiner</span>
       {# v5.7 : densité de la grille — mémorisée sur cet appareil #}
       <div class="density-toggle" role="group" aria-label="Densité d'affichage">
-        <button type="button" data-density="recit"   onclick="setDensity('recit')">Récit</button>
-        <button type="button" data-density="confort" onclick="setDensity('confort')">Confort</button>
-        <button type="button" data-density="dense"   onclick="setDensity('dense')">Dense</button>
+        <button type="button" data-density="recit"   onclick="setDensity('recit')"
+                title="Grandes photos, peu par rangée — pour relire l'album comme un récit">Récit</button>
+        <button type="button" data-density="confort" onclick="setDensity('confort')"
+                title="L'équilibre par défaut — regarder confortablement">Confort</button>
+        <button type="button" data-density="dense"   onclick="setDensity('dense')"
+                title="Petites vignettes, beaucoup à l'écran — pour trier, dater, organiser">Dense</button>
       </div>
     </div>
   </section>
@@ -193,7 +196,7 @@
                 {% set _photo_count = sub.pages|selectattr('photo_path')|list|length %}
                 {% set _hero = _photo_count >= 3 %}
                 {% set _fold_from = 7 if sub.pages|length >= 10 else 0 %}
-                <ul class="pages-list pages-list-sub">
+                <ul class="pages-list pages-list-sub" data-day="{{ (sub.section.date_start or '')[:10] }}">
                   {% for p in sub.pages %}
                     {% set _idx = loop.index0 %}
                     {% include '_page_item.html' %}
@@ -247,7 +250,7 @@
                 {% set _photo_count = sub.pages|selectattr('photo_path')|list|length %}
                 {% set _hero = _photo_count >= 3 %}
                 {% set _fold_from = 7 if sub.pages|length >= 10 else 0 %}
-                <ul class="pages-list pages-list-sub">
+                <ul class="pages-list pages-list-sub" data-day="{{ (sub.section.date_start or '')[:10] }}">
                   {% for p in sub.pages %}
                     {% set _idx = loop.index0 %}
                     {% include '_page_item.html' %}
@@ -465,6 +468,7 @@
     <div id="viewer-pins" class="viewer-pins" hidden></div>
   </div>
   <div class="viewer-caption" id="viewer-caption"></div>
+  <div class="viewer-meta" id="viewer-meta"></div>
   <div class="viewer-toolbar">
     <button type="button" class="viewer-pin-btn" id="viewer-pin-btn" onclick="togglePinMode()">
       ✎ Épingler une note
@@ -1306,37 +1310,66 @@
       '.album-section:not(.album-section-margin) .page-item'
     )).map(function(li){ return li.dataset.pageId; });
   }
+  /* v5.13 : sur écran tactile, PAS de mini-poignée — toute la tuile se
+     saisit par appui long (300 ms). Le tap court continue d'ouvrir la
+     photo. Sur desktop, la poignée reste (le survol la révèle). */
+  var IS_TOUCH = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
   function initSortable(listEl, isMargin) {
     if (!listEl || !window.Sortable) return;
     new Sortable(listEl, {
       animation: 150,
-      handle: '.drag-handle',
+      handle: IS_TOUCH ? undefined : '.drag-handle',
       ghostClass: 'page-ghost',
       dragClass: 'page-dragging',
       draggable: '.page-item',
       filter: '.margin-day-sep, .moment-sep, .fold-toggle',
       /* v5.7 : les listes d'un même album partagent un groupe — une photo
-         se glisse d'un moment (ou d'un jour) à l'autre, comme avant la
-         découpe en une liste par moment. */
+         se glisse d'un moment (ou d'un jour) à l'autre. */
       group: isMargin ? undefined : 'album-main',
-      delay: 50,
+      delay: IS_TOUCH ? 300 : 50,
       delayOnTouchOnly: true,
-      onEnd: async function(){
-        var ids = isMargin
-          ? Array.from(listEl.querySelectorAll('.page-item')).map(function(li){
-              return li.dataset.pageId;
-            })
-          : collectMainIds();
-        setSaving('Réorganisation...');
-        var fd = new FormData(); fd.append('_csrf', CSRF);
-        ids.forEach(function(id){ fd.append('page_id', id); });
+      touchStartThreshold: 6,
+      fallbackOnBody: true,
+      onEnd: async function(evt){
+        if (isMargin) {
+          /* le rail de marge garde son ordre par position */
+          var ids = Array.from(listEl.querySelectorAll('.page-item')).map(function(li){
+            return li.dataset.pageId;
+          });
+          setSaving('Réorganisation...');
+          var fd = new FormData(); fd.append('_csrf', CSRF);
+          ids.forEach(function(id){ fd.append('page_id', id); });
+          try {
+            var r = await fetch("{{ url_for('carnet_reorder_pages', cid_carnet=carnet.id) }}", { method:'POST', body: fd });
+            var d = await r.json();
+            if (!d.ok) { setError('Reorder : ' + (d.error || '')); return; }
+            setSaved('Ordre enregistré');
+          } catch(e) { setError('Reseau : ' + e.message); }
+          return;
+        }
+        /* v5.13 : déplacer = RE-DATER. La photo prend une date entre ses
+           nouvelles voisines (ou le jour de la liste d'accueil) : plus
+           jamais de retour à la date d'import au rendu suivant. */
+        var li = evt.item;
+        function voisin(el, sens) {
+          var n = sens > 0 ? el.nextElementSibling : el.previousElementSibling;
+          while (n && !n.classList.contains('page-item')) {
+            n = sens > 0 ? n.nextElementSibling : n.previousElementSibling;
+          }
+          return n ? n.dataset.pageId : '';
+        }
+        var fd2 = new FormData();
+        fd2.append('_csrf', CSRF);
+        fd2.append('prev_id', voisin(li, -1));
+        fd2.append('next_id', voisin(li, +1));
+        fd2.append('day', (li.closest('.pages-list-sub') || {}).dataset ? (li.closest('.pages-list-sub').dataset.day || '') : '');
+        setSaving('Déplacement...');
         try {
-          var r = await fetch("{{ url_for('carnet_reorder_pages', cid_carnet=carnet.id) }}", { method:'POST', body: fd });
-          var d = await r.json();
-          if (!d.ok) { setError('Reorder : ' + (d.error || '')); return; }
-          var lbl = document.getElementById('sort-mode-label');
-          if (lbl) lbl.textContent = 'ordre manuel';
-          setSaved('Ordre enregistré');
+          var r2 = await fetch('/album_page/' + li.dataset.pageId + '/deplacer', { method: 'POST', body: fd2 });
+          var d2 = await r2.json();
+          if (!d2.ok) { setError('Déplacement : ' + (d2.error || '')); return; }
+          setSaved('Photo replacée au ' + (d2.taken_at || '').slice(0, 10));
+          setTimeout(function(){ reloadKeepScroll(); }, 450);
         } catch(e) { setError('Reseau : ' + e.message); }
       }
     });
@@ -1572,7 +1605,8 @@
       const pwrap = img.closest('.page-item, .rail-note');
       const cap = pwrap ? pwrap.querySelector('.page-caption') : null;
       return { full: img.dataset.full, pageId: img.dataset.pageId,
-               photoId: img.dataset.photoId || '', caption: (cap ? cap.value : '') };
+               photoId: img.dataset.photoId || '', caption: (cap ? cap.value : ''),
+               author: img.dataset.author || '', date: img.dataset.date || '' };
     });
   }
   function openViewer(pageId) {
@@ -1589,6 +1623,9 @@
     closePinPopover();
     im.src = viewerPhotos[viewerIdx].full;
     document.getElementById('viewer-caption').textContent = viewerPhotos[viewerIdx].caption;
+    var vm = document.getElementById('viewer-meta');
+    var p = viewerPhotos[viewerIdx];
+    vm.textContent = [p.date, p.author ? ('par ' + p.author) : ''].filter(Boolean).join(' · ');
     v.hidden = false;
     document.body.style.overflow = 'hidden';
     if (im.complete) layoutPins(); else im.onload = layoutPins;

@@ -5268,3 +5268,22 @@ body.photo-roll-open .album-footer { opacity: 0; pointer-events: none; }
 .vp-add-box { margin-top: 6px; display: flex; flex-direction: column; gap: 5px; }
 .vp-add-box .lieu-q { width: 100%; }
 .corbeille-planning { margin: 6px 16px 14px; }
+
+/* ── v5.13 : maniabilité mobile + auteur ─────────────────────────── */
+.page-author { font-size: 12px; color: var(--ink-whisper); margin-bottom: 3px; }
+.viewer-meta {
+  text-align: center;
+  color: rgba(255,255,255,0.65);
+  font-size: 12.5px;
+  margin-top: 4px;
+}
+/* sur tactile : pas de poignée (toute la tuile se saisit par appui long),
+   et le bouton ⋯ est plus gros (cible 34px, D3) */
+@media (pointer: coarse) {
+  .album-page .page-item .drag-handle { display: none; }
+  .album-page .page-item[data-type="text"] .drag-handle { display: inline-flex; }
+  .album-page .page-more { width: 34px; height: 34px; font-size: 17px; opacity: 0.9; }
+}
+/* pendant un drag : la tuile saisie se détache nettement */
+.page-dragging { opacity: 0.95; }
+.page-ghost { opacity: 0.35; outline: 2px dashed var(--accent); outline-offset: -2px; }

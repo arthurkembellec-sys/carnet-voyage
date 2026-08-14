@@ -37,6 +37,8 @@
            data-full="{{ url_for('serve_upload', filename=p.photo_path) }}"
            data-page-id="{{ p.id }}"
            data-photo-id="{{ p.photo_id or '' }}"
+           data-author="{{ p.added_by_name or '' }}"
+           data-date="{{ (p.photo_taken_at or '')[:10] }}"
            loading="lazy" alt="">
       {% if p.caption %}<span class="tile-caption-dot" title="{{ p.caption }}" aria-hidden="true"></span>{% endif %}
       {% if p.photo_notes_n %}
@@ -94,6 +96,10 @@
     {% endif %}
     {% if p.type == 'photo' %}
       <div class="page-meta">
+        {# v5.13 : qui a apporté cette photo #}
+        {% if p.added_by_name %}
+        <div class="page-author">📷 ajoutée par {{ p.added_by_name }}</div>
+        {% endif %}
         {% if p.photo_taken_at %}
           <div class="page-date" title="Date de prise" data-iso="{{ p.photo_taken_at }}" data-fmt="datetime">
             {{ p.photo_taken_at|replace('T',' ') }}

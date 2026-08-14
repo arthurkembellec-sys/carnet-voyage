@@ -4371,6 +4371,78 @@ def carnet_reorder_pages(cid_carnet):
     return jsonify({'ok': True, 'mode': 'manual'})
 
 
+@app.route('/album_page/<int:page_id>/deplacer', methods=['POST'])
+@couple_required
+def page_deplacer(page_id):
+    """v5.13 — Deplacer une page, c'est la RE-DATER (retour telephone du
+    2026-08-14 : le drag posait une position a plat que les sections par
+    date ecrasaient au rendu suivant — la photo « revenait » a sa date
+    d'import). Ici la chronologie reste l'unique verite :
+    - glissee entre deux voisines datees -> point median de leurs dates ;
+    - en tete/queue de liste -> voisine -1 min / +1 min ;
+    - dans un jour vide (data-day) -> ce jour a 12:00.
+    S'applique aux pages photo et video ; un bloc texte deplace son ancre
+    (created_at, qui EST sa cle chronologique). Source tracee 'manuel'."""
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    page = query("SELECT ap.*, c.couple_id FROM album_pages ap "
+                 "JOIN carnets c ON c.id=ap.carnet_id WHERE ap.id=?",
+                 (page_id,), one=True)
+    if not page or page['couple_id'] != current_espace_id():
+        return jsonify({'ok': False, 'error': '404'}), 404
+
+    def _page_ts(pid):
+        if not pid or not str(pid).isdigit():
+            return None
+        r = query("""SELECT COALESCE(p.taken_at, v.taken_at, ap.created_at) AS ts
+                     FROM album_pages ap
+                     LEFT JOIN photos p ON p.id = ap.photo_id
+                     LEFT JOIN videos v ON v.id = ap.video_id
+                     WHERE ap.id=? AND ap.carnet_id=?""",
+                  (int(pid), page['carnet_id']), one=True)
+        return _norm_ts(r['ts']) if r and r['ts'] else None
+
+    prev_ts = _page_ts(request.form.get('prev_id'))
+    next_ts = _page_ts(request.form.get('next_id'))
+    day = (request.form.get('day') or '').strip()[:10]
+
+    def _parse(ts):
+        try:
+            return datetime.fromisoformat(ts[:19].replace(' ', 'T'))
+        except (ValueError, TypeError):
+            return None
+    d_prev, d_next = _parse(prev_ts), _parse(next_ts)
+    if d_prev and d_next:
+        nouveau = d_prev + (d_next - d_prev) / 2
+    elif d_prev:
+        nouveau = d_prev + timedelta(minutes=1)
+    elif d_next:
+        nouveau = d_next - timedelta(minutes=1)
+    elif day:
+        try:
+            nouveau = datetime.strptime(day, '%Y-%m-%d').replace(hour=12)
+        except ValueError:
+            return jsonify({'ok': False, 'error': 'bad_day'}), 400
+    else:
+        return jsonify({'ok': False, 'error': 'no_target'}), 400
+    iso = nouveau.isoformat(timespec='seconds')
+
+    if page['photo_id']:
+        execute("UPDATE photos SET taken_at=?, taken_at_source='manuel' WHERE id=?",
+                (iso, page['photo_id']))
+    elif page['video_id']:
+        execute("UPDATE videos SET taken_at=? WHERE id=?", (iso, page['video_id']))
+    else:
+        # bloc texte : created_at est sa cle chronologique
+        execute("UPDATE album_pages SET created_at=? WHERE id=?", (iso, page_id))
+    execute("UPDATE album_pages SET manual_order=0 WHERE id=?", (page_id,))
+    try:
+        _recompute_sections(page['carnet_id'])
+    except Exception as e:
+        log.warning("recompute apres deplacement: %s", e)
+    return jsonify({'ok': True, 'taken_at': iso})
+
+
 @app.route('/carnet/<int:cid_carnet>/pages/sort_chrono', methods=['POST'])
 @couple_required
 def carnet_sort_chrono(cid_carnet):
