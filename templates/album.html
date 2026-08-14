@@ -555,6 +555,50 @@
   window.adaterToggleAll = adaterToggleAll;
   window.submitDaterLot = submitDaterLot;
 
+  /* ─ v5.10 : définir / corriger le lieu d'une photo ─ */
+  function openLieuSearch(btn) {
+    var box = btn.parentElement.querySelector('.lieu-search');
+    box.hidden = !box.hidden;
+    if (!box.hidden) box.querySelector('.lieu-q').focus();
+  }
+  async function runLieuSearch(el) {
+    var wrap = el.closest('.lieu-search');
+    var q = wrap.querySelector('.lieu-q').value.trim();
+    var out = wrap.querySelector('.lieu-results');
+    if (q.length < 2) { out.textContent = 'Tape au moins 2 lettres.'; return; }
+    out.textContent = 'Recherche…';
+    try {
+      var r = await fetch('/geo/search?q=' + encodeURIComponent(q));
+      var d = await r.json();
+      out.innerHTML = '';
+      if (!d.ok || !d.results.length) { out.textContent = 'Aucun lieu trouvé — précise (ville, pays).'; return; }
+      d.results.slice(0, 5).forEach(function(res){
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'lieu-result';
+        b.textContent = res.label;
+        b.addEventListener('click', function(){ pickLieu(wrap, res); });
+        out.appendChild(b);
+      });
+    } catch(e) { out.textContent = 'Réseau — réessaie.'; }
+  }
+  async function pickLieu(wrap, res) {
+    var photoId = wrap.closest('.page-lieu-edit').dataset.photoId;
+    setSaving('Lieu…');
+    var fd = new FormData();
+    fd.append('_csrf', CSRF);
+    fd.append('lat', res.lat); fd.append('lng', res.lng); fd.append('label', res.label);
+    try {
+      var r = await fetch('/photo/' + photoId + '/lieu', { method: 'POST', body: fd });
+      var d = await r.json();
+      if (!d.ok) { setError('Lieu : ' + (d.error || '')); return; }
+      setSaved('Lieu enregistré — la photo rejoint sa scène');
+      setTimeout(function(){ reloadKeepScroll(); }, 450);
+    } catch(e) { setError('Réseau'); }
+  }
+  window.openLieuSearch = openLieuSearch;
+  window.runLieuSearch = runLieuSearch;
+
   /* ─ Outils de tuile (⋯) : un seul panneau ouvert à la fois ─ */
   function toggleTools(btn) {
     const item = btn.closest('.page-item');

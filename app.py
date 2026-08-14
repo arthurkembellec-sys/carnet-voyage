@@ -32,6 +32,16 @@ import bcrypt
 import qrcode
 import qrcode.image.svg as qrsvg
 from PIL import Image, ExifTags
+
+# v5.10 — HEIC/HEIF (photos iPhone envoyees sans conversion Safari).
+# Optionnel : sans pillow-heif l'app fonctionne, mais un .heic uploadera
+# en erreur — le log le dit clairement (pas de repli muet, R4).
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    _HEIF_OK = True
+except ImportError:
+    _HEIF_OK = False
 from flask import (
     Flask, render_template, request, redirect, url_for, session,
     jsonify, abort, flash, send_from_directory
@@ -40,6 +50,9 @@ from flask import (
 logging.basicConfig(level=logging.INFO,
     format='[%(asctime)s] %(levelname)s %(name)s: %(message)s')
 log = logging.getLogger('histoire')
+if not _HEIF_OK:
+    log.warning("pillow-heif absent : les uploads .heic (iPhone) echoueront "
+                "avec une erreur visible cote client")
 
 # ── Config ────────────────────────────────────────────────────────────
 APP_VERSION = "2.4.1-pdf-btn-reverie-map"
@@ -673,6 +686,9 @@ def init_db():
         # (le seul moment monumental de la page Histoire).
         "ALTER TABLE couples ADD COLUMN date_charniere TEXT DEFAULT ''",
         "ALTER TABLE couples ADD COLUMN charniere_titre TEXT DEFAULT ''",
+        # ── v5.10 — origine du lieu d'une photo ('exif' | 'manuel' | '')
+        # meme logique de tracabilite que taken_at_source.
+        "ALTER TABLE photos ADD COLUMN lieu_source TEXT DEFAULT ''",
     ]
     for sql in migrations:
         try:
@@ -4124,12 +4140,13 @@ def carnet_upload_photos(cid_carnet):
                              data.get('taken_at'), gps_lat, gps_lng)
         photo_id = execute(
             "INSERT INTO photos (couple_id, file_path, thumb_path, width, height, "
-            "taken_at, gps_lat, gps_lng, added_by, taken_at_source, orig_filename) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "taken_at, gps_lat, gps_lng, added_by, taken_at_source, orig_filename, "
+            "lieu_source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (c['couple_id'], data['file_path'], data['thumb_path'],
              data['width'], data['height'], data['taken_at'],
              gps_lat, gps_lng, session['uid'],
-             taken_source, (f.filename or '')[:255])
+             taken_source, (f.filename or '')[:255],
+             'exif' if gps_lat is not None else '')
         )
         if data.get('mid_path'):
             execute("UPDATE photos SET mid_path=? WHERE id=?",
@@ -4487,6 +4504,37 @@ def photo_note_add(photo_id):
                    LEFT JOIN users u ON u.id = pn.auteur_id WHERE pn.id=?""",
                 (note_id,), one=True)
     return jsonify({'ok': True, 'note': dict(row)})
+
+
+@app.route('/photo/<int:photo_id>/lieu', methods=['POST'])
+@couple_required
+def photo_set_lieu(photo_id):
+    """v5.10 — Pose (ou corrige) le LIEU d'une photo sans GPS : l'utilisateur
+    choisit un resultat de /geo/search (lat, lng, label). Le reverse-geocoding
+    enrichit pays/ville en arriere-plan ; le label choisi reste prioritaire."""
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    photo = _photo_of_espace_or_none(photo_id)
+    if not photo:
+        return jsonify({'ok': False, 'error': '404'}), 404
+    lat = _safe_float(request.form.get('lat'))
+    lng = _safe_float(request.form.get('lng'))
+    label = (request.form.get('label') or '').strip()[:200]
+    if lat is None or lng is None or not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+        return jsonify({'ok': False, 'error': 'coords'}), 400
+    execute("UPDATE photos SET gps_lat=?, gps_lng=?, lieu_source='manuel' WHERE id=?",
+            (lat, lng, photo_id))
+    _enrich_photo_geo(photo_id, lat, lng)   # best effort (cache Nominatim)
+    if label:
+        execute("UPDATE photos SET address_full=? WHERE id=?", (label, photo_id))
+    # les sections jour/lieu de tous les carnets qui montrent cette photo
+    # se recalculent (une photo peut vivre dans plusieurs albums)
+    for r in query("SELECT DISTINCT carnet_id FROM album_pages WHERE photo_id=?", (photo_id,)):
+        try:
+            _recompute_sections(r['carnet_id'])
+        except Exception as e:
+            log.warning("recompute apres lieu manuel: %s", e)
+    return jsonify({'ok': True, 'lat': lat, 'lng': lng, 'label': label})
 
 
 @app.route('/photo_note/<int:note_id>/supprimer', methods=['POST'])

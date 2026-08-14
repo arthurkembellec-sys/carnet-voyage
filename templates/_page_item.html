@@ -133,6 +133,18 @@
             {%- endif -%}
           </a>
         {% endif %}
+        {# v5.10 : définir / corriger le lieu (recherche Nominatim existante) #}
+        <div class="page-lieu-edit" data-photo-id="{{ p.photo_id }}">
+          <button type="button" class="page-action-btn" onclick="openLieuSearch(this)">
+            📍 {{ 'Corriger le lieu' if p.photo_gps_lat is not none else 'Définir le lieu' }}
+          </button>
+          <div class="lieu-search" hidden>
+            <input type="search" class="lieu-q" placeholder="Ville, lieu, adresse…"
+                   onkeydown="if(event.key==='Enter'){event.preventDefault();runLieuSearch(this);}">
+            <button type="button" class="page-action-btn" onclick="runLieuSearch(this)">Chercher</button>
+            <div class="lieu-results"></div>
+          </div>
+        </div>
       </div>
     {% endif %}
 
