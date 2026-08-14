@@ -655,6 +655,19 @@ def init_db():
         # 2000 trop lourd). Generee a l'upload pour le neuf, paresseusement
         # pour l'existant (_ensure_mid) -> pas de migration lourde au boot.
         "ALTER TABLE photos ADD COLUMN mid_path TEXT DEFAULT ''",
+        # ── v5.8 — epingles sur photo : note ancree a un point (x, y) de
+        # l'image, coordonnees NORMALISEES 0-1 (independantes de la taille
+        # d'affichage). Multi-auteur : couleur par membre dans la lightbox.
+        """CREATE TABLE IF NOT EXISTS photo_notes (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            photo_id   INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+            x          REAL NOT NULL,
+            y          REAL NOT NULL,
+            texte      TEXT NOT NULL DEFAULT '',
+            auteur_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_photo_notes_photo ON photo_notes(photo_id)",
     ]
     for sql in migrations:
         try:
@@ -3978,6 +3991,29 @@ def carnet_album(cid_carnet):
           AND NOT EXISTS (SELECT 1 FROM album_pages ap WHERE ap.video_id = v.id)
         ORDER BY v.added_at ASC
     """, (c['couple_id'],))]
+    # v5.8 : epingles sur photo — payload pour la lightbox + compteur tuile
+    photo_ids = sorted({p['photo_id'] for p in pages['all'] if p.get('photo_id')})
+    photo_notes = {}
+    if photo_ids:
+        ph_n = ','.join('?' * len(photo_ids))
+        for r in query(f"""
+            SELECT pn.id, pn.photo_id, pn.x, pn.y, pn.texte, pn.auteur_id,
+                   pn.created_at, u.display_name AS auteur
+            FROM photo_notes pn LEFT JOIN users u ON u.id = pn.auteur_id
+            WHERE pn.photo_id IN ({ph_n})
+            ORDER BY pn.created_at ASC, pn.id ASC
+        """, tuple(photo_ids)):
+            photo_notes.setdefault(r['photo_id'], []).append(dict(r))
+    for p in pages['all']:
+        p['photo_notes_n'] = len(photo_notes.get(p.get('photo_id'), []))
+    # couleur d'epingle par membre (ordre d'arrivee dans l'espace)
+    membres = query("""SELECT u.id, u.display_name FROM espace_members em
+                       JOIN users u ON u.id = em.user_id
+                       WHERE em.espace_id=? ORDER BY em.joined_at, u.id""",
+                    (c['couple_id'],))
+    pin_palette = ['#C4684F', '#4A6FA5', '#5B8A5A', '#8A6FA5', '#B08B3E']
+    member_colors = {str(m['id']): pin_palette[i % len(pin_palette)]
+                     for i, m in enumerate(membres)}
     # v5.7 : photo hero de chaque scene -> version 1024px garantie
     # (generation paresseuse pour les photos d'avant v5.7)
     for s1 in pages.get('structured', []):
@@ -4002,6 +4038,7 @@ def carnet_album(cid_carnet):
         structured=pages.get('structured', []),
         orphans=pages.get('orphans', []),
         geo_photos=geo_photos, geo_etapes=geo_etapes,
+        photo_notes=photo_notes, member_colors=member_colors,
         types=CARNET_TYPES, sort_mode=sort_mode)
 
 
@@ -4411,6 +4448,59 @@ def carnet_dater_lot(cid_carnet):
         _log_activity(c['couple_id'], session['uid'], 'photos_dated',
                       target_carnet_id=cid_carnet, payload={'count': dates})
     return jsonify({'ok': True, 'dated': dates, 'ignored': len(ids) - dates})
+
+
+def _photo_of_espace_or_none(photo_id):
+    """v5.8 — La photo si (et seulement si) elle appartient a l'espace
+    courant. Un SELECT par id seul serait un defaut de cloisonnement (R1)."""
+    return query("SELECT * FROM photos WHERE id=? AND couple_id=?",
+                 (photo_id, current_espace_id()), one=True)
+
+
+@app.route('/photo/<int:photo_id>/notes', methods=['POST'])
+@couple_required
+def photo_note_add(photo_id):
+    """v5.8 — Ajoute une epingle (x, y, texte) sur une photo de l'espace.
+    x et y sont NORMALISES [0,1] : valides cote serveur, pas seulement au clic."""
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    photo = _photo_of_espace_or_none(photo_id)
+    if not photo:
+        return jsonify({'ok': False, 'error': '404'}), 404
+    texte = (request.form.get('texte') or '').strip()
+    if not texte:
+        return jsonify({'ok': False, 'error': 'texte_vide'}), 400
+    x = _safe_float(request.form.get('x'))
+    y = _safe_float(request.form.get('y'))
+    if x is None or y is None or not (0.0 <= x <= 1.0) or not (0.0 <= y <= 1.0):
+        return jsonify({'ok': False, 'error': 'coords'}), 400
+    note_id = execute(
+        "INSERT INTO photo_notes (photo_id, x, y, texte, auteur_id) VALUES (?,?,?,?,?)",
+        (photo_id, round(x, 4), round(y, 4), texte[:1000], session['uid'])
+    )
+    row = query("""SELECT pn.*, u.display_name AS auteur FROM photo_notes pn
+                   LEFT JOIN users u ON u.id = pn.auteur_id WHERE pn.id=?""",
+                (note_id,), one=True)
+    return jsonify({'ok': True, 'note': dict(row)})
+
+
+@app.route('/photo_note/<int:note_id>/supprimer', methods=['POST'])
+@couple_required
+def photo_note_supprimer(note_id):
+    """v5.8 — Retire une epingle. Seul son AUTEUR la retire (le contenu
+    des autres ne disparait pas sous vos doigts, D4)."""
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    note = query("""SELECT pn.* FROM photo_notes pn
+                    JOIN photos p ON p.id = pn.photo_id
+                    WHERE pn.id=? AND p.couple_id=?""",
+                 (note_id, current_espace_id()), one=True)
+    if not note:
+        return jsonify({'ok': False, 'error': '404'}), 404
+    if note['auteur_id'] != session['uid']:
+        return jsonify({'ok': False, 'error': 'pas_auteur'}), 403
+    execute("DELETE FROM photo_notes WHERE id=?", (note_id,))
+    return jsonify({'ok': True})
 
 
 @app.route('/carnet/<int:cid_carnet>/margin_note', methods=['POST'])

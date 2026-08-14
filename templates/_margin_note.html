@@ -13,6 +13,7 @@
       <img src="{{ url_for('serve_upload', filename=p.photo_thumb) }}"
            data-full="{{ url_for('serve_upload', filename=p.photo_path) }}"
            data-page-id="{{ p.id }}"
+           data-photo-id="{{ p.photo_id or '' }}"
            loading="lazy" alt="">
     </a>
   {% endif %}

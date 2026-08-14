@@ -4836,3 +4836,111 @@ body.photo-roll-open .album-footer { opacity: 0; pointer-events: none; }
   }
   .density-toggle { margin-left: 0; }
 }
+
+/* ── v5.8 : épingles sur photo (lightbox) ─────────────────────────── */
+.viewer-pins {
+  position: absolute;
+  z-index: 5;
+}
+.viewer-pins.is-armed { cursor: crosshair; }
+.photo-pin {
+  position: absolute;
+  width: 22px; height: 22px;
+  margin: -11px 0 0 -11px;
+  border-radius: 50%;
+  border: 2.5px solid #fff;
+  background: var(--pin-color, #C4684F);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.45);
+  cursor: pointer;
+  padding: 0;
+  transition: transform .15s var(--ease-out, ease-out);
+}
+.photo-pin:hover { transform: scale(1.2); }
+.viewer-toolbar {
+  position: absolute;
+  left: 0; right: 0; bottom: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  z-index: 6;
+  pointer-events: none;
+}
+.viewer-toolbar > * { pointer-events: auto; }
+.viewer-pin-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 10px 18px;
+  min-height: 40px;
+  background: rgba(255,255,255,0.14);
+  backdrop-filter: blur(14px);
+  color: #fff;
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: background .2s;
+}
+.viewer-pin-btn:hover { background: rgba(255,255,255,0.25); }
+.viewer-pin-btn.is-active { background: #fff; color: #17181A; }
+.viewer-pin-hint {
+  color: rgba(255,255,255,0.85);
+  font-size: 12.5px;
+  background: rgba(0,0,0,0.4);
+  border-radius: 999px;
+  padding: 6px 12px;
+}
+.pin-popover {
+  position: absolute;
+  z-index: 40;
+  width: 260px;
+  background: var(--bg, #FBFBFA);
+  border-radius: 12px;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.25), 0 24px 60px rgba(0,0,0,0.35);
+  padding: 12px;
+}
+.pin-popover .pin-input {
+  width: 100%;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  padding: 8px;
+  resize: none;
+  background: var(--bg);
+  color: var(--ink-primary);
+}
+.pin-popover .pin-input:focus { outline: none; border-color: var(--accent); }
+.pin-popover-actions {
+  display: flex; gap: 8px; margin-top: 8px;
+}
+.pin-popover .pin-text {
+  font-family: var(--font-ui);
+  font-size: 14px; line-height: 1.5;
+  color: var(--ink-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.pin-popover .pin-meta {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--ink-whisper);
+}
+.pin-popover .pin-delete { margin-top: 8px; }
+/* compteur de notes sur la vignette : discret, coin bas droit */
+.tile-notes-count {
+  position: absolute;
+  right: 8px; bottom: 8px;
+  min-width: 20px; height: 20px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(23,24,26,0.55);
+  backdrop-filter: blur(6px);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 600;
+  pointer-events: none;
+}
+/* si légende ET notes : la pastille légende se décale */
+.page-photo .tile-notes-count ~ .tile-caption-dot,
+.page-photo .tile-caption-dot:has(~ .tile-notes-count) { right: 34px; }

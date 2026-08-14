@@ -36,8 +36,13 @@
       <img src="{{ url_for('serve_upload', filename=(p.photo_mid if (_is_hero and p.photo_mid) else p.photo_thumb)) }}"
            data-full="{{ url_for('serve_upload', filename=p.photo_path) }}"
            data-page-id="{{ p.id }}"
+           data-photo-id="{{ p.photo_id or '' }}"
            loading="lazy" alt="">
       {% if p.caption %}<span class="tile-caption-dot" title="{{ p.caption }}" aria-hidden="true"></span>{% endif %}
+      {% if p.photo_notes_n %}
+        <span class="tile-notes-count" data-photo-id="{{ p.photo_id }}"
+              title="{{ p.photo_notes_n }} note{{ 's' if p.photo_notes_n > 1 }} épinglée{{ 's' if p.photo_notes_n > 1 }}">{{ p.photo_notes_n }}</span>
+      {% endif %}
       {% if p.photo_taken_at_source == 'fichier' %}
         <span class="tile-badge" title="Date devinée depuis le nom du fichier{% if p.photo_orig_filename %} : {{ p.photo_orig_filename }}{% endif %}">≈</span>
       {% elif p.photo_taken_at_source == 'manuel' %}

@@ -415,8 +415,20 @@
   <button type="button" class="viewer-next" onclick="viewerNav(1)" aria-label="Suivante">›</button>
   <div class="viewer-stage">
     <img id="viewer-img" src="" alt="">
+    {# v5.8 : couche d'épingles, calée sur la zone VISIBLE de l'image #}
+    <div id="viewer-pins" class="viewer-pins" hidden></div>
   </div>
   <div class="viewer-caption" id="viewer-caption"></div>
+  <div class="viewer-toolbar">
+    <button type="button" class="viewer-pin-btn" id="viewer-pin-btn" onclick="togglePinMode()">
+      ✎ Épingler une note
+    </button>
+    <span class="viewer-pin-hint" id="viewer-pin-hint" hidden>Touche l'endroit de la photo à annoter — ou ré-appuie pour annuler</span>
+  </div>
+  {# popover d'épingle : lecture / saisie #}
+  <div class="pin-popover" id="pin-popover" hidden>
+    <div class="pin-popover-body" id="pin-popover-body"></div>
+  </div>
 </div>
 
 {# Libs : EXIF (extraction client) + SortableJS (drag & drop) #}
@@ -433,6 +445,11 @@
 <script>
   const CSRF = "{{ csrf_token() }}";
   const CARNET_ID = {{ carnet.id }};
+  /* v5.8 : épingles sur photo — payload initial + couleurs par membre.
+     tojson échappe < > & : sûr dans un <script> (règle R7). */
+  const PHOTO_NOTES = {{ photo_notes|tojson }};
+  const MEMBER_COLORS = {{ member_colors|tojson }};
+  const UID = {{ session['uid'] }};
   const URL_UPLOAD_PHOTOS = "{{ url_for('carnet_upload_photos', cid_carnet=carnet.id) }}";
   const URL_ADD_TEXT = "{{ url_for('carnet_add_text', cid_carnet=carnet.id) }}";
   const URL_ADD_MARGIN_NOTE = "{{ url_for('carnet_add_margin_note', cid_carnet=carnet.id) }}";
@@ -1450,7 +1467,8 @@
     viewerPhotos = Array.from(document.querySelectorAll('.page-photo img')).map(function(img){
       const pwrap = img.closest('.page-item, .rail-note');
       const cap = pwrap ? pwrap.querySelector('.page-caption') : null;
-      return { full: img.dataset.full, pageId: img.dataset.pageId, caption: (cap ? cap.value : '') };
+      return { full: img.dataset.full, pageId: img.dataset.pageId,
+               photoId: img.dataset.photoId || '', caption: (cap ? cap.value : '') };
     });
   }
   function openViewer(pageId) {
@@ -1462,19 +1480,189 @@
   function showViewer() {
     if (!viewerPhotos.length) return;
     const v = document.getElementById('photo-viewer');
-    document.getElementById('viewer-img').src = viewerPhotos[viewerIdx].full;
+    const im = document.getElementById('viewer-img');
+    pinModeOff();
+    closePinPopover();
+    im.src = viewerPhotos[viewerIdx].full;
     document.getElementById('viewer-caption').textContent = viewerPhotos[viewerIdx].caption;
     v.hidden = false;
     document.body.style.overflow = 'hidden';
+    if (im.complete) layoutPins(); else im.onload = layoutPins;
   }
-  function closeViewer() { document.getElementById('photo-viewer').hidden = true; document.body.style.overflow = ''; }
+  function closeViewer() {
+    pinModeOff(); closePinPopover();
+    document.getElementById('photo-viewer').hidden = true;
+    document.body.style.overflow = '';
+  }
   function viewerNav(d) { if (!viewerPhotos.length) return; viewerIdx = (viewerIdx + d + viewerPhotos.length) % viewerPhotos.length; showViewer(); }
   document.addEventListener('keydown', function(e){
     if (document.getElementById('photo-viewer').hidden) return;
-    if (e.key === 'Escape') closeViewer();
+    if (e.key === 'Escape') {
+      if (!document.getElementById('pin-popover').hidden) { closePinPopover(); return; }
+      if (pinMode) { pinModeOff(); return; }
+      closeViewer();
+    }
     if (e.key === 'ArrowLeft') viewerNav(-1);
     if (e.key === 'ArrowRight') viewerNav(1);
   });
+
+  /* ─ v5.8 : épingles sur photo — notes ancrées à un point de l'image ─
+     Les coordonnées sont normalisées 0-1 sur l'IMAGE (pas l'écran) : la
+     couche .viewer-pins est calée sur la zone réellement visible de la
+     photo (object-fit: contain laisse des bandes). */
+  let pinMode = false;
+  function currentPhotoId() {
+    const p = viewerPhotos[viewerIdx];
+    return p && p.photoId ? String(p.photoId) : '';
+  }
+  function layoutPins() {
+    const im = document.getElementById('viewer-img');
+    const layer = document.getElementById('viewer-pins');
+    if (!im.naturalWidth) { layer.hidden = true; return; }
+    const box = im.getBoundingClientRect();
+    const stage = im.parentElement.getBoundingClientRect();
+    const scale = Math.min(box.width / im.naturalWidth, box.height / im.naturalHeight);
+    const w = im.naturalWidth * scale, h = im.naturalHeight * scale;
+    layer.style.left = (box.left - stage.left + (box.width - w) / 2) + 'px';
+    layer.style.top  = (box.top - stage.top + (box.height - h) / 2) + 'px';
+    layer.style.width = w + 'px';
+    layer.style.height = h + 'px';
+    layer.hidden = false;
+    renderPins();
+  }
+  window.addEventListener('resize', function(){
+    if (!document.getElementById('photo-viewer').hidden) layoutPins();
+  });
+  function renderPins() {
+    const layer = document.getElementById('viewer-pins');
+    const pid = currentPhotoId();
+    layer.innerHTML = '';
+    (PHOTO_NOTES[pid] || []).forEach(function(n){
+      const d = document.createElement('button');
+      d.type = 'button';
+      d.className = 'photo-pin';
+      d.style.left = (n.x * 100) + '%';
+      d.style.top = (n.y * 100) + '%';
+      d.style.setProperty('--pin-color', MEMBER_COLORS[String(n.auteur_id)] || '#C4684F');
+      d.setAttribute('aria-label', 'Note épinglée');
+      d.addEventListener('click', function(ev){ ev.stopPropagation(); openPinPopover(n, d); });
+      layer.appendChild(d);
+    });
+  }
+  function togglePinMode() { pinMode ? pinModeOff() : pinModeOn(); }
+  function pinModeOn() {
+    pinMode = true;
+    document.getElementById('viewer-pin-btn').classList.add('is-active');
+    document.getElementById('viewer-pin-hint').hidden = false;
+    document.getElementById('viewer-pins').classList.add('is-armed');
+  }
+  function pinModeOff() {
+    pinMode = false;
+    const b = document.getElementById('viewer-pin-btn');
+    if (b) b.classList.remove('is-active');
+    const h = document.getElementById('viewer-pin-hint');
+    if (h) h.hidden = true;
+    const l = document.getElementById('viewer-pins');
+    if (l) l.classList.remove('is-armed');
+  }
+  document.getElementById('viewer-pins').addEventListener('click', function(e){
+    if (!pinMode) return;
+    const layer = this.getBoundingClientRect();
+    const x = (e.clientX - layer.left) / layer.width;
+    const y = (e.clientY - layer.top) / layer.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return;
+    openPinForm(x, y, e.clientX - layer.left, e.clientY - layer.top);
+  });
+  function popEl() { return document.getElementById('pin-popover'); }
+  function popBody() { return document.getElementById('pin-popover-body'); }
+  function placePopover(px, py) {
+    const layer = document.getElementById('viewer-pins');
+    const stage = layer.parentElement.getBoundingClientRect();
+    const lbox = layer.getBoundingClientRect();
+    const pop = popEl();
+    pop.hidden = false;
+    const left = Math.min(Math.max(8, lbox.left - stage.left + px - 130), stage.width - 268);
+    const top = Math.min(lbox.top - stage.top + py + 16, stage.height - 150);
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+  }
+  function closePinPopover() {
+    const p = popEl();
+    if (p) { p.hidden = true; popBody().innerHTML = ''; }
+  }
+  function openPinForm(x, y, px, py) {
+    pinModeOff();
+    popBody().innerHTML = '';
+    const ta = document.createElement('textarea');
+    ta.className = 'pin-input'; ta.rows = 2; ta.placeholder = 'Ta note ici…';
+    const row = document.createElement('div'); row.className = 'pin-popover-actions';
+    const ok = document.createElement('button'); ok.type = 'button'; ok.className = 'btn btn-primary btn-sm'; ok.textContent = 'Épingler';
+    const ko = document.createElement('button'); ko.type = 'button'; ko.className = 'btn btn-secondary btn-sm'; ko.textContent = 'Annuler';
+    ko.addEventListener('click', closePinPopover);
+    ok.addEventListener('click', async function(){
+      const texte = ta.value.trim();
+      if (!texte) { ta.focus(); return; }
+      ok.disabled = true;
+      const fd = new FormData();
+      fd.append('_csrf', CSRF); fd.append('x', x.toFixed(4)); fd.append('y', y.toFixed(4)); fd.append('texte', texte);
+      try {
+        const r = await fetch('/photo/' + currentPhotoId() + '/notes', { method: 'POST', body: fd });
+        const d = await r.json();
+        if (!d.ok) { setError('Note : ' + (d.error || '')); ok.disabled = false; return; }
+        const pid = currentPhotoId();
+        (PHOTO_NOTES[pid] = PHOTO_NOTES[pid] || []).push(d.note);
+        closePinPopover(); renderPins(); updateTileNoteCount(pid);
+        setSaved('Note épinglée');
+      } catch(e) { setError('Réseau'); ok.disabled = false; }
+    });
+    row.appendChild(ok); row.appendChild(ko);
+    popBody().appendChild(ta); popBody().appendChild(row);
+    placePopover(px, py);
+    ta.focus();
+  }
+  function openPinPopover(note, pinEl) {
+    popBody().innerHTML = '';
+    const txt = document.createElement('div'); txt.className = 'pin-text'; txt.textContent = note.texte;
+    const meta = document.createElement('div'); meta.className = 'pin-meta';
+    meta.textContent = (note.auteur || 'Quelqu\'un') + ' · ' + String(note.created_at || '').slice(0, 10);
+    popBody().appendChild(txt); popBody().appendChild(meta);
+    if (note.auteur_id === UID) {
+      const del = document.createElement('button');
+      del.type = 'button'; del.className = 'btn btn-secondary btn-sm pin-delete'; del.textContent = 'Retirer';
+      del.addEventListener('click', async function(){
+        const fd = new FormData(); fd.append('_csrf', CSRF);
+        try {
+          const r = await fetch('/photo_note/' + note.id + '/supprimer', { method: 'POST', body: fd });
+          const d = await r.json();
+          if (!d.ok) { setError('Suppression : ' + (d.error || '')); return; }
+          const pid = currentPhotoId();
+          PHOTO_NOTES[pid] = (PHOTO_NOTES[pid] || []).filter(function(n){ return n.id !== note.id; });
+          closePinPopover(); renderPins(); updateTileNoteCount(pid);
+        } catch(e) { setError('Réseau'); }
+      });
+      popBody().appendChild(del);
+    }
+    const box = pinEl.getBoundingClientRect();
+    const layer = document.getElementById('viewer-pins').getBoundingClientRect();
+    placePopover(box.left - layer.left, box.top - layer.top);
+  }
+  function updateTileNoteCount(photoId) {
+    const n = (PHOTO_NOTES[photoId] || []).length;
+    document.querySelectorAll('.page-photo img[data-photo-id="' + photoId + '"]').forEach(function(img){
+      const a = img.closest('.page-photo');
+      let chip = a.querySelector('.tile-notes-count');
+      if (n === 0) { if (chip) chip.remove(); return; }
+      if (!chip) {
+        chip = document.createElement('span');
+        chip.className = 'tile-notes-count';
+        chip.dataset.photoId = photoId;
+        a.appendChild(chip);
+      }
+      chip.textContent = n;
+      chip.title = n + ' note' + (n > 1 ? 's' : '') + ' épinglée' + (n > 1 ? 's' : '');
+    });
+  }
+  window.togglePinMode = togglePinMode;
   (function(){
     let startX = null;
     const v = document.getElementById('photo-viewer');
