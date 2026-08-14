@@ -95,7 +95,7 @@
   {% endif %}
 
   {# ────── PLANNING DU VOYAGE (v4.6) : prévu → réel, ajustable ────── #}
-  {% if etapes_all and carnet.date_start and carnet.date_end %}
+  {% if (etapes_all or etapes_corbeille) and carnet.date_start and carnet.date_end %}
   <details class="voyage-planning">
     <summary class="apercu-summary">
       <span class="apercu-summary-icon">🧭</span>
@@ -107,6 +107,25 @@
     </summary>
     <div class="voyage-planning-days" id="vp-days"></div>
     <p class="planning-save" id="vp-save" style="padding:0 18px 12px"></p>
+    {# v5.12 : corbeille du planning — les étapes qu'on n'a pas faites #}
+    {% if etapes_corbeille %}
+    <details class="corbeille corbeille-planning">
+      <summary class="corbeille-summary">🗑 Étapes retirées ({{ etapes_corbeille|length }})</summary>
+      <ul class="corbeille-list">
+        {% for e in etapes_corbeille %}
+        <li class="corbeille-item">
+          <span class="corbeille-title">
+            {%- for k, em, lab in pin_kinds %}{% if k == e.pin_kind %}{{ em }} {% endif %}{% endfor -%}
+            {{ e.title }}
+          </span>
+          <span class="corbeille-date">retirée le {{ (e.deleted_at or '')[:10] }}</span>
+          <button type="button" class="btn btn-secondary btn-sm"
+                  onclick="restaurerEtape({{ e.id }}, this)">↩ Restaurer</button>
+        </li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
   </details>
   {% endif %}
 
@@ -1797,9 +1816,27 @@
           li.className = 'day-step';
           li.dataset.itemId = e.id;
           li.textContent = (PIN_EMOJIS[e.pin_kind] ? PIN_EMOJIS[e.pin_kind] + ' ' : '') + e.title;
+          /* v5.12 : « je n'ai pas fait ce point » — retrait défaisable */
+          var del = document.createElement('button');
+          del.type = 'button';
+          del.className = 'day-step-del';
+          del.title = 'Retirer cette étape (restaurable dans la corbeille du planning)';
+          del.textContent = '✕';
+          del.addEventListener('click', function(ev){
+            ev.stopPropagation();
+            vpRemoveEtape(e.id, del);
+          });
+          li.appendChild(del);
           ul.appendChild(li);
         });
         card.appendChild(ul);
+        /* v5.12 : « j'ai découvert un lieu » — ajout d'étape dans CE jour */
+        var addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        addBtn.className = 'day-card-add';
+        addBtn.textContent = '＋ étape';
+        addBtn.addEventListener('click', function(){ vpOpenAdd(card, k); });
+        card.appendChild(addBtn);
         wrap.appendChild(card);
       });
       if (window.Sortable) {
@@ -1829,8 +1866,83 @@
         } catch(e) { st.textContent = 'Réseau'; }
       }, 600);
     }
+    /* ─ v5.12 : retirer / ajouter une étape depuis le planning du voyage ─ */
+    async function vpRemoveEtape(itemId, btn) {
+      btn.disabled = true;
+      var fd = new FormData(); fd.append('_csrf', CSRF);
+      try {
+        var r = await fetch('/item/' + itemId + '/supprimer', { method: 'POST', body: fd });
+        var d = await r.json();
+        if (!d.ok) { setError('Retrait : ' + (d.error || '')); btn.disabled = false; return; }
+        setSaved('Étape retirée — restaurable dans la corbeille du planning');
+        setTimeout(function(){ reloadKeepScroll(); }, 500);
+      } catch(e) { setError('Réseau'); btn.disabled = false; }
+    }
+    function vpOpenAdd(card, k) {
+      var old = card.querySelector('.vp-add-box');
+      if (old) { old.remove(); return; }
+      var box = document.createElement('div');
+      box.className = 'vp-add-box';
+      box.innerHTML = '<input type="search" class="lieu-q" placeholder="Ville, lieu, adresse…">' +
+                      '<div class="lieu-results"></div>';
+      var input = box.querySelector('input');
+      var out = box.querySelector('.lieu-results');
+      input.addEventListener('keydown', async function(ev){
+        if (ev.key !== 'Enter') return;
+        ev.preventDefault();
+        var q = input.value.trim();
+        if (q.length < 2) return;
+        out.textContent = 'Recherche…';
+        try {
+          var r = await fetch('/geo/search?q=' + encodeURIComponent(q));
+          var d = await r.json();
+          out.innerHTML = '';
+          if (!d.ok || !d.results.length) { out.textContent = 'Aucun lieu trouvé.'; return; }
+          d.results.slice(0, 5).forEach(function(res){
+            var b = document.createElement('button');
+            b.type = 'button'; b.className = 'lieu-result'; b.textContent = res.label;
+            b.addEventListener('click', function(){ vpAddEtape(k, res, box); });
+            out.appendChild(b);
+          });
+        } catch(e) { out.textContent = 'Réseau.'; }
+      });
+      card.appendChild(box);
+      input.focus();
+    }
+    async function vpAddEtape(k, res, box) {
+      box.querySelectorAll('button').forEach(function(b){ b.disabled = true; });
+      var fd = new FormData();
+      fd.append('_csrf', CSRF);
+      fd.append('kind', 'location');
+      fd.append('title', (res.label || '').split(',')[0]);
+      fd.append('address', res.label || '');
+      fd.append('geo_lat', res.lat); fd.append('geo_lng', res.lng);
+      fd.append('pin_kind', 'autre');
+      try {
+        var r = await fetch("{{ url_for('carnet_add_item', cid_carnet=carnet.id) }}", { method: 'POST', body: fd });
+        var d = await r.json();
+        if (!d.ok) { setError('Étape : ' + (d.error || '')); return; }
+        vpDays[k].push({ id: d.item_id, title: (res.label || '').split(',')[0], pin_kind: 'autre', planned_day: k });
+        render();
+        save();   /* enregistre le planning avec la nouvelle étape, puis recharge */
+      } catch(e) { setError('Réseau'); }
+    }
     render();
   })();
+
+  /* ─ v5.12 : restaurer une étape retirée (corbeille du planning) ─ */
+  async function restaurerEtape(itemId, btn) {
+    btn.disabled = true;
+    var fd = new FormData(); fd.append('_csrf', CSRF);
+    try {
+      var r = await fetch('/item/' + itemId + '/restaurer', { method: 'POST', body: fd });
+      var d = await r.json();
+      if (!d.ok) { setError('Restauration : ' + (d.error || '')); btn.disabled = false; return; }
+      setSaved('Étape restaurée');
+      setTimeout(function(){ reloadKeepScroll(); }, 400);
+    } catch(e) { setError('Réseau'); btn.disabled = false; }
+  }
+  window.restaurerEtape = restaurerEtape;
 
   // v4.4 : rattacher une vidéo retrouvée à cet album
   async function reclaimVideo(videoId, btn) {

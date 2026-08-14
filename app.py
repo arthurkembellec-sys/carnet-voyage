@@ -689,6 +689,10 @@ def init_db():
         # ── v5.10 — origine du lieu d'une photo ('exif' | 'manuel' | '')
         # meme logique de tracabilite que taken_at_source.
         "ALTER TABLE photos ADD COLUMN lieu_source TEXT DEFAULT ''",
+        # ── v5.12 — les items (etapes, liens, notes...) se suppriment en
+        # SOFT : au retour du sejour on retire ce qu'on n'a pas fait, et on
+        # peut toujours le restaurer (retour d'Arthur du 2026-08-14).
+        "ALTER TABLE carnet_items ADD COLUMN deleted_at TIMESTAMP",
     ]
     for sql in migrations:
         try:
@@ -1196,7 +1200,7 @@ def souhaits_index():
     for r in rows:
         r = dict(r)
         cnt = query(
-            "SELECT COUNT(*) AS n FROM carnet_items WHERE carnet_id=? AND target_carnet_id IS NULL",
+            "SELECT COUNT(*) AS n FROM carnet_items WHERE carnet_id=? AND target_carnet_id IS NULL AND deleted_at IS NULL",
             (r['id'],), one=True
         )
         r['nb_items'] = cnt['n'] if cnt else 0
@@ -1325,6 +1329,7 @@ def _carnet_items(carnet_id):
         LEFT JOIN photos p ON p.id = ci.photo_id
         LEFT JOIN users u ON u.id = ci.added_by
         WHERE ci.carnet_id = ? AND ci.target_carnet_id IS NULL
+          AND ci.deleted_at IS NULL
         ORDER BY ci.position ASC, ci.id ASC
     """, (carnet_id,))
     return [dict(r) for r in rows]
@@ -1382,6 +1387,7 @@ def _trajet_blocs(carnet_id, nb_days=None):
         # planning d'avant les blocs : un bloc 'car' par jour
         legacy = query("SELECT planned_day AS day, id AS item_id FROM carnet_items "
                        "WHERE carnet_id=? AND planned_day IS NOT NULL "
+                       "AND deleted_at IS NULL "
                        "ORDER BY planned_day ASC, position ASC", (carnet_id,))
         for r in legacy:
             k = r['day']
@@ -1536,11 +1542,18 @@ def carnet_souhait_view(cid_carnet):
                     'url': ch.get('url') or ''} for ch in lst[:6]]
         for pid, lst in children_by_parent.items()
     }
+    # v5.12 : items supprimes de la reverie (restaurables)
+    items_corbeille = [dict(r) for r in query("""
+        SELECT id, kind, title, address, deleted_at FROM carnet_items
+        WHERE carnet_id=? AND target_carnet_id IS NULL AND deleted_at IS NOT NULL
+        ORDER BY deleted_at DESC
+    """, (cid_carnet,))]
     return render_template('carnet_souhait.html', carnet=c, items=items,
         voyages=[dict(v) for v in voyages], item_kinds=ITEM_KINDS,
         pin_kinds=PIN_KINDS, children_by_parent=children_by_parent,
         children_slim=children_slim,
         days_blocs=days_blocs,
+        items_corbeille=items_corbeille,
         geo_items=geo_items)
 
 
@@ -1712,7 +1725,23 @@ def item_supprimer(item_id):
                  (item_id,), one=True)
     if not item or item['couple_id'] != current_espace_id():
         return jsonify({'ok': False, 'error': '404'}), 404
-    execute("DELETE FROM carnet_items WHERE id=?", (item_id,))
+    # v5.12 : suppression DEFAISABLE (corbeille) au lieu d'un DELETE
+    execute("UPDATE carnet_items SET deleted_at=CURRENT_TIMESTAMP WHERE id=?", (item_id,))
+    return jsonify({'ok': True})
+
+
+@app.route('/item/<int:item_id>/restaurer', methods=['POST'])
+@couple_required
+def item_restaurer(item_id):
+    """v5.12 — Defait la suppression d'un item (etape, lien, note...)."""
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    item = query("SELECT ci.*, c.couple_id FROM carnet_items ci "
+                 "JOIN carnets c ON c.id=ci.carnet_id WHERE ci.id=?",
+                 (item_id,), one=True)
+    if not item or item['couple_id'] != current_espace_id():
+        return jsonify({'ok': False, 'error': '404'}), 404
+    execute("UPDATE carnet_items SET deleted_at=NULL WHERE id=?", (item_id,))
     return jsonify({'ok': True})
 
 
@@ -3931,6 +3960,7 @@ def carnet_album(cid_carnet):
         FROM carnet_items
         WHERE carnet_id=? AND kind='location'
           AND geo_lat IS NOT NULL AND geo_lng IS NOT NULL
+          AND deleted_at IS NULL
         ORDER BY planned_day, position
     """, (cid_carnet,)):
         r_ = dict(r_)
@@ -3958,6 +3988,7 @@ def carnet_album(cid_carnet):
             for r_ in query(f"""
                 SELECT id, title, pin_kind, planned_day, position FROM carnet_items
                 WHERE carnet_id=? AND kind='location' AND id IN ({ph_et})
+                  AND deleted_at IS NULL
             """, tuple([cid_carnet] + ids_et)):
                 infos[r_['id']] = dict(r_)
         from datetime import date as _date, timedelta as _td
@@ -4059,6 +4090,13 @@ def carnet_album(cid_carnet):
           AND NOT EXISTS (SELECT 1 FROM album_pages ap WHERE ap.video_id = v.id)
         ORDER BY v.added_at ASC
     """, (c['couple_id'],))]
+    # v5.12 : etapes retirees du voyage (restaurables) — « je n'ai pas fait
+    # ce point » se defait comme tout le reste
+    etapes_corbeille = [dict(r) for r in query("""
+        SELECT id, title, pin_kind, deleted_at FROM carnet_items
+        WHERE carnet_id=? AND kind='location' AND deleted_at IS NOT NULL
+        ORDER BY deleted_at DESC
+    """, (cid_carnet,))]
     # v5.8 : epingles sur photo — payload pour la lightbox + compteur tuile
     photo_ids = sorted({p['photo_id'] for p in pages['all'] if p.get('photo_id')})
     photo_notes = {}
@@ -4108,6 +4146,7 @@ def carnet_album(cid_carnet):
         hidden_pages=pages.get('hidden', []),
         geo_photos=geo_photos, geo_etapes=geo_etapes,
         photo_notes=photo_notes, member_colors=member_colors,
+        etapes_corbeille=etapes_corbeille,
         types=CARNET_TYPES, sort_mode=sort_mode)
 
 

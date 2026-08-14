@@ -134,6 +134,35 @@
     </p>
   </section>
 
+  {# ── v5.12 : corbeille des idées — un item supprimé se restaure ── #}
+  {% if items_corbeille %}
+  <details class="corbeille">
+    <summary class="corbeille-summary">🗑 Corbeille ({{ items_corbeille|length }})</summary>
+    <ul class="corbeille-list">
+      {% for it in items_corbeille %}
+      <li class="corbeille-item">
+        <span class="corbeille-title">{{ it.title or it.address or it.kind }}</span>
+        <span class="corbeille-date">{{ (it.deleted_at or '')[:10] }}</span>
+        <button type="button" class="btn btn-secondary btn-sm"
+                onclick="restaurerItem({{ it.id }}, this)">↩ Restaurer</button>
+      </li>
+      {% endfor %}
+    </ul>
+  </details>
+  <script>
+    async function restaurerItem(itemId, btn) {
+      btn.disabled = true;
+      var fd = new FormData(); fd.append('_csrf', CSRF);
+      try {
+        var r = await fetch('/item/' + itemId + '/restaurer', { method: 'POST', body: fd });
+        var d = await r.json();
+        if (!d.ok) { alert('Restauration : ' + (d.error || '')); btn.disabled = false; return; }
+        location.reload();
+      } catch(e) { alert('Réseau'); btn.disabled = false; }
+    }
+  </script>
+  {% endif %}
+
   {# ── v5.11 : suppression défaisable de la rêverie (bouton armé, 2 appuis) ── #}
   <section class="danger-zone">
     <form method="POST" action="{{ url_for('carnet_supprimer', cid_carnet=carnet.id) }}" id="reverie-delete-form">
