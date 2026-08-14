@@ -28,12 +28,73 @@
     {% if query %}
     <p class="search-hint">{{ messages|length }} résultat(s) pour « {{ query }} »</p>
     {% endif %}
+    {% if not query and not charniere.date %}
+    <button type="button" class="charniere-suggest" onclick="openCharniere()">
+      ✦ Poser la date charnière — le jour où les mots laissent la place aux photos
+    </button>
+    {% endif %}
   </section>
 
-  {# ─── Fil chronologique ───────────────────────────────────── #}
+  {# éditeur de charnière (v5.9) #}
+  <div class="charniere-form" id="charniere-form" hidden>
+    <label>Le jour de la bascule
+      <input type="date" id="charniere-date-input" value="{{ charniere.date }}">
+    </label>
+    <label>Un titre court (optionnel)
+      <input type="text" id="charniere-titre-input" maxlength="80"
+             placeholder="« Lisbonne » suffit" value="{{ charniere.titre }}">
+    </label>
+    <div class="charniere-form-actions">
+      <button type="button" class="btn btn-primary btn-sm" onclick="saveCharniere()">Enregistrer</button>
+      <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('charniere-form').hidden = true">Annuler</button>
+      {% if charniere.date %}
+      <button type="button" class="btn btn-secondary btn-sm charniere-remove" onclick="saveCharniere(true)">Retirer la charnière</button>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ─── v5.9 : LE FIL UNIFIÉ — les mots, la charnière, puis les images ── #}
   <div class="histoire-fil" id="histoire-fil">
     {% set ns = namespace(prev_chapter=None, prev_day=None, prev_kind=None) %}
-    {% for m in messages %}
+    {% for it in (fil_items if fil_items is defined else []) %}
+
+    {% if it.kind == 'charniere' %}
+      {# Le seul moment monumental de la page : la bascule du récit #}
+      <div class="charniere-block" id="charniere-block">
+        <div class="charniere-date">{{ charniere.label or charniere.date }}</div>
+        {% if charniere.titre %}<div class="charniere-titre">{{ charniere.titre }}</div>{% endif %}
+        <div class="charniere-sub">À la suite, en photos</div>
+        <button type="button" class="charniere-edit" onclick="openCharniere()" title="Modifier la date charnière">modifier</button>
+      </div>
+
+    {% elif it.kind == 'carnet_start' %}
+      <a class="fil-carnet-start" href="{{ url_for('carnet_album', cid_carnet=it.carnet.id) }}">
+        <span class="fil-carnet-kicker">Voyage</span>
+        <span class="fil-carnet-title">{{ it.carnet.title }}</span>
+        {% if it.carnet.date_end %}
+        <span class="fil-carnet-dates">{{ it.carnet.date_start }} → {{ it.carnet.date_end }}</span>
+        {% endif %}
+      </a>
+
+    {% elif it.kind == 'photo_day' %}
+      <div class="fil-photo-day">
+        <div class="fil-photo-day-head">
+          <span class="fil-photo-day-date" data-iso="{{ it.day }}" data-fmt="day">{{ it.day }}</span>
+          <span class="fil-photo-day-meta">{{ it.total }} photo{{ 's' if it.total > 1 }} · {{ it.carnet_titles|join(' · ') }}</span>
+        </div>
+        <a class="fil-photo-strip" href="{{ url_for('carnet_album', cid_carnet=it.carnet_id) }}"
+           title="Ouvrir l'album">
+          {% for ph in it.photos %}
+          <img src="{{ url_for('serve_upload', filename=ph.thumb_path) }}" loading="lazy" alt="">
+          {% endfor %}
+          {% if it.total > it.photos|length %}
+          <span class="fil-photo-more">+{{ it.total - it.photos|length }}</span>
+          {% endif %}
+        </a>
+      </div>
+
+    {% else %}
+      {% set m = it.m %}
 
       {# Saut entre chapitre archive #}
       {% if m.kind == 'archived' and m.chapter_id and m.chapter_id != ns.prev_chapter %}
@@ -91,6 +152,7 @@
           {% endif %}
         </div>
       </div>
+    {% endif %}
 
     {% endfor %}
 
@@ -334,6 +396,32 @@
     });
   }
   setupPushUI();
+
+  /* ─ v5.9 : date charnière — poser / corriger / retirer ─ */
+  function openCharniere() {
+    var f = document.getElementById('charniere-form');
+    f.hidden = false;
+    f.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    document.getElementById('charniere-date-input').focus();
+  }
+  async function saveCharniere(remove) {
+    var date = remove ? '' : document.getElementById('charniere-date-input').value;
+    var titre = remove ? '' : document.getElementById('charniere-titre-input').value;
+    if (!remove && !date) { document.getElementById('charniere-date-input').focus(); return; }
+    var fd = new FormData();
+    fd.append('_csrf', CSRF);
+    fd.append('date', date);
+    fd.append('titre', titre);
+    try {
+      var r = await fetch("{{ url_for('espace_charniere') }}", { method: 'POST', body: fd });
+      var d = await r.json();
+      if (!d.ok) { alert('Charnière : ' + (d.error || 'erreur')); return; }
+      location.reload();
+    } catch(e) { alert('Réseau'); }
+  }
+  window.openCharniere = openCharniere;
+  window.saveCharniere = saveCharniere;
+
 </script>
 
 {% endblock %}

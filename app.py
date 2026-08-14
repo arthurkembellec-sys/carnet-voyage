@@ -668,6 +668,11 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
         "CREATE INDEX IF NOT EXISTS idx_photo_notes_photo ON photo_notes(photo_id)",
+        # ── v5.9 — la date charniere du recit : le moment ou la conversation
+        # s'arrete et ou l'album prend le relais sur la MEME timeline
+        # (le seul moment monumental de la page Histoire).
+        "ALTER TABLE couples ADD COLUMN date_charniere TEXT DEFAULT ''",
+        "ALTER TABLE couples ADD COLUMN charniere_titre TEXT DEFAULT ''",
     ]
     for sql in migrations:
         try:
@@ -5374,11 +5379,93 @@ def histoire():
         "SELECT id, title, type FROM carnets WHERE couple_id=? AND deleted_at IS NULL "
         "ORDER BY title", (eid,)
     )
+    # ── v5.9 : LE FIL UNIFIE — d'abord les mots, puis les images ──────
+    # La timeline fusionne messages, journees de photos (mosaique par jour,
+    # tous carnets confondus), departs de voyage, et la date charniere.
+    # En mode recherche (?q=), on reste sur les messages seuls.
+    espace = current_espace()
+    charniere = {
+        'date': (espace['date_charniere'] or '') if espace else '',
+        'titre': (espace['charniere_titre'] or '') if espace else '',
+    }
+    if charniere['date']:
+        # grande date en toutes lettres, formatee ICI (le formateur JS
+        # global des [data-iso] ne doit pas la reecrire en dd/mm hh:mm)
+        brut = _format_day_fr(charniere['date'][:10])  # 'JEUDI 30 AVRIL'
+        charniere['label'] = (brut.capitalize().split(' ')[0] + ' '
+                              + ' '.join(brut.lower().split(' ')[1:])
+                              + ' ' + charniere['date'][:4])
+    fil_items = [{'kind': 'message', 'm': m,
+                  'sort': (_norm_ts(m.get('sent_at'))[:10] or '0000', 0,
+                           _norm_ts(m.get('sent_at')))} for m in msgs]
+    if not q:
+        # journees de photos : par jour, tous carnets de l'espace
+        photo_rows = query("""
+            SELECT p.id AS photo_id, p.thumb_path, p.taken_at,
+                   ap.id AS page_id, ap.carnet_id, ca.title AS carnet_title
+            FROM photos p
+            JOIN album_pages ap ON ap.photo_id = p.id
+            JOIN carnets ca ON ca.id = ap.carnet_id
+            WHERE p.couple_id = ? AND p.taken_at IS NOT NULL
+              AND COALESCE(ap.is_hidden, 0) = 0 AND ca.deleted_at IS NULL
+            ORDER BY p.taken_at ASC, p.id ASC
+        """, (eid,))
+        days = {}
+        for r in photo_rows:
+            ts = _norm_ts(r['taken_at'])
+            day = ts[:10]
+            if len(day) != 10:
+                continue
+            days.setdefault(day, []).append(dict(r))
+        for day, photos in days.items():
+            carnet_ids = list(dict.fromkeys(p['carnet_id'] for p in photos))
+            titres = list(dict.fromkeys(p['carnet_title'] for p in photos))
+            fil_items.append({
+                'kind': 'photo_day', 'day': day,
+                'photos': photos[:12], 'total': len(photos),
+                'carnet_id': carnet_ids[0], 'carnet_titles': titres,
+                'sort': (day, 1, day),
+            })
+        # departs de voyage (carnets dates)
+        for ca in query("""SELECT id, title, date_start, date_end FROM carnets
+                           WHERE couple_id=? AND deleted_at IS NULL
+                             AND date_start IS NOT NULL AND date_start != ''""", (eid,)):
+            day = str(ca['date_start'])[:10]
+            fil_items.append({'kind': 'carnet_start', 'day': day,
+                              'carnet': dict(ca), 'sort': (day, -1, day)})
+        if charniere['date']:
+            day = charniere['date'][:10]
+            fil_items.append({'kind': 'charniere', 'day': day,
+                              'sort': (day, -2, day)})
+    fil_items.sort(key=lambda it: it['sort'])
     return render_template('histoire.html',
         conv=conv, messages=msgs, members=[dict(m) for m in members],
         bubble_color=bubble_color, query=q,
+        fil_items=fil_items, charniere=charniere,
         carnets_ref=[dict(c) for c in carnets_ref]
     )
+
+
+@app.route('/espace/charniere', methods=['POST'])
+@couple_required
+def espace_charniere():
+    """v5.9 — Pose (ou corrige) la date charniere du recit : le jour ou
+    la conversation laisse la place aux photos. Un titre court optionnel
+    (« Lisbonne » suffit)."""
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    date = (request.form.get('date') or '').strip()
+    titre = (request.form.get('titre') or '').strip()[:80]
+    if date:
+        try:
+            datetime.strptime(date, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'ok': False, 'error': 'bad_date'}), 400
+    execute("UPDATE couples SET date_charniere=?, charniere_titre=? WHERE id=?",
+            (date, titre, current_espace_id()))
+    _log_activity(current_espace_id(), session['uid'], 'charniere_set',
+                  payload={'date': date, 'titre': titre})
+    return jsonify({'ok': True})
 
 
 @app.route('/histoire/message', methods=['POST'])
