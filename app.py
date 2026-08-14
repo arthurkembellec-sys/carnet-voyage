@@ -55,7 +55,12 @@ if not _HEIF_OK:
                 "avec une erreur visible cote client")
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "2.4.1-pdf-btn-reverie-map"
+APP_VERSION = "5.16"
+# v5.16 — version des ASSETS (style.css, pins.js) servie en ?v= : un
+# telephone qui garde l'ancien CSS/JS en cache apres un deploiement rend
+# tous les correctifs invisibles (regle D3 etendue). A BUMPER a chaque
+# lot qui touche static/.
+ASSET_V = "5.16"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
@@ -1071,6 +1076,7 @@ def inject_globals():
         'admin_emails': ADMIN_EMAILS,
         'csrf_token': csrf_token,
         'app_version': APP_VERSION,
+        'asset_v': ASSET_V,
         'accents': ACCENTS,
     }
 

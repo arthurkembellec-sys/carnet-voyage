@@ -493,7 +493,7 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
 <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
 <script>window.PIN_KINDS = {{ (pin_kinds or [])|tojson }};</script>
-<script src="{{ url_for('static', filename='pins.js') }}"></script>
+<script src="{{ url_for('static', filename='pins.js') }}?v={{ asset_v }}"></script>
 {% endif %}
 
 <script>
@@ -1913,14 +1913,19 @@
     /* ─ v5.12 : retirer / ajouter une étape depuis le planning du voyage ─ */
     async function vpRemoveEtape(itemId, btn) {
       btn.disabled = true;
+      /* v5.16 : résultat immédiat — la ligne part tout de suite */
+      for (var k = 0; k < vpDays.length; k++) {
+        vpDays[k] = vpDays[k].filter(function(e){ return e.id !== itemId; });
+      }
+      render();
+      if (window.retirerEtapeCarte) { retirerEtapeCarte(itemId, null); return; }
       var fd = new FormData(); fd.append('_csrf', CSRF);
       try {
         var r = await fetch('/item/' + itemId + '/supprimer', { method: 'POST', body: fd });
         var d = await r.json();
-        if (!d.ok) { setError('Retrait : ' + (d.error || '')); btn.disabled = false; return; }
+        if (!d.ok) { setError('Retrait non enregistré — je resynchronise'); setTimeout(reloadKeepScroll, 900); return; }
         setSaved('Étape retirée — restaurable dans la corbeille du planning');
-        setTimeout(function(){ reloadKeepScroll(); }, 500);
-      } catch(e) { setError('Réseau'); btn.disabled = false; }
+      } catch(e) { setError('Réseau — je resynchronise'); setTimeout(reloadKeepScroll, 900); }
     }
     function vpOpenAdd(card, k) {
       var old = card.querySelector('.vp-add-box');
@@ -1974,34 +1979,44 @@
     render();
   })();
 
-  /* ─ v5.15 : retirer une étape depuis la carte ou les chips — UN appui.
-     Tout part en corbeille restaurable : la confirmation serait du bruit
-     (règle mobile d'Arthur du 2026-08-15). L'armement se perdait de toute
-     façon quand Leaflet recréait le popup entre les deux appuis. */
+  /* ─ v5.16 : RÉSULTAT IMMÉDIAT (règle D3 étendue) — l'étape disparaît
+     de la carte, des chips et du planning à l'instant du tap ; le réseau
+     suit en arrière-plan. Échec réseau → message + resynchronisation. */
   async function retirerEtapeCarte(itemId, btn) {
     if (btn) btn.disabled = true;
+    /* effet immédiat, avant le réseau */
+    if (window.ETAPE_MARKERS && window.ETAPE_MARKERS[itemId]) {
+      try { window.ETAPE_MARKERS[itemId].remove(); } catch(e) {}
+      delete window.ETAPE_MARKERS[itemId];
+    }
+    document.querySelectorAll('.day-etape[data-item-id="' + itemId + '"]').forEach(function(el){ el.remove(); });
+    document.querySelectorAll('.day-step[data-item-id="' + itemId + '"]').forEach(function(el){ el.remove(); });
+    setSaved('Étape retirée — restaurable dans la corbeille du planning');
     var fd = new FormData(); fd.append('_csrf', CSRF);
     try {
       var r = await fetch('/item/' + itemId + '/supprimer', { method: 'POST', body: fd });
       var d = await r.json();
-      if (!d.ok) { setError('Retrait : ' + (d.error || '')); return; }
-      setSaved('Étape retirée — restaurable dans la corbeille du planning');
-      setTimeout(function(){ reloadKeepScroll(); }, 500);
-    } catch(e) { setError('Réseau'); }
+      if (!d.ok) { setError('Retrait non enregistré — je resynchronise'); setTimeout(reloadKeepScroll, 900); }
+    } catch(e) { setError('Réseau — je resynchronise'); setTimeout(reloadKeepScroll, 900); }
   }
   window.retirerEtapeCarte = retirerEtapeCarte;
 
-  /* v5.15 : une photo localisée se retire aussi depuis la carte (corbeille d'album) */
+  /* v5.16 : une photo localisée se retire depuis la carte — immédiat aussi */
   async function retirerPhotoCarte(pageId, btn) {
     if (btn) btn.disabled = true;
+    if (window.PHOTO_MARKERS && window.PHOTO_MARKERS[pageId]) {
+      try { window.PHOTO_MARKERS[pageId].remove(); } catch(e) {}
+      delete window.PHOTO_MARKERS[pageId];
+    }
+    var li = document.querySelector('.page-item[data-page-id="' + pageId + '"]');
+    if (li) li.remove();
+    setSaved('Photo en corbeille de l\'album — restaurable en bas de page');
     var fd = new FormData(); fd.append('_csrf', CSRF);
     try {
       var r = await fetch('/album_page/' + pageId + '/supprimer', { method: 'POST', body: fd });
       var d = await r.json();
-      if (!d.ok) { setError('Retrait : ' + (d.error || '')); if (btn) btn.disabled = false; return; }
-      setSaved('Photo en corbeille de l\'album — restaurable en bas de page');
-      setTimeout(function(){ reloadKeepScroll(); }, 500);
-    } catch(e) { setError('Réseau'); if (btn) btn.disabled = false; }
+      if (!d.ok) { setError('Retrait non enregistré — je resynchronise'); setTimeout(reloadKeepScroll, 900); }
+    } catch(e) { setError('Réseau — je resynchronise'); setTimeout(reloadKeepScroll, 900); }
   }
   window.retirerPhotoCarte = retirerPhotoCarte;
 
@@ -2060,31 +2075,57 @@
     }).addTo(map);
     var bounds = [];
 
+    window.ETAPE_MARKERS = {};
     ETAPES.forEach(function(g){
       var m = L.marker([g.lat, g.lng], {
         icon: NH_PINS.icon(null, g.pin_kind, g.planned_day, false)
       }).addTo(map);
+      window.ETAPE_MARKERS[g.item_id] = m;
       var nom = (g.title || '').replace(/https?:\/\/\S+/g, '').trim().slice(0, 22);
       if (nom) m.bindTooltip(nom, { permanent: true, direction: 'bottom',
                                     className: 'pin-label', offset: [0, 6], opacity: 1 });
       m.bindPopup('<strong>' + (g.title || 'Étape') + '</strong>' +
-        NH_PINS.selecteurHtml(g.pin_kind || '', 'ep' + g.itemId) +
+        NH_PINS.selecteurHtml(g.pin_kind || '', 'ep' + g.item_id) +
         '<button type="button" class="btn btn-secondary btn-sm pin-kind-save"' +
-        ' onclick="enregistrerEpingle(' + g.itemId + ')">OK</button>' +
+        ' onclick="enregistrerEpingle(' + g.item_id + ')">OK</button>' +
         '<button type="button" class="btn btn-secondary btn-sm pin-remove"' +
-        ' onclick="retirerEtapeCarte(' + g.itemId + ', this)"' +
+        ' data-remove-item="' + g.item_id + '"' +
         ' title="Part dans la corbeille du planning, restaurable">✕ Retirer</button>');
       bounds.push([g.lat, g.lng]);
     });
 
+    window.PHOTO_MARKERS = {};
     PHOTOS.forEach(function(p){
       var m = L.marker([p.lat, p.lng], { icon: NH_PINS.iconPhoto(p.thumb) }).addTo(map);
+      window.PHOTO_MARKERS[p.pageId] = m;
       m.bindPopup('<img src="' + p.thumb + '" style="max-width:160px;display:block;margin-bottom:6px">' +
                   '<div style="font-size:11px;color:#6C6E71">' + p.date + '</div>' +
                   '<button type="button" class="btn btn-secondary btn-sm pin-remove"' +
-                  ' onclick="retirerPhotoCarte(' + p.pageId + ', this)"' +
+                  ' data-remove-page="' + p.pageId + '"' +
                   ' title="Part dans la corbeille de l\'album, restaurable">✕ Retirer de l\'album</button>');
       bounds.push([p.lat, p.lng]);
+    });
+
+    /* v5.16 : cablage FIABLE des boutons de popup — la delegation via
+       popupopen + L.DomEvent remplace les onclick en ligne, que le
+       gestionnaire de tap de la carte pouvait avaler sur telephone. */
+    map.on('popupopen', function(e){
+      var root = e.popup.getElement();
+      if (!root) return;
+      root.querySelectorAll('[data-remove-item]').forEach(function(btn){
+        L.DomEvent.on(btn, 'click', function(ev){
+          L.DomEvent.stopPropagation(ev); L.DomEvent.preventDefault(ev);
+          map.closePopup();
+          retirerEtapeCarte(Number(btn.dataset.removeItem), btn);
+        });
+      });
+      root.querySelectorAll('[data-remove-page]').forEach(function(btn){
+        L.DomEvent.on(btn, 'click', function(ev){
+          L.DomEvent.stopPropagation(ev); L.DomEvent.preventDefault(ev);
+          map.closePopup();
+          retirerPhotoCarte(Number(btn.dataset.removePage), btn);
+        });
+      });
     });
 
     if (bounds.length) map.fitBounds(bounds, { padding: [24, 24], maxZoom: 14 });

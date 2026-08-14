@@ -25,10 +25,20 @@
   **sans session**, uniquement par jeton. Une surface publique ne doit **jamais** exposer autre chose
   que la ressource visée : la non-fuite se prouve avec un **jeton étranger**, pas en lecture de code.
 
-### D3 — Mobile d'abord (verrouillé v4.8, commit `b96d991`)
+### D3 — Mobile d'abord (verrouillé v4.8, commit `b96d991` ; étendu v5.16, règle Arthur du 2026-08-15)
 - L'écran de référence est le **téléphone**. Cibles tactiles **44 px** minimum, outils visibles
   **sans survol** (il n'y a pas de hover sur mobile), modales en **feuille** basse.
 - Une interaction qui n'existe qu'au survol ou au clic droit est un **bug d'accessibilité**, pas une finition.
+- **RÉSULTAT IMMÉDIAT** : toute action de l'utilisateur montre son effet à l'écran
+  **instantanément** (UI optimiste — l'élément disparaît/apparaît tout de suite, le réseau
+  suit en arrière-plan ; en cas d'échec réseau : message + resynchronisation). Faire
+  attendre un rechargement de page après un geste est un bug, pas une lenteur acceptable.
+- **TOUTES LES ORIENTATIONS** : chaque outil (croix, bouton, poignée) se vérifie en
+  **390 px portrait ET en paysage**. Un contrôle invisible ou hors-écran dans une
+  orientation est un bug bloquant de recette. Jamais de positionnement absolu fragile
+  pour un outil : les actions vivent dans le flux (flex), pas en surimpression au bord.
+- **CSS versionné** : `style.css` se sert avec `?v=<version>` — un téléphone qui garde
+  l'ancien CSS en cache après un déploiement rend tous les correctifs invisibles.
 
 ### D4 — Rien du contenu utilisateur ne disparaît en silence
 - Photos, notes, épingles, jours de trajet : un élément qui n'entre dans aucun groupe est **listé

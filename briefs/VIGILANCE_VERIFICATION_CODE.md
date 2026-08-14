@@ -36,6 +36,10 @@ Pour chaque écran/geste livré :
   ou refaire par-dessus. **Jamais de cul-de-sac** : une erreur dont on ne sort pas seul est un bug,
   même si le chemin nominal est parfait.
 - **Mobile d'abord** (D3) : le geste se teste au **doigt**, en largeur téléphone. Pas de hover.
+- **Les deux orientations** (D3 étendu v5.16) : chaque outil livré se vérifie en **portrait
+  (390 px) ET en paysage** — capture d'écran des deux, la croix/le bouton doit se voir.
+- **Résultat immédiat** (D3 étendu v5.16) : après le geste, l'effet est à l'écran sans
+  rechargement ; un `location.reload()` comme seul retour visuel est un défaut de recette.
 
 Le rapport de lot liste les erreurs testées et leur chemin de réparation.
 

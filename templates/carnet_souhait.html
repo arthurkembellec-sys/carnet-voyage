@@ -280,7 +280,7 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
 <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
 <script>window.PIN_KINDS = {{ pin_kinds|tojson }};</script>
-<script src="{{ url_for('static', filename='pins.js') }}"></script>
+<script src="{{ url_for('static', filename='pins.js') }}?v={{ asset_v }}"></script>
 <script>
   const CSRF = "{{ csrf_token() }}";
   const URL_ADD_ITEM = "{{ url_for('carnet_add_item', cid_carnet=carnet.id) }}";
@@ -1109,29 +1109,64 @@
     /* v5.14 : retirer l'épingle depuis la carte — part dans la corbeille
        de la rêverie, restaurable (retour téléphone du 2026-08-14) */
     html += '<button type="button" class="btn btn-secondary btn-sm pin-remove"' +
-            ' onclick="removePinFromMap(' + g.itemId + ', this)"' +
+            ' data-remove-item="' + g.itemId + '"' +
             ' title="Part dans la corbeille, restaurable">✕ Retirer</button>';
     return html;
   }
 
   window.removePinFromMap = async function(itemId, btn) {
-    /* v5.15 : UN appui — la corbeille rend la confirmation inutile,
-       et l'armement se perdait quand Leaflet recréait le popup. */
+    /* v5.16 : RÉSULTAT IMMÉDIAT (règle D3 étendue) — l'épingle, sa carte
+       d'idée et ses occurrences du planning disparaissent au tap ; le
+       réseau suit. Échec → message + resynchronisation. */
     if (btn) btn.disabled = true;
+    try { map.closePopup(); } catch(e) {}
+    if (window.PIN_MARKERS && window.PIN_MARKERS[itemId]) {
+      try { map.removeLayer(window.PIN_MARKERS[itemId]); } catch(e) {}
+      delete window.PIN_MARKERS[itemId];
+    }
+    if (window.routePins && routePins[itemId]) {
+      try { routeRemove(itemId); map.removeLayer(routePins[itemId].marker); } catch(e) {}
+      delete routePins[itemId];
+    }
+    var card = document.querySelector('.item-card[data-item-id="' + itemId + '"]');
+    if (card) card.remove();
+    var gi = GEO_ITEMS.findIndex(function(x){ return x.itemId === itemId; });
+    if (gi >= 0) GEO_ITEMS.splice(gi, 1);
+    if (typeof planBlocs !== 'undefined' && planBlocs) {
+      planBlocs.forEach(function(jour){
+        (jour || []).forEach(function(bloc){
+          bloc.steps = (bloc.steps || []).filter(function(id){ return id !== itemId; });
+        });
+      });
+      if (typeof renderPlanning === 'function') renderPlanning();
+    }
     var fd = new FormData(); fd.append('_csrf', CSRF);
     try {
       var r = await fetch('/item/' + itemId + '/supprimer', { method: 'POST', body: fd });
       var d = await r.json();
-      if (!d.ok) { alert('Retrait : ' + (d.error || '')); return; }
-      location.reload();
-    } catch(e) { alert('Réseau'); }
+      if (!d.ok) { alert('Retrait non enregistré — je recharge pour resynchroniser'); location.reload(); }
+    } catch(e) { alert('Réseau — je recharge pour resynchroniser'); location.reload(); }
   };
 
+  /* v5.16 : cablage fiable des boutons de popup (delegation, plus d'onclick en ligne) */
+  if (map) map.on('popupopen', function(e){
+    var root = e.popup.getElement();
+    if (!root) return;
+    root.querySelectorAll('[data-remove-item]').forEach(function(b){
+      L.DomEvent.on(b, 'click', function(ev){
+        L.DomEvent.stopPropagation(ev); L.DomEvent.preventDefault(ev);
+        removePinFromMap(Number(b.dataset.removeItem), b);
+      });
+    });
+  });
+
+  window.PIN_MARKERS = window.PIN_MARKERS || {};
   function addPinToMap(g) {
     var m = L.marker([g.lat, g.lng], {
       icon: pinIcon(null, g.pin_kind, g.planned_day, (g.planned_days || []).length > 1),
       draggable: g.kind === 'location',
     }).addTo(map);
+    window.PIN_MARKERS[g.itemId] = m;
     // v4.7 : nom apparent sous l'épingle — v4.9.1 : texte propre (sans URL),
     // et visible seulement quand le zoom laisse la place (divulgation progressive)
     var raw = (g.title || '').replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim();
