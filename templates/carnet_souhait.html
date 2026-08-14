@@ -645,9 +645,11 @@
     // dans le pool (bi === null) : un bouton pour poser l'idée en halte dans
     // le jour ouvert — sur mobile, glisser dans une page qui défile est pénible
     var actions = (bi == null)
-      ? (selectedDay != null
+      ? ((selectedDay != null
           ? '<button type="button" class="day-step-add" onclick="poolToHalte(' + id + ')"' +
-            ' title="Poser dans le jour ouvert">＋</button>' : '')
+            ' title="Poser dans le jour ouvert">＋</button>' : '') +
+         '<button type="button" class="day-step-out" onclick="removePinFromMap(' + id + ', this)"' +
+         ' title="Supprimer cette idée (part dans la corbeille, restaurable)">🗑</button>')
       : '<button type="button" class="day-step-again" onclick="stepAgain(' + bi + ',' + si + ')"' +
         ' title="Repasser par ici (retour)">↻</button>' +
         '<button type="button" class="day-step-out" onclick="stepToPool(' + bi + ',' + si + ')"' +
@@ -1113,14 +1115,9 @@
   }
 
   window.removePinFromMap = async function(itemId, btn) {
-    if (btn && btn.dataset.armed !== '1') {
-      btn.dataset.armed = '1';
-      btn.classList.add('is-armed');
-      var old = btn.textContent;
-      btn.textContent = 'Confirmer ?';
-      setTimeout(function(){ btn.dataset.armed = ''; btn.classList.remove('is-armed'); btn.textContent = old; }, 3500);
-      return;
-    }
+    /* v5.15 : UN appui — la corbeille rend la confirmation inutile,
+       et l'armement se perdait quand Leaflet recréait le popup. */
+    if (btn) btn.disabled = true;
     var fd = new FormData(); fd.append('_csrf', CSRF);
     try {
       var r = await fetch('/item/' + itemId + '/supprimer', { method: 'POST', body: fd });

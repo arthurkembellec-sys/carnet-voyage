@@ -709,7 +709,10 @@
     }, 3500);
   }
   function armDelete(btn, pageId) {
-    armAction(btn, 'Confirmer ?', function(){ deletePage(pageId); });
+    /* v5.15 : UN appui — la page part en corbeille d'album (restaurable),
+       la confirmation serait du bruit (règle mobile d'Arthur). */
+    if (btn) btn.disabled = true;
+    deletePage(pageId);
   }
   window.armAction = armAction; window.armDelete = armDelete;
 
@@ -1587,7 +1590,7 @@
       const li = document.querySelector(`.page-item[data-page-id="${pageId}"]`);
       if (li) li.remove();
       updateCounts();
-      setSaved('Supprimé');
+      setSaved('Supprimé — retrouvable dans la corbeille de l\'album, en bas de page');
     } catch (e) { setError('Reseau'); }
   }
 
@@ -1971,16 +1974,12 @@
     render();
   })();
 
-  /* ─ v5.14 : retirer une étape depuis la carte ou les chips de jour ─ */
+  /* ─ v5.15 : retirer une étape depuis la carte ou les chips — UN appui.
+     Tout part en corbeille restaurable : la confirmation serait du bruit
+     (règle mobile d'Arthur du 2026-08-15). L'armement se perdait de toute
+     façon quand Leaflet recréait le popup entre les deux appuis. */
   async function retirerEtapeCarte(itemId, btn) {
-    if (btn && btn.dataset.armed !== '1') {
-      btn.dataset.armed = '1';
-      btn.classList.add('is-armed');
-      var old = btn.textContent;
-      btn.textContent = 'Confirmer ?';
-      setTimeout(function(){ btn.dataset.armed = ''; btn.classList.remove('is-armed'); btn.textContent = old; }, 3500);
-      return;
-    }
+    if (btn) btn.disabled = true;
     var fd = new FormData(); fd.append('_csrf', CSRF);
     try {
       var r = await fetch('/item/' + itemId + '/supprimer', { method: 'POST', body: fd });
@@ -1991,6 +1990,20 @@
     } catch(e) { setError('Réseau'); }
   }
   window.retirerEtapeCarte = retirerEtapeCarte;
+
+  /* v5.15 : une photo localisée se retire aussi depuis la carte (corbeille d'album) */
+  async function retirerPhotoCarte(pageId, btn) {
+    if (btn) btn.disabled = true;
+    var fd = new FormData(); fd.append('_csrf', CSRF);
+    try {
+      var r = await fetch('/album_page/' + pageId + '/supprimer', { method: 'POST', body: fd });
+      var d = await r.json();
+      if (!d.ok) { setError('Retrait : ' + (d.error || '')); if (btn) btn.disabled = false; return; }
+      setSaved('Photo en corbeille de l\'album — restaurable en bas de page');
+      setTimeout(function(){ reloadKeepScroll(); }, 500);
+    } catch(e) { setError('Réseau'); if (btn) btn.disabled = false; }
+  }
+  window.retirerPhotoCarte = retirerPhotoCarte;
 
   /* ─ v5.12 : restaurer une étape retirée (corbeille du planning) ─ */
   async function restaurerEtape(itemId, btn) {
@@ -2035,7 +2048,7 @@
     var ETAPES = {{ (geo_etapes or [])|tojson }};
     var PHOTOS = [
       {% for p in geo_photos %}
-      { lat: {{ p.photo_gps_lat }}, lng: {{ p.photo_gps_lng }},
+      { pageId: {{ p.id }}, lat: {{ p.photo_gps_lat }}, lng: {{ p.photo_gps_lng }},
         thumb: "{{ url_for('serve_upload', filename=p.photo_thumb) }}",
         date: "{{ (p.photo_taken_at or '')|replace('T',' ') }}" },
       {% endfor %}
@@ -2067,7 +2080,10 @@
     PHOTOS.forEach(function(p){
       var m = L.marker([p.lat, p.lng], { icon: NH_PINS.iconPhoto(p.thumb) }).addTo(map);
       m.bindPopup('<img src="' + p.thumb + '" style="max-width:160px;display:block;margin-bottom:6px">' +
-                  '<div style="font-size:11px;color:#6C6E71">' + p.date + '</div>');
+                  '<div style="font-size:11px;color:#6C6E71">' + p.date + '</div>' +
+                  '<button type="button" class="btn btn-secondary btn-sm pin-remove"' +
+                  ' onclick="retirerPhotoCarte(' + p.pageId + ', this)"' +
+                  ' title="Part dans la corbeille de l\'album, restaurable">✕ Retirer de l\'album</button>');
       bounds.push([p.lat, p.lng]);
     });
 
