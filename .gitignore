@@ -42,3 +42,7 @@ backups/
 # Briefs : on commit la structure mais pas les briefs sensibles
 # (briefs/ inclus dans le repo ; mettre .gitignore dans briefs/ si besoin
 #  d'exclure des briefs spécifiques avec des données perso)
+
+# dechets git du pont Cowork (locks/objets temporaires non supprimables via le mount)
+_to_delete/
+.claude/
