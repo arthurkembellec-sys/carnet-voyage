@@ -107,6 +107,71 @@ def _emoji_runs(text):
     return runs
 
 
+def _page_day(it):
+    """Jour 'YYYY-MM-DD' d'une page (date de prise, sinon date d'ajout)."""
+    ts = _item_ts(it)
+    return ts[:10] if ts and len(ts) >= 10 else ''
+
+
+_JOURS_FR = ['LUNDI', 'MARDI', 'MERCREDI', 'JEUDI', 'VENDREDI', 'SAMEDI', 'DIMANCHE']
+_MOIS_FR = ['JANVIER', 'FEVRIER', 'MARS', 'AVRIL', 'MAI', 'JUIN', 'JUILLET',
+            'AOUT', 'SEPTEMBRE', 'OCTOBRE', 'NOVEMBRE', 'DECEMBRE']
+
+
+def _day_label_fr(day, chunk=None):
+    """v5.17 — 'SAMEDI 11 JUILLET · SALERS' : le livre marque les changements
+    de date et de lieu, comme l'album (retour d'Arthur du 2026-08-15)."""
+    from datetime import datetime as _dt
+    try:
+        d = _dt.strptime(day, '%Y-%m-%d')
+    except (ValueError, TypeError):
+        return ''
+    lbl = f"{_JOURS_FR[d.weekday()]} {d.day} {_MOIS_FR[d.month - 1]}"
+    villes = [it.get('photo_city') for it in (chunk or []) if it.get('photo_city')]
+    if villes:
+        top = max(set(villes), key=villes.count)
+        lbl += '  ·  ' + str(top).upper()
+    return lbl
+
+
+def _program_chunks(pages_main, n_per_page):
+    """v5.17 — LA segmentation de reference du livre, partagee entre le
+    program PDF, build_margin_plan et l'apercu (rester synchrones est vital :
+    les notes de marge sont distribuees par index de page composite).
+
+    Retourne [('chunk', [pages]) | ('full', page) | ('spread', page)].
+    Une page composite ne melange JAMAIS deux journees : le chunk se coupe
+    au changement de jour, la ou l'album coupe ses sections.
+    """
+    out = []
+    cur = []
+    cur_day = None
+
+    def flush():
+        nonlocal cur, cur_day
+        if cur:
+            out.append(('chunk', cur))
+        cur = []
+        cur_day = None
+
+    for p in pages_main:
+        mode = _full_bleed_mode(p)
+        if mode != 'normal':
+            flush()
+            out.append((mode, p))
+            continue
+        d = _page_day(p)
+        if cur and d and cur_day and d != cur_day:
+            flush()
+        cur.append(p)
+        if d:
+            cur_day = d
+        if len(cur) >= n_per_page:
+            flush()
+    flush()
+    return out
+
+
 def build_margin_plan(pages_main, margin_pool, n_per_page):
     """v3.4.1 : distribution des notes de marge par page composite, alignee
     sur les dates (fusion chronologique) au lieu de la repartition uniforme.
@@ -118,20 +183,8 @@ def build_margin_plan(pages_main, margin_pool, n_per_page):
     composite — meme decoupage en chunks que le program PDF et que
     apercu.html (chunks de n_per_page, coupes par les pleines pages/spreads).
     """
-    chunks = []
-    cur = []
-    for p in pages_main:
-        if _full_bleed_mode(p) != 'normal':
-            if cur:
-                chunks.append(cur)
-                cur = []
-        else:
-            cur.append(p)
-            if len(cur) >= n_per_page:
-                chunks.append(cur)
-                cur = []
-    if cur:
-        chunks.append(cur)
+    # v5.17 : segmentation partagee (coupe aussi aux changements de journee)
+    chunks = [c for k, c in _program_chunks(pages_main, n_per_page) if k == 'chunk']
     n = len(chunks)
     plan = [[] for _ in range(n)]
     pool = list(margin_pool or [])
@@ -507,6 +560,95 @@ def render_carnet_pdf(
             _draw_text_box(item, x, y, w, h)
         return None
 
+    def _item_ar(item):
+        """Ratio largeur/hauteur d'une case : dimensions reelles de la photo,
+        3:2 pour une video, 3:4 pour la case de marge ou un bloc texte."""
+        if isinstance(item, dict):
+            if item.get('_marge_case'):
+                return 0.75
+            w_, h_ = item.get('photo_width'), item.get('photo_height')
+            if w_ and h_:
+                return max(0.3, min(3.2, w_ / h_))
+            if item.get('video_path'):
+                return 1.5
+        return 1.333
+
+    def _justified_boxes(items, x, y, w, h, gap=3 * mm):
+        """v5.17 — Calepinage aux RATIOS REELS (retour d'Arthur : les
+        portraits sous/sur les paysages doivent occuper l'espace).
+
+        Rangees a la Flickr : chaque rangee prend toute la largeur, sa
+        hauteur = largeur / somme des ratios -> les portraits d'une meme
+        rangee sont GRANDS, plus aucune bande blanche dans les cases.
+        On enumere les partitions ordonnees (n<=7 -> 64 max) et on garde
+        celle qui remplit le mieux la hauteur disponible.
+        """
+        n = len(items)
+        if n == 0:
+            return []
+        ars = [_item_ar(it) for it in items]
+
+        def rows_metrics(partition):
+            rows = []
+            k = 0
+            for taille in partition:
+                grp = ars[k:k + taille]
+                k += taille
+                rh = (w - gap * (taille - 1)) / sum(grp)
+                rows.append((grp, rh))
+            total = sum(rh for _, rh in rows) + gap * (len(rows) - 1)
+            return rows, total
+
+        # toutes les compositions ordonnees en rangees de 1 a 3
+        def partitions(reste):
+            if reste == 0:
+                yield []
+                return
+            for taille in (1, 2, 3):
+                if taille <= reste:
+                    for suite in partitions(reste - taille):
+                        yield [taille] + suite
+
+        best = None
+        for part in partitions(n):
+            rows, total = rows_metrics(part)
+            # une rangee ne doit pas depasser ~70% de la hauteur (une photo
+            # unique en rangee peut etre enorme) sauf s'il n'y a qu'une rangee
+            if len(rows) > 1 and any(rh > h * 0.72 for _, rh in rows):
+                continue
+            scale = min(1.0, h / total) if total > 0 else 1.0
+            rempli = total * scale / h
+            score = rempli - (0.10 if scale < 1.0 else 0.0)
+            if best is None or score > best[0]:
+                best = (score, rows, total, scale)
+        if best is None:                      # secours : tout en une colonne
+            part = [1] * n
+            rows, total = rows_metrics(part)
+            scale = min(1.0, h / total)
+            best = (0, rows, total, scale)
+        _, rows, total, scale = best
+
+        # hauteur reelle apres echelle ; le reliquat aere les inter-rangees
+        # (plafonne) puis centre le bloc verticalement
+        total_scaled = total * scale
+        extra = max(0.0, h - total_scaled)
+        n_inter = max(1, len(rows) - 1)
+        gap_extra = min(extra / n_inter, 5 * mm) if len(rows) > 1 else 0
+        reste_v = extra - gap_extra * (len(rows) - 1)
+        boxes = []
+        y_cur = y + h - reste_v / 2
+        for grp, rh in rows:
+            rh_s = rh * scale
+            row_w = sum(a * rh_s for a in grp) + gap * (len(grp) - 1)
+            x_cur = x + (w - row_w) / 2
+            y_cur -= rh_s
+            for a in grp:
+                bw = a * rh_s
+                boxes.append((x_cur, y_cur, bw, rh_s))
+                x_cur += bw + gap
+            y_cur -= (gap + gap_extra)
+        return boxes
+
     def _grid_layout(n, x, y, w, h, gap=3 * mm):
         """Grille adaptative pour 1..6 cases.
         v5.6 : 5 et 6 sont apparus quand la note en marge est devenue une case
@@ -706,26 +848,29 @@ def render_carnet_pdf(
     # Pages principales : structurer par chunks selon mode plein-page
     margin_items_pool = list(pages_data.get('margin') or []) if margin_pos != 'end' else []
 
-    i = 0
-    while i < len(pages_main):
-        item = pages_main[i]
-        mode = _full_bleed_mode(item)
-        if mode == 'spread':
-            program.append({'kind': 'spread', 'item': item})
-            i += 1
-        elif mode == 'full':
-            program.append({'kind': 'full', 'item': item})
-            i += 1
+    # v5.17 : segmentation partagee (_program_chunks) + bandeau de jour sur
+    # la premiere page de chaque journee — le livre marque les transitions
+    # de date/lieu comme l'album.
+    prev_day = None
+    for seg_kind, seg in _program_chunks(pages_main, n_per_page):
+        if seg_kind == 'spread':
+            program.append({'kind': 'spread', 'item': seg})
+            d = _page_day(seg)
+            if d:
+                prev_day = d
+        elif seg_kind == 'full':
+            program.append({'kind': 'full', 'item': seg})
+            d = _page_day(seg)
+            if d:
+                prev_day = d
         else:
-            # Composite : chunk de n_per_page items normaux jusqu'au prochain non-normal
-            chunk = []
-            while i < len(pages_main) and len(chunk) < n_per_page:
-                if _full_bleed_mode(pages_main[i]) != 'normal':
-                    break
-                chunk.append(pages_main[i])
-                i += 1
-            if chunk:
-                program.append({'kind': 'composite', 'chunk': chunk})
+            entry = {'kind': 'composite', 'chunk': seg}
+            jours = [d for d in (_page_day(p) for p in seg) if d]
+            d = jours[0] if jours else ''
+            if d and d != prev_day:
+                entry['day_label'] = _day_label_fr(d, seg)
+                prev_day = d
+            program.append(entry)
 
     # Notes en marge restantes en fin de livre
     end_margin_items = []
@@ -911,9 +1056,21 @@ def render_carnet_pdf(
     marge_reportee = []      # v5.6 : ce qui n'a pas tenu dans la case passe
                              # a la page composite suivante, jamais a la trappe
 
-    def _draw_composite(chunk, margin_items_for_page, side, page_num):
+    def _draw_composite(chunk, margin_items_for_page, side, page_num,
+                        day_label=None):
         _fill_page_cream()
         cx, cy, cw, ch = _content_box(side)
+
+        # v5.17 : bandeau de jour — le livre marque le changement de date
+        # et de lieu, comme les en-tetes de sections de l'album
+        if day_label:
+            pdf.setFont('Helvetica-Bold', 8.5)
+            pdf.setFillColorRGB(*ACCENT_RGB)
+            pdf.drawString(cx, cy + ch - 8, day_label)
+            pdf.setStrokeColorRGB(*LINE_RGB)
+            pdf.setLineWidth(0.4)
+            pdf.line(cx, cy + ch - 12, cx + cw, cy + ch - 12)
+            ch -= 8 * mm
 
         # Découpe content-box en album-zone + margin-zone
         margin_w = 0
@@ -952,23 +1109,15 @@ def render_carnet_pdf(
             mzone_h = margin_h
         # else 'end' : pas de zone marge (mzone_w=0)
 
-        # 1) Album : disposition photos
+        # 1) Album : calepinage aux ratios reels (v5.17). La case de marge
+        # participe au calepinage comme une case 3:4, cote exterieur/interieur.
         n = len(chunk)
-        # Lettres a/b/c…
-        letter_for = {}
-        if show_letters:
-            letters_seq = 'abcdefgh'
-            for i, item in enumerate(chunk):
-                if i < len(letters_seq):
-                    letter_for[id(item)] = letters_seq[i]
-
         if marge_en_case:
-            # La grille compte une case de plus : celle de la marge. Elle se
-            # place du côté extérieur (loin de la reliure) ou intérieur, selon
-            # le réglage — donc en tête sur les pages où ce côté est à gauche.
-            cases = _grid_layout(n + 1, album_x, album_y, album_w, album_h)
             cote_gauche = ((margin_pos_local == 'outer' and side == 'verso') or
                            (margin_pos_local == 'inner' and side == 'recto'))
+            cellules = ([{'_marge_case': True}] + list(chunk)) if cote_gauche \
+                       else (list(chunk) + [{'_marge_case': True}])
+            cases = _justified_boxes(cellules, album_x, album_y, album_w, album_h)
             if cote_gauche:
                 mzone_x, mzone_y, mzone_w, mzone_h = cases[0]
                 boxes = cases[1:]
@@ -976,9 +1125,19 @@ def render_carnet_pdf(
                 mzone_x, mzone_y, mzone_w, mzone_h = cases[-1]
                 boxes = cases[:-1]
         else:
-            boxes = _grid_layout(n, album_x, album_y, album_w, album_h)
+            boxes = _justified_boxes(list(chunk), album_x, album_y, album_w, album_h)
         # Si on a une zone marge, les légendes vont dans la marge.
         captions_to_margin = (mzone_w > 0)
+        # v5.17 : regle simple — une lettre SEULEMENT si une legende part en
+        # marge et s'y refere. Pas de note, pas de repere (retour d'Arthur).
+        letter_for = {}
+        if show_letters and captions_to_margin:
+            letters_seq = 'abcdefgh'
+            j = 0
+            for item in chunk:
+                if item.get('caption') and j < len(letters_seq):
+                    letter_for[id(item)] = letters_seq[j]
+                    j += 1
         for box, item in zip(boxes, chunk):
             _draw_in_box(item, *box,
                          with_letter=letter_for.get(id(item)),
@@ -1166,7 +1325,8 @@ def render_carnet_pdf(
         elif kind == 'composite':
             _draw_composite(entry['chunk'],
                             entry.get('margin_items'),
-                            side, page_num)
+                            side, page_num,
+                            day_label=entry.get('day_label'))
         elif kind == 'margin_intro':
             _draw_margin_intro(side, page_num)
         elif kind == 'margin_grid':

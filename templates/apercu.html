@@ -455,23 +455,33 @@
      ────────────────────────────────────────────────────────────────── #}
   {% set n_per = layout|int %}
 
-  {# Sépare les items en groupes selon full_bleed_override #}
+  {# Sépare les items en groupes selon full_bleed_override.
+     v5.17 : MÊME segmentation que _program_chunks (pdf_book) — un chunk se
+     coupe aussi au CHANGEMENT DE JOURNÉE (rester synchrones est vital pour
+     la distribution des notes de marge, indexée par page composite). #}
   {% set ns = namespace(blocks=[]) %}
   {% set ns.cur_chunk = [] %}
+  {% set ns.cur_day = '' %}
   {% for p in main_pages %}
     {% set fb = p.full_bleed_override %}
+    {% set pday = ((p.photo_taken_at or p.video_taken_at or p.created_at or '')|replace('T',' '))[:10] %}
     {% if fb == 2 %}
       {# spread : ferme le chunk en cours, ajoute le spread #}
-      {% if ns.cur_chunk %}{% set _ = ns.blocks.append({'kind':'composite','chunk':ns.cur_chunk}) %}{% set ns.cur_chunk = [] %}{% endif %}
+      {% if ns.cur_chunk %}{% set _ = ns.blocks.append({'kind':'composite','chunk':ns.cur_chunk}) %}{% set ns.cur_chunk = [] %}{% set ns.cur_day = '' %}{% endif %}
       {% set _ = ns.blocks.append({'kind':'spread','item':p}) %}
     {% elif fb == 1 %}
-      {% if ns.cur_chunk %}{% set _ = ns.blocks.append({'kind':'composite','chunk':ns.cur_chunk}) %}{% set ns.cur_chunk = [] %}{% endif %}
+      {% if ns.cur_chunk %}{% set _ = ns.blocks.append({'kind':'composite','chunk':ns.cur_chunk}) %}{% set ns.cur_chunk = [] %}{% set ns.cur_day = '' %}{% endif %}
       {% set _ = ns.blocks.append({'kind':'full','item':p}) %}
     {% else %}
+      {% if ns.cur_chunk and pday and ns.cur_day and pday != ns.cur_day %}
+        {% set _ = ns.blocks.append({'kind':'composite','chunk':ns.cur_chunk}) %}
+        {% set ns.cur_chunk = [] %}{% set ns.cur_day = '' %}
+      {% endif %}
       {% set _ = ns.cur_chunk.append(p) %}
+      {% if pday %}{% set ns.cur_day = pday %}{% endif %}
       {% if ns.cur_chunk|length >= n_per %}
         {% set _ = ns.blocks.append({'kind':'composite','chunk':ns.cur_chunk}) %}
-        {% set ns.cur_chunk = [] %}
+        {% set ns.cur_chunk = [] %}{% set ns.cur_day = '' %}
       {% endif %}
     {% endif %}
   {% endfor %}

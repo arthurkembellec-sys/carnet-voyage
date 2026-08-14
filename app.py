@@ -55,7 +55,7 @@ if not _HEIF_OK:
                 "avec une erreur visible cote client")
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "5.16"
+APP_VERSION = "5.17"
 # v5.16 — version des ASSETS (style.css, pins.js) servie en ?v= : un
 # telephone qui garde l'ancien CSS/JS en cache apres un deploiement rend
 # tous les correctifs invisibles (regle D3 etendue). A BUMPER a chaque
@@ -2174,16 +2174,27 @@ def _compute_map_zoom(min_lat, max_lat, min_lng, max_lng, width_px, height_px):
 
 
 def _carnet_geo_summary(carnet_id):
-    """Retourne dict {markers, center, bbox, count} ou None si pas de GPS."""
+    """Retourne dict {markers, center, bbox, count} ou None si pas de GPS.
+
+    v5.17 : les ETAPES du planning (carnet_items kind=location) rejoignent
+    la carte d'ensemble du livre — l'utilisateur prepare ses lieux sur la
+    carte de planification, le livre les reutilise (retour d'Arthur)."""
     rows = query("""
         SELECT p.gps_lat, p.gps_lng FROM photos p
         JOIN album_pages ap ON ap.photo_id = p.id
         WHERE ap.carnet_id = ? AND p.gps_lat IS NOT NULL AND p.gps_lng IS NOT NULL
+          AND COALESCE(ap.is_hidden, 0) = 0
         UNION
         SELECT v.gps_lat, v.gps_lng FROM videos v
         JOIN album_pages ap ON ap.video_id = v.id
         WHERE ap.carnet_id = ? AND v.gps_lat IS NOT NULL AND v.gps_lng IS NOT NULL
-    """, (carnet_id, carnet_id))
+          AND COALESCE(ap.is_hidden, 0) = 0
+        UNION
+        SELECT ci.geo_lat, ci.geo_lng FROM carnet_items ci
+        WHERE ci.carnet_id = ? AND ci.kind = 'location'
+          AND ci.geo_lat IS NOT NULL AND ci.geo_lng IS NOT NULL
+          AND ci.deleted_at IS NULL
+    """, (carnet_id, carnet_id, carnet_id))
     coords = []
     seen = set()
     for r in rows:
