@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Notre Histoire — icone app : le coeur, trace d'un seul trait -->
+  <rect width="512" height="512" fill="#FBFAF7"/>
+  <path d="M256 430
+           C 132 346 78 276 78 196
+           C 78 134 126 90 184 90
+           C 218 90 246 108 256 138
+           C 266 108 294 90 328 90
+           C 386 90 434 134 434 196
+           C 434 276 380 346 256 430 Z"
+        fill="none" stroke="#A8503D" stroke-width="30"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

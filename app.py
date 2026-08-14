@@ -643,6 +643,18 @@ def init_db():
             geometry   TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""",
+        # ── v5.7 — chronologie fiable : origine de la date de prise
+        # ('exif' | 'fichier' | 'manuel' | '' pour l'historique) + nom de
+        # fichier d'origine (les photos passees par WhatsApp/Instagram sont
+        # strippees de leur EXIF -> la date se devine dans le nom de fichier).
+        # Regle R4 : tout fallback se VOIT a l'ecran (badge), jamais muet.
+        "ALTER TABLE photos ADD COLUMN taken_at_source TEXT DEFAULT ''",
+        "ALTER TABLE photos ADD COLUMN orig_filename TEXT DEFAULT ''",
+        # ── v5.7 — taille intermediaire 1024px pour la photo hero d'une
+        # scene (le thumb 400 est trop juste en pleine largeur, l'original
+        # 2000 trop lourd). Generee a l'upload pour le neuf, paresseusement
+        # pour l'existant (_ensure_mid) -> pas de migration lourde au boot.
+        "ALTER TABLE photos ADD COLUMN mid_path TEXT DEFAULT ''",
     ]
     for sql in migrations:
         try:
@@ -3192,6 +3204,9 @@ def _carnet_pages(carnet_id, sort_mode='chrono'):
                p.file_path AS photo_path, p.thumb_path AS photo_thumb,
                p.width AS photo_width, p.height AS photo_height,
                p.taken_at AS photo_taken_at,
+               p.taken_at_source AS photo_taken_at_source,
+               p.orig_filename AS photo_orig_filename,
+               p.mid_path AS photo_mid,
                p.gps_lat AS photo_gps_lat, p.gps_lng AS photo_gps_lng,
                p.address_full AS photo_address_full,
                p.country AS photo_country, p.state AS photo_state,
@@ -3554,6 +3569,68 @@ def _gps_dms_to_dd(dms, ref):
         return None
 
 
+def _date_from_filename(filename):
+    """v5.7 — Devine la date de prise depuis le NOM du fichier quand l'EXIF
+    est absent (WhatsApp, Instagram et les apps de rencontre strippent les
+    metadonnees). Retourne un ISO 'YYYY-MM-DDTHH:MM:SS' ou None.
+
+    Motifs reconnus (les plus courants du terrain) :
+      IMG-20260712-WA0003     WhatsApp (date seule -> heure neutre 12:00)
+      PXL_20260712_103340123  Google Pixel (date + heure)
+      IMG_20260712_103340     Android / GoPro ; idem VID_/PANO_
+      20260712_103340         Samsung
+      Screenshot_2026-07-12-10-33-40 / Screenshot 2026-07-12 at 10.33.40
+      2026-07-12 10.33.40     export divers
+    Une date sans heure recoit 12:00:00 (neutre : reste dans la bonne
+    journee sans pretendre a une heure precise).
+    """
+    import re as _re
+    if not filename:
+        return None
+    name = os.path.basename(str(filename))
+
+    def _valide(y, mo, d, h=12, mi=0, s=0):
+        try:
+            dt = datetime(int(y), int(mo), int(d), int(h), int(mi), int(s))
+        except ValueError:
+            return None
+        if not (2000 <= dt.year <= 2100):
+            return None
+        # Une date de prise dans le futur est un faux positif (suite de
+        # chiffres qui ressemble a une date), pas une date.
+        if dt > datetime.now() + timedelta(days=1):
+            return None
+        return dt.isoformat(timespec='seconds')
+
+    # 1) Date + heure compactes : PXL_/IMG_/VID_/20260712_103340
+    m = _re.search(r'(20\d{2})(\d{2})(\d{2})[_-]?(\d{2})(\d{2})(\d{2})', name)
+    if m:
+        iso = _valide(*m.groups())
+        if iso:
+            return iso
+    # 2) Date + heure avec separateurs : Screenshot_2026-07-12-10-33-40,
+    #    'Screenshot 2026-07-12 at 10.33.40', '2026-07-12 10.33.40'
+    m = _re.search(r'(20\d{2})-(\d{2})-(\d{2})[ _-]+(?:at[ _])?(\d{2})[.\-h:](\d{2})[.\-m:]?(\d{2})?', name)
+    if m:
+        y, mo, d, h, mi, s = m.groups()
+        iso = _valide(y, mo, d, h, mi, s or 0)
+        if iso:
+            return iso
+    # 3) Date compacte seule : IMG-20260712-WA0003, 20260712.jpg
+    m = _re.search(r'(?:^|[^\d])(20\d{2})(\d{2})(\d{2})(?:[^\d]|$)', name)
+    if m:
+        iso = _valide(*m.groups())
+        if iso:
+            return iso
+    # 4) Date ISO seule : 2026-07-12
+    m = _re.search(r'(20\d{2})-(\d{2})-(\d{2})', name)
+    if m:
+        iso = _valide(*m.groups())
+        if iso:
+            return iso
+    return None
+
+
 def _save_uploaded_photo(file, couple_id):
     """
     Sauvegarde une photo uploadee :
@@ -3628,16 +3705,54 @@ def _save_uploaded_photo(file, couple_id):
     thumb_fpath = os.path.join(couple_dir, thumb_fname)
     thumb.save(thumb_fpath, 'JPEG', quality=72, optimize=True)
 
+    # v5.7 : taille intermediaire 1024px (photo hero de scene)
+    mid = img.copy()
+    mid.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+    mid_fname = f"{token}_m.jpg"
+    mid_fpath = os.path.join(couple_dir, mid_fname)
+    mid.save(mid_fpath, 'JPEG', quality=80, optimize=True)
+
     rel_file = f"{couple_id}/{fname}"
     rel_thumb = f"{couple_id}/{thumb_fname}"
+    rel_mid = f"{couple_id}/{mid_fname}"
     return {
         'file_path': rel_file,
         'thumb_path': rel_thumb,
+        'mid_path': rel_mid,
         'width': w, 'height': h,
         'taken_at': taken_at,
         'gps_lat': gps_lat,
         'gps_lng': gps_lng,
     }
+
+
+def _ensure_mid(photo_id, file_path, mid_path):
+    """v5.7 — Garantit la version 1024px d'une photo EXISTANTE (les photos
+    d'avant v5.7 n'ont pas de mid). Generation paresseuse depuis l'original
+    2000px, une seule fois, au premier affichage en hero. Retourne le chemin
+    relatif du mid, ou None si la generation echoue (le template retombe
+    alors sur le thumb — et le log le dit, regle R4)."""
+    if mid_path:
+        return mid_path
+    if not file_path:
+        return None
+    src = os.path.join(UPLOAD_DIR, file_path)
+    if not os.path.exists(src):
+        log.warning("_ensure_mid: original absent (%s)", file_path)
+        return None
+    try:
+        img = Image.open(src)
+        img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        base, _ = os.path.splitext(file_path)
+        rel_mid = f"{base}_m.jpg"
+        img.save(os.path.join(UPLOAD_DIR, rel_mid), 'JPEG', quality=80, optimize=True)
+        execute("UPDATE photos SET mid_path=? WHERE id=?", (rel_mid, photo_id))
+        return rel_mid
+    except Exception as e:
+        log.warning("_ensure_mid: echec pour photo %s : %s", photo_id, e)
+        return None
 
 
 def _deg_to_dms_rational(deg):
@@ -3863,6 +3978,20 @@ def carnet_album(cid_carnet):
           AND NOT EXISTS (SELECT 1 FROM album_pages ap WHERE ap.video_id = v.id)
         ORDER BY v.added_at ASC
     """, (c['couple_id'],))]
+    # v5.7 : photo hero de chaque scene -> version 1024px garantie
+    # (generation paresseuse pour les photos d'avant v5.7)
+    for s1 in pages.get('structured', []):
+        hero_lists = [sub['pages'] for sub in s1.get('subsections', [])]
+        if s1.get('pages'):
+            hero_lists.append(s1['pages'])
+        for plist in hero_lists:
+            first_photo = next((p for p in plist if p.get('photo_path')), None)
+            if first_photo and not first_photo.get('photo_mid'):
+                m = _ensure_mid(first_photo['photo_id'],
+                                first_photo['photo_path'],
+                                first_photo.get('photo_mid'))
+                if m:
+                    first_photo['photo_mid'] = m
     return render_template('album.html', carnet=c,
         etapes_by_day=etapes_by_day, etapes_all=etapes_all,
         pin_kinds=PIN_KINDS,
@@ -3922,12 +4051,23 @@ def carnet_upload_photos(cid_carnet):
             log.error("upload #%d (%s) ECHEC: %s\n%s", idx + 1, f.filename, e, tb)
             errors.append(f"{f.filename}: {type(e).__name__}: {e}")
             continue
-        # Source de verite : EXIF cote serveur (data) > client > rien
-        # Le client envoie ses lectures exifr ; le serveur lit aussi via Pillow
-        # quand l'original arrive non compresse cote client. On combine.
+        # Source de verite : EXIF cote serveur (data) > client > nom de
+        # fichier > rien. Le client envoie ses lectures exifr ; le serveur
+        # lit aussi via Pillow quand l'original arrive non compresse.
+        # v5.7 : l'origine de la date est TRACEE (taken_at_source) et le
+        # fallback nom de fichier se voit a l'ecran (regle R4).
+        taken_source = 'exif' if data.get('taken_at') else ''
         ct = client_taken[idx] if idx < len(client_taken) else ''
         if ct and ct != 'null' and not data.get('taken_at'):
             data['taken_at'] = ct
+            taken_source = 'exif'
+        if not data.get('taken_at'):
+            devine = _date_from_filename(f.filename)
+            if devine:
+                data['taken_at'] = devine
+                taken_source = 'fichier'
+                log.info("upload #%d (%s) : date devinee depuis le nom -> %s",
+                         idx + 1, f.filename, devine)
         gps_lat = data.get('gps_lat')
         gps_lng = data.get('gps_lng')
         if gps_lat is None:
@@ -3942,11 +4082,16 @@ def carnet_upload_photos(cid_carnet):
                              data.get('taken_at'), gps_lat, gps_lng)
         photo_id = execute(
             "INSERT INTO photos (couple_id, file_path, thumb_path, width, height, "
-            "taken_at, gps_lat, gps_lng, added_by) VALUES (?,?,?,?,?,?,?,?,?)",
+            "taken_at, gps_lat, gps_lng, added_by, taken_at_source, orig_filename) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (c['couple_id'], data['file_path'], data['thumb_path'],
              data['width'], data['height'], data['taken_at'],
-             gps_lat, gps_lng, session['uid'])
+             gps_lat, gps_lng, session['uid'],
+             taken_source, (f.filename or '')[:255])
         )
+        if data.get('mid_path'):
+            execute("UPDATE photos SET mid_path=? WHERE id=?",
+                    (data['mid_path'], photo_id))
         _enrich_photo_geo(photo_id, gps_lat, gps_lng)
         pos = _next_page_position(cid_carnet)
         page_id = execute(
@@ -4207,9 +4352,65 @@ def page_update_taken_at(page_id):
                 iso = datetime.strptime(raw, '%Y-%m-%dT%H:%M:%S').isoformat()
             except ValueError:
                 return jsonify({'ok': False, 'error': 'bad_date'}), 400
-    execute("UPDATE photos SET taken_at=? WHERE id=?", (iso, page['photo_id']))
+    # v5.7 : la date saisie a la main est tracee comme telle (badge a l'ecran)
+    execute("UPDATE photos SET taken_at=?, taken_at_source='manuel' WHERE id=?",
+            (iso, page['photo_id']))
     execute("UPDATE album_pages SET updated_at=CURRENT_TIMESTAMP WHERE id=?", (page_id,))
+    # v5.7 : la photo datee rejoint sa journee sans attendre un recompute manuel
+    try:
+        _recompute_sections(page['carnet_id'])
+    except Exception as e:
+        log.warning("recompute apres datation manuelle: %s", e)
     return jsonify({'ok': True, 'taken_at': iso})
+
+
+@app.route('/carnet/<int:cid_carnet>/photos/dater_lot', methods=['POST'])
+@couple_required
+def carnet_dater_lot(cid_carnet):
+    """v5.7 — Datation PAR LOT des photos sans date (audit P1 : 26 % des
+    photos etaient sans date, et la saisie n'existait que photo par photo).
+    Recoit page_ids[] + taken_at (datetime-local). La 1re photo du lot prend
+    la date exacte ; les suivantes s'espacent d'une minute pour conserver
+    l'ordre de selection a l'interieur de la journee. Source tracee 'manuel'."""
+    c = _get_carnet_or_404(cid_carnet)
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    raw = (request.form.get('taken_at') or '').strip()
+    try:
+        base = datetime.strptime(raw, '%Y-%m-%dT%H:%M')
+    except ValueError:
+        try:
+            base = datetime.strptime(raw, '%Y-%m-%dT%H:%M:%S')
+        except ValueError:
+            return jsonify({'ok': False, 'error': 'bad_date'}), 400
+    ids = [i for i in request.form.getlist('page_ids') if str(i).isdigit()]
+    if not ids:
+        return jsonify({'ok': False, 'error': 'no_pages'}), 400
+    # Cloisonnement : seules les pages de CE carnet (donc de cet espace,
+    # deja verifie par _get_carnet_or_404) sont touchees.
+    ph = ','.join('?' * len(ids))
+    pages = query(f"""
+        SELECT ap.id, ap.photo_id FROM album_pages ap
+        WHERE ap.carnet_id=? AND ap.id IN ({ph}) AND ap.photo_id IS NOT NULL
+    """, tuple([cid_carnet] + ids))
+    by_id = {str(p['id']): p['photo_id'] for p in pages}
+    dates = 0
+    for k, pid_str in enumerate(ids):
+        photo_id = by_id.get(str(pid_str))
+        if not photo_id:
+            continue  # page d'un autre carnet ou sans photo : ignoree
+        iso = (base + timedelta(minutes=k)).isoformat(timespec='seconds')
+        execute("UPDATE photos SET taken_at=?, taken_at_source='manuel' WHERE id=?",
+                (iso, photo_id))
+        dates += 1
+    if dates:
+        try:
+            _recompute_sections(cid_carnet)
+        except Exception as e:
+            log.warning("recompute apres datation par lot: %s", e)
+        _log_activity(c['couple_id'], session['uid'], 'photos_dated',
+                      target_carnet_id=cid_carnet, payload={'count': dates})
+    return jsonify({'ok': True, 'dated': dates, 'ignored': len(ids) - dates})
 
 
 @app.route('/carnet/<int:cid_carnet>/margin_note', methods=['POST'])

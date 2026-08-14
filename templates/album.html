@@ -57,8 +57,24 @@
         ↻ Remettre en ordre chronologique
       </button>
       <span class="sort-hint">Glisse-dépose les photos pour affiner</span>
+      {# v5.7 : densité de la grille — mémorisée sur cet appareil #}
+      <div class="density-toggle" role="group" aria-label="Densité d'affichage">
+        <button type="button" data-density="recit"   onclick="setDensity('recit')">Récit</button>
+        <button type="button" data-density="confort" onclick="setDensity('confort')">Confort</button>
+        <button type="button" data-density="dense"   onclick="setDensity('dense')">Dense</button>
+      </div>
     </div>
   </section>
+
+  {# ────── v5.7 : PHOTOS À DATER — visibles dès l'entrée, jamais perdues ────── #}
+  {% set orphan_photos_n = orphans|selectattr('photo_path')|list|length %}
+  {% if orphan_photos_n %}
+  <button type="button" class="adater-banner" onclick="document.getElementById('section-a-dater').scrollIntoView({behavior:'smooth'})">
+    <span class="adater-banner-count">{{ orphan_photos_n }}</span>
+    photo{{ 's' if orphan_photos_n > 1 }} sans date — l'album ne sait pas où
+    {{ 'les' if orphan_photos_n > 1 else 'la' }} ranger&nbsp;·&nbsp;<u>dater par lot</u>
+  </button>
+  {% endif %}
 
   {# ────── LA CARTE DU CARNET : étapes préparées + photos localisées ────── #}
   {% if geo_photos or geo_etapes %}
@@ -145,24 +161,43 @@
           {% endif %}
           <div class="day-block">
             <div class="day-main">
-              <ul class="pages-list pages-list-sub">
-                {% for sub in s1.subsections %}
-                  {% if s1.subsections|length > 1 %}
-                  <li class="moment-sep">
-                    <span class="moment-sep-title">{{ sub.section.primary_label|doux_label|capitalize }}</span>
-                    {% if sub.section.secondary_label %}
-                    <span class="moment-sep-sub">{{ sub.section.secondary_label|doux_label }}</span>
-                    {% endif %}
-                  </li>
+              {% for sub in s1.subsections %}
+                {% if s1.subsections|length > 1 %}
+                <div class="moment-sep">
+                  <span class="moment-sep-title">{{ sub.section.primary_label|doux_label|capitalize }}</span>
+                  {% if sub.section.secondary_label %}
+                  <span class="moment-sep-sub">{{ sub.section.secondary_label|doux_label }}</span>
                   {% endif %}
+                </div>
+                {% endif %}
+                {# v5.7 : chaque moment = héro + grille justified, repli au-delà de 6 #}
+                {% set _photo_count = sub.pages|selectattr('photo_path')|list|length %}
+                {% set _hero = _photo_count >= 3 %}
+                {% set _fold_from = 7 if sub.pages|length >= 10 else 0 %}
+                <ul class="pages-list pages-list-sub">
                   {% for p in sub.pages %}
+                    {% set _idx = loop.index0 %}
                     {% include '_page_item.html' %}
                   {% endfor %}
-                {% endfor %}
-                {% for p in s1.pages %}
-                  {% include '_page_item.html' %}
-                {% endfor %}
-              </ul>
+                  {% if _fold_from and sub.pages|length > _fold_from %}
+                  <li class="fold-toggle">
+                    <button type="button" onclick="toggleFold(this)">
+                      <span class="fold-more">+ {{ sub.pages|length - _fold_from }} photos</span>
+                      <span class="fold-less">Replier</span>
+                    </button>
+                  </li>
+                  {% endif %}
+                </ul>
+              {% endfor %}
+              {% if s1.pages %}
+                {% set _hero = false %}{% set _fold_from = 0 %}
+                <ul class="pages-list pages-list-sub">
+                  {% for p in s1.pages %}
+                    {% set _idx = loop.index0 %}
+                    {% include '_page_item.html' %}
+                  {% endfor %}
+                </ul>
+              {% endif %}
             </div>
             {{ day_rail(day) }}
           </div>
@@ -190,10 +225,22 @@
             </div>
             <div class="day-block">
               <div class="day-main">
+                {% set _photo_count = sub.pages|selectattr('photo_path')|list|length %}
+                {% set _hero = _photo_count >= 3 %}
+                {% set _fold_from = 7 if sub.pages|length >= 10 else 0 %}
                 <ul class="pages-list pages-list-sub">
                   {% for p in sub.pages %}
+                    {% set _idx = loop.index0 %}
                     {% include '_page_item.html' %}
                   {% endfor %}
+                  {% if _fold_from and sub.pages|length > _fold_from %}
+                  <li class="fold-toggle">
+                    <button type="button" onclick="toggleFold(this)">
+                      <span class="fold-more">+ {{ sub.pages|length - _fold_from }} photos</span>
+                      <span class="fold-less">Replier</span>
+                    </button>
+                  </li>
+                  {% endif %}
                 </ul>
               </div>
               {{ day_rail(day) }}
@@ -201,8 +248,10 @@
           </div>
           {% endfor %}
           {% if s1.pages %}
+          {% set _hero = false %}{% set _fold_from = 0 %}
           <ul class="pages-list pages-list-sub">
             {% for p in s1.pages %}
+              {% set _idx = loop.index0 %}
               {% include '_page_item.html' %}
             {% endfor %}
           </ul>
@@ -213,17 +262,36 @@
     {% endif %}
 
     {% if orphans %}
-    <div class="album-level1">
+    <div class="album-level1 adater-section" id="section-a-dater">
       <div class="album-l1-head">
-        <h3 class="album-l1-title"><em>Date inconnue</em></h3>
-        <p class="album-l1-sub">{{ orphans|length }} photo(s) sans EXIF</p>
+        <h3 class="album-l1-title">{{ 'À dater' if orphan_photos_n else 'Sans date' }}</h3>
+        {% if orphan_photos_n %}
+        <p class="album-l1-sub">{{ orphan_photos_n }} photo{{ 's' if orphan_photos_n > 1 }} sans date de prise (EXIF absent — WhatsApp et Instagram effacent les métadonnées).
+          Coche, choisis la date, et elles rejoignent leur journée.</p>
+        {% else %}
+        <p class="album-l1-sub">Blocs sans date — donne-leur une date via « ⋯ » pour les ranger dans une journée.</p>
+        {% endif %}
         <div class="album-l1-rule"></div>
       </div>
-      <ul class="pages-list pages-list-sub">
+      {% if orphan_photos_n %}
+      <div class="adater-toolbar">
+        <label class="adater-selectall">
+          <input type="checkbox" id="adater-all" onchange="adaterToggleAll(this)"> Tout sélectionner
+        </label>
+        <input type="datetime-local" id="adater-date" class="adater-date">
+        <button type="button" class="btn btn-primary btn-sm" id="adater-submit"
+                onclick="submitDaterLot()" disabled>Dater la sélection</button>
+        <span class="sort-hint">La 1re photo cochée prend cette date, les suivantes s'espacent d'une minute (l'ordre est gardé).</span>
+      </div>
+      {% endif %}
+      {% set _hero = false %}{% set _fold_from = 0 %}{% set _selectable = true %}
+      <ul class="pages-list pages-list-sub pages-list-adater">
         {% for p in orphans %}
+          {% set _idx = loop.index0 %}
           {% include '_page_item.html' %}
         {% endfor %}
       </ul>
+      {% set _selectable = false %}
     </div>
     {% endif %}
 
@@ -398,6 +466,77 @@
       }
     } catch(e) {}
   });
+
+  /* ─ v5.7 : densité de la grille (Récit / Confort / Dense), mémorisée ─ */
+  function applyDensity(d) {
+    var main = document.querySelector('.album-page');
+    if (!main) return;
+    main.dataset.density = d;
+    document.querySelectorAll('.density-toggle button').forEach(function(b){
+      b.classList.toggle('is-active', b.dataset.density === d);
+    });
+  }
+  function setDensity(d) {
+    try { localStorage.setItem('nh_album_density', d); } catch(e) {}
+    applyDensity(d);
+  }
+  window.setDensity = setDensity;
+  (function(){
+    var d = 'confort';
+    try { d = localStorage.getItem('nh_album_density') || 'confort'; } catch(e) {}
+    applyDensity(d);
+  })();
+
+  /* ─ v5.7 : repli des scènes (« + N photos » / « Replier ») ─ */
+  function toggleFold(btn) {
+    var ul = btn.closest('.pages-list-sub');
+    if (!ul) return;
+    var open = ul.classList.toggle('is-unfolded');
+    if (!open) {
+      var head = ul.closest('.day-block') || ul;
+      var top = head.getBoundingClientRect().top;
+      if (top < 0) head.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+  window.toggleFold = toggleFold;
+
+  /* ─ v5.7 : datation PAR LOT des photos sans date ─ */
+  function adaterChecked() {
+    return Array.from(document.querySelectorAll('.adater-check:checked'));
+  }
+  function adaterCount() {
+    var n = adaterChecked().length;
+    var btn = document.getElementById('adater-submit');
+    if (!btn) return;
+    btn.disabled = (n === 0);
+    btn.textContent = n ? ('Dater ' + n + ' photo' + (n > 1 ? 's' : '')) : 'Dater la sélection';
+  }
+  function adaterToggleAll(cb) {
+    document.querySelectorAll('.adater-check').forEach(function(c){ c.checked = cb.checked; });
+    adaterCount();
+  }
+  async function submitDaterLot() {
+    var date = (document.getElementById('adater-date') || {}).value;
+    var ids = adaterChecked().map(function(c){ return c.value; });
+    if (!ids.length) return;
+    if (!date) { setError('Choisis d\'abord une date'); return; }
+    setSaving('Datation...');
+    var fd = new FormData();
+    fd.append('_csrf', CSRF);
+    fd.append('taken_at', date);
+    ids.forEach(function(id){ fd.append('page_ids', id); });
+    try {
+      var r = await fetch("{{ url_for('carnet_dater_lot', cid_carnet=carnet.id) }}",
+                          { method: 'POST', body: fd });
+      var d = await r.json();
+      if (!d.ok) { setError('Datation : ' + (d.error || '')); return; }
+      setSaved(d.dated + ' photo(s) datée(s)');
+      setTimeout(function(){ reloadKeepScroll(); }, 400);
+    } catch(e) { setError('Reseau'); }
+  }
+  window.adaterCount = adaterCount;
+  window.adaterToggleAll = adaterToggleAll;
+  window.submitDaterLot = submitDaterLot;
 
   /* ─ Outils de tuile (⋯) : un seul panneau ouvert à la fois ─ */
   function toggleTools(btn) {
@@ -1054,7 +1193,11 @@
       ghostClass: 'page-ghost',
       dragClass: 'page-dragging',
       draggable: '.page-item',
-      filter: '.margin-day-sep, .moment-sep',
+      filter: '.margin-day-sep, .moment-sep, .fold-toggle',
+      /* v5.7 : les listes d'un même album partagent un groupe — une photo
+         se glisse d'un moment (ou d'un jour) à l'autre, comme avant la
+         découpe en une liste par moment. */
+      group: isMargin ? undefined : 'album-main',
       delay: 50,
       delayOnTouchOnly: true,
       onEnd: async function(){

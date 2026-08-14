@@ -15,8 +15,8 @@ self.addEventListener('push', function(event) {
   const title = data.title || 'Notre Histoire';
   const options = {
     body: data.body || '',
-    icon: '/static/icon-192.png',
-    badge: '/static/icon-192.png',
+    icon: '/static/icons/icon-192.png',
+    badge: '/static/icons/icon-192.png',
     tag: data.tag || 'message',
     data: { url: data.url || '/' },
     vibrate: [60, 30, 60],

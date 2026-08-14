@@ -1,24 +1,48 @@
-{# ── Tuile d'album v4 : polaroid doux, outils repliés derrière « ⋯ » ──
+{# ── Tuile d'album v5.7 : sobre — le contenu EST l'interface ──
+     La tuile n'est plus un polaroid : photo nue, coins 8px, zéro rotation.
+     La grille est « justified » (rangées de hauteur fixe) : chaque tuile
+     porte son ratio dans --ar, la CSS fait le reste.
+     Variables de contexte optionnelles (posées par album.html avant include) :
+       _idx        : index 0-based de la page dans sa scène
+       _fold_from  : au-delà de cet index la tuile est repliée (« +N photos »)
+       _hero       : si vrai et _idx == 0, la tuile est la photo héro de la scène
+       _selectable : la tuile porte une case à cocher (boîte « À dater »)
      Hooks JS conservés : .page-item, data-page-id, data-type, data-taken-at,
      data-is-margin, .drag-handle, .page-photo img, .page-caption, .page-text #}
 {% set _w = p.photo_width or 0 %}
 {% set _h = p.photo_height or 0 %}
 {% set _orient = 'is-portrait' if (_w and _h and _h > _w) else 'is-landscape' %}
-<li class="page-item {{ _orient }}{% if p.is_margin %} page-item-margin{% endif %}{% if p.video_path %} is-video{% endif %}{% if p.type == 'text' %} is-text{% endif %}"
-    style="--tilt:{{ '%.2f'|format(((p.id % 7) - 3) * 0.45) }}deg"
+{% set _ar = (_w / _h) if (_w and _h) else (1.5 if p.video_path else 1.333) %}
+{% set _is_hero = (_hero is defined and _hero and (_idx is defined and _idx == 0) and p.photo_path) %}
+{% set _is_folded = (_idx is defined and _fold_from is defined and _fold_from and _idx >= _fold_from) %}
+<li class="page-item {{ _orient }}{% if p.is_margin %} page-item-margin{% endif %}{% if p.video_path %} is-video{% endif %}{% if p.type == 'text' %} is-text{% endif %}{% if _is_hero %} is-hero{% endif %}{% if _is_folded %} is-folded{% endif %}"
+    style="--ar:{{ '%.4f'|format(_ar) }}"
     data-page-id="{{ p.id }}"
     data-type="{{ p.type }}"
     data-taken-at="{{ p.photo_taken_at or '' }}"
     data-is-margin="{{ '1' if p.is_margin else '0' }}">
   <span class="drag-handle" title="Glisser pour réorganiser" aria-label="Réorganiser">⋮⋮</span>
 
-  {# Photo principale #}
+  {# v5.7 : case à cocher de la boîte « À dater » (datation par lot) #}
+  {% if _selectable is defined and _selectable and p.photo_path %}
+    <label class="tile-select" title="Sélectionner pour dater">
+      <input type="checkbox" class="adater-check" value="{{ p.id }}" onchange="adaterCount()">
+    </label>
+  {% endif %}
+
+  {# Photo principale — la héro reçoit une version 1024px, la grille le thumb #}
   {% if p.photo_path %}
     <a class="page-photo" href="javascript:void(0)" onclick="openViewer({{ p.id }})">
-      <img src="{{ url_for('serve_upload', filename=p.photo_thumb) }}"
+      <img src="{{ url_for('serve_upload', filename=(p.photo_mid if (_is_hero and p.photo_mid) else p.photo_thumb)) }}"
            data-full="{{ url_for('serve_upload', filename=p.photo_path) }}"
            data-page-id="{{ p.id }}"
            loading="lazy" alt="">
+      {% if p.caption %}<span class="tile-caption-dot" title="{{ p.caption }}" aria-hidden="true"></span>{% endif %}
+      {% if p.photo_taken_at_source == 'fichier' %}
+        <span class="tile-badge" title="Date devinée depuis le nom du fichier{% if p.photo_orig_filename %} : {{ p.photo_orig_filename }}{% endif %}">≈</span>
+      {% elif p.photo_taken_at_source == 'manuel' %}
+        <span class="tile-badge" title="Date saisie à la main">✎</span>
+      {% endif %}
     </a>
   {% endif %}
 
@@ -37,29 +61,42 @@
     </div>
   {% endif %}
 
-  {# Bloc texte (inline editable) #}
+  {# Bloc texte (inline editable) — pleine largeur, respiration du récit #}
   {% if p.type == 'text' %}
     <textarea class="page-text" placeholder="Quelques mots…" rows="3"
               data-page-id="{{ p.id }}">{{ p.text_content or '' }}</textarea>
   {% endif %}
 
-  {# Légende façon polaroid (pages photo) #}
-  {% if p.type == 'photo' %}
-    <div class="page-caption-wrap">
+  {# Légende de la héro : visible sous la photo, comme un titre de scène #}
+  {% if _is_hero and p.type == 'photo' %}
+    <div class="page-caption-wrap hero-caption-wrap">
       <textarea class="page-caption" placeholder="Une légende…" rows="1"
                 data-page-id="{{ p.id }}">{{ p.caption or '' }}</textarea>
     </div>
   {% endif %}
 
-  {# Bouton outils « ⋯ » : révèle date, lieu et actions #}
+  {# Bouton outils « ⋯ » : révèle légende, date, lieu et actions #}
   <button type="button" class="page-more" onclick="toggleTools(this)" aria-label="Détails et actions">⋯</button>
 
   <div class="page-tools">
+    {# Légende éditable des tuiles ordinaires : vit dans le panneau, la
+       grille reste dense (les détails vivent dans la lightbox / outils) #}
+    {% if p.type == 'photo' and not _is_hero %}
+      <div class="page-caption-wrap">
+        <textarea class="page-caption" placeholder="Une légende…" rows="1"
+                  data-page-id="{{ p.id }}">{{ p.caption or '' }}</textarea>
+      </div>
+    {% endif %}
     {% if p.type == 'photo' %}
       <div class="page-meta">
         {% if p.photo_taken_at %}
-          <div class="page-date" title="Date de prise (EXIF)" data-iso="{{ p.photo_taken_at }}" data-fmt="datetime">
+          <div class="page-date" title="Date de prise" data-iso="{{ p.photo_taken_at }}" data-fmt="datetime">
             {{ p.photo_taken_at|replace('T',' ') }}
+            {% if p.photo_taken_at_source == 'fichier' %}
+              <span class="date-source-chip" title="Devinée depuis le nom du fichier{% if p.photo_orig_filename %} : {{ p.photo_orig_filename }}{% endif %}">≈ nom du fichier</span>
+            {% elif p.photo_taken_at_source == 'manuel' %}
+              <span class="date-source-chip" title="Saisie à la main">✎ saisie</span>
+            {% endif %}
           </div>
         {% else %}
           <form class="page-date-edit" data-page-id="{{ p.id }}" onsubmit="return submitTakenAt(event)">
