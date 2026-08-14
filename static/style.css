@@ -5159,3 +5159,77 @@ body.photo-roll-open .album-footer { opacity: 0; pointer-events: none; }
   transition: border-color .15s;
 }
 .lieu-result:hover { border-color: var(--accent); }
+
+/* ── v5.11 : corbeille (accueil, rêveries, album) — défaire, toujours ── */
+.corbeille {
+  margin: 34px 0 10px;
+  border: 1px dashed var(--border-default);
+  border-radius: 12px;
+  padding: 0 14px;
+}
+.corbeille-summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 13px 0;
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  color: var(--ink-whisper);
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.corbeille-summary::-webkit-details-marker { display: none; }
+.corbeille[open] .corbeille-summary { color: var(--ink-secondary); }
+.corbeille-list {
+  list-style: none;
+  margin: 0;
+  padding: 2px 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.corbeille-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.corbeille-thumb {
+  width: 44px; height: 44px;
+  object-fit: cover;
+  border-radius: 7px;
+  background: var(--bg-subtle);
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+.corbeille-title {
+  flex: 1;
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  color: var(--ink-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.corbeille-date { font-size: 12px; color: var(--ink-whisper); flex-shrink: 0; }
+.corbeille-item form { margin: 0; flex-shrink: 0; }
+.corbeille-hint {
+  font-size: 12px;
+  color: var(--ink-whisper);
+  padding: 0 0 12px;
+  margin: 0;
+}
+.danger-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--ink-whisper);
+}
+.btn-danger-soft.is-armed {
+  background: #B4432F;
+  color: #fff;
+  border-color: #B4432F;
+}

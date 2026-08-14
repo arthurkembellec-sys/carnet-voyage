@@ -334,6 +334,33 @@
     {% endif %}
   </section>
 
+  {# ── v5.11 : corbeille de l'album — tout ce qu'on supprime se restaure ── #}
+  {% if hidden_pages %}
+  <details class="corbeille">
+    <summary class="corbeille-summary">🗑 Corbeille de l'album ({{ hidden_pages|length }})</summary>
+    <ul class="corbeille-list">
+      {% for p in hidden_pages %}
+      <li class="corbeille-item">
+        {% if p.photo_thumb %}
+        <img class="corbeille-thumb" src="{{ url_for('serve_upload', filename=p.photo_thumb) }}" loading="lazy" alt="">
+        {% elif p.video_poster %}
+        <img class="corbeille-thumb" src="{{ url_for('serve_upload', filename=p.video_poster) }}" loading="lazy" alt="">
+        {% endif %}
+        <span class="corbeille-title">
+          {%- if p.type == 'text' -%}{{ (p.text_content or 'Bloc texte')|truncate(60) }}
+          {%- elif p.video_path -%}Vidéo
+          {%- else -%}{{ p.caption or 'Photo' }}{% if p.photo_taken_at %} · {{ (p.photo_taken_at or '')[:10] }}{% endif %}
+          {%- endif -%}
+        </span>
+        <button type="button" class="btn btn-secondary btn-sm"
+                onclick="restaurerPage({{ p.id }}, this)">↩ Restaurer</button>
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="corbeille-hint">Rien n'est effacé : une page restaurée retrouve sa place chronologique.</p>
+  </details>
+  {% endif %}
+
 </main>
 
 <!-- Footer flottant : 4 actions + interrupteur marge -->
@@ -598,6 +625,20 @@
   }
   window.openLieuSearch = openLieuSearch;
   window.runLieuSearch = runLieuSearch;
+
+  /* ─ v5.11 : restaurer une page depuis la corbeille de l'album ─ */
+  async function restaurerPage(pageId, btn) {
+    btn.disabled = true;
+    var fd = new FormData(); fd.append('_csrf', CSRF);
+    try {
+      var r = await fetch('/album_page/' + pageId + '/restaurer', { method: 'POST', body: fd });
+      var d = await r.json();
+      if (!d.ok) { setError('Restauration : ' + (d.error || '')); btn.disabled = false; return; }
+      setSaved('Page restaurée');
+      setTimeout(function(){ reloadKeepScroll(); }, 400);
+    } catch(e) { setError('Réseau'); btn.disabled = false; }
+  }
+  window.restaurerPage = restaurerPage;
 
   /* ─ Outils de tuile (⋯) : un seul panneau ouvert à la fois ─ */
   function toggleTools(btn) {

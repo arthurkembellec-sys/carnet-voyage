@@ -134,6 +134,34 @@
     </p>
   </section>
 
+  {# ── v5.11 : suppression défaisable de la rêverie (bouton armé, 2 appuis) ── #}
+  <section class="danger-zone">
+    <form method="POST" action="{{ url_for('carnet_supprimer', cid_carnet=carnet.id) }}" id="reverie-delete-form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <button type="button" class="btn btn-ghost btn-danger-soft" id="btn-delete-reverie">
+        ✕ Supprimer cette rêverie
+      </button>
+      <p class="danger-hint">Elle part à la corbeille (en bas de la page Rêveries) — restaurable à tout moment.</p>
+    </form>
+  </section>
+  <script>
+    (function(){
+      var b = document.getElementById('btn-delete-reverie');
+      if (!b) return;
+      b.addEventListener('click', function(){
+        if (b.dataset.armed === '1') { document.getElementById('reverie-delete-form').submit(); return; }
+        b.dataset.armed = '1';
+        b.classList.add('is-armed');
+        b.textContent = 'Confirmer la suppression ?';
+        setTimeout(function(){
+          b.dataset.armed = '';
+          b.classList.remove('is-armed');
+          b.textContent = '✕ Supprimer cette rêverie';
+        }, 3500);
+      });
+    })();
+  </script>
+
 </main>
 
 <!-- Footer flottant : actions ajout -->

@@ -61,14 +61,9 @@
     </div>
   </form>
 
-  {% if mode == 'modifier' %}
-  <form method="POST" action="{{ url_for('carnet_supprimer', cid_carnet=cid_carnet) }}"
-        class="danger-zone"
-        onsubmit="return confirm('Supprimer ce carnet ? Cette action est definitive (soft delete 30j).');">
-    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-    <button type="submit" class="btn btn-danger">Supprimer le carnet</button>
-  </form>
-  {% endif %}
+  {# v5.11 : l'unique zone de suppression est en bas de page (bouton armé,
+     deux appuis — le confirm() natif ne s'affichait pas toujours en PWA).
+     Le carnet part à la corbeille de l'accueil, d'où il se restaure. #}
 
 </main>
 
@@ -89,9 +84,10 @@
   <form method="POST" action="{{ url_for('carnet_supprimer', cid_carnet=cid_carnet) }}" id="carnet-delete-form">
     <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
     <button type="button" class="btn btn-ghost btn-danger-soft" id="btn-delete-carnet"
-            title="Le carnet part à la corbeille">
+            title="Le carnet part à la corbeille — restaurable depuis l'accueil">
       ✕ Supprimer ce carnet
     </button>
+    <p class="danger-hint">Il part à la corbeille (en bas de l'accueil) — restaurable à tout moment.</p>
   </form>
 </section>
 <script>

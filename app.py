@@ -1154,12 +1154,19 @@ def home():
         (cid,), one=True
     )
     nb_souhaits = (nb_row['n'] if nb_row else 0)
+    # v5.11 : corbeille — les carnets supprimes se restaurent d'ici
+    corbeille = query(
+        "SELECT id, title, type, deleted_at FROM carnets "
+        "WHERE couple_id=? AND type != 'souhait' AND deleted_at IS NOT NULL "
+        "ORDER BY deleted_at DESC", (cid,)
+    )
     return render_template(
         'index.html',
         carnets=[dict(r) for r in rows],
         types=CARNET_TYPES,
         type_filter=type_filter,
         nb_souhaits=nb_souhaits,
+        corbeille=[dict(r) for r in corbeille],
     )
 
 
@@ -1194,11 +1201,18 @@ def souhaits_index():
         )
         r['nb_items'] = cnt['n'] if cnt else 0
         souhaits.append(r)
+    # v5.11 : corbeille des reveries supprimees (restaurables)
+    corbeille = query(
+        "SELECT id, title, souhait_kind, deleted_at FROM carnets "
+        "WHERE couple_id=? AND type='souhait' AND deleted_at IS NOT NULL "
+        "ORDER BY deleted_at DESC", (current_espace_id(),)
+    )
     return render_template(
         'souhaits.html',
         souhaits=souhaits,
         kinds=SOUHAIT_KINDS,
         kind_filter=kind_filter,
+        corbeille=[dict(r) for r in corbeille],
     )
 
 
@@ -1873,7 +1887,7 @@ def carnet_modifier(cid_carnet):
 @app.route('/carnet/<int:cid_carnet>/supprimer', methods=['POST'])
 @couple_required
 def carnet_supprimer(cid_carnet):
-    _get_carnet_or_404(cid_carnet)
+    c = _get_carnet_or_404(cid_carnet)
     if not csrf_check():
         flash("Session expiree.", "err")
         return redirect(url_for('carnet_view', cid_carnet=cid_carnet))
@@ -1881,6 +1895,34 @@ def carnet_supprimer(cid_carnet):
         "UPDATE carnets SET deleted_at=CURRENT_TIMESTAMP WHERE id=?",
         (cid_carnet,)
     )
+    # v5.11 : la suppression se DEFAIT — le carnet part a la corbeille de
+    # l'accueil (ou des reveries), d'ou il se restaure en un geste.
+    flash("Carnet envoye a la corbeille — restaurable en bas de page.", "ok")
+    _log_activity(c['couple_id'], session['uid'], 'carnet_deleted',
+                  target_carnet_id=cid_carnet, payload={'title': c.get('title')})
+    if c.get('type') == 'souhait':
+        return redirect(url_for('souhaits_index'))
+    return redirect(url_for('home'))
+
+
+@app.route('/carnet/<int:cid_carnet>/restaurer', methods=['POST'])
+@couple_required
+def carnet_restaurer(cid_carnet):
+    """v5.11 — Defait une suppression de carnet (deleted_at remis a NULL).
+    Cloisonne : uniquement un carnet de l'espace courant."""
+    c = query("SELECT * FROM carnets WHERE id=? AND couple_id=?",
+              (cid_carnet, current_espace_id()), one=True)
+    if not c:
+        abort(404)
+    if not csrf_check():
+        flash("Session expiree.", "err")
+        return redirect(url_for('home'))
+    execute("UPDATE carnets SET deleted_at=NULL WHERE id=?", (cid_carnet,))
+    flash(f"« {c['title']} » restauré.", "ok")
+    _log_activity(c['couple_id'], session['uid'], 'carnet_restored',
+                  target_carnet_id=cid_carnet, payload={'title': c['title']})
+    if c['type'] == 'souhait':
+        return redirect(url_for('souhaits_index'))
     return redirect(url_for('home'))
 
 
@@ -3259,6 +3301,10 @@ def _carnet_pages(carnet_id, sort_mode='chrono'):
     pages = [dict(r) for r in rows]
     if sort_mode != 'manual':
         pages.sort(key=_page_chrono_key)
+    # v5.11 : les pages en corbeille (is_hidden=1) sortent de l'album, de
+    # l'apercu et du livre — mais restent listees a part pour la restauration.
+    hidden = [p for p in pages if p.get('is_hidden')]
+    pages = [p for p in pages if not p.get('is_hidden')]
     main = [p for p in pages if not p.get('is_margin')]
     margin = [p for p in pages if p.get('is_margin')]
 
@@ -3288,6 +3334,7 @@ def _carnet_pages(carnet_id, sort_mode='chrono'):
     return {
         'main': main, 'margin': margin, 'all': pages,
         'structured': structured, 'orphans': orphans,
+        'hidden': hidden,
     }
 
 
@@ -4058,6 +4105,7 @@ def carnet_album(cid_carnet):
         margin_by_day=margin_by_day, margin_rest=margin_rest,
         structured=pages.get('structured', []),
         orphans=pages.get('orphans', []),
+        hidden_pages=pages.get('hidden', []),
         geo_photos=geo_photos, geo_etapes=geo_etapes,
         photo_notes=photo_notes, member_colors=member_colors,
         types=CARNET_TYPES, sort_mode=sort_mode)
@@ -4689,8 +4737,32 @@ def page_supprimer(page_id):
                  (page_id,), one=True)
     if not page or page['couple_id'] != current_espace_id():
         return jsonify({'ok': False, 'error': '404'}), 404
-    # On supprime la page (la photo reste en BDD : pourra etre reutilisee plus tard)
-    execute("DELETE FROM album_pages WHERE id=?", (page_id,))
+    # v5.11 : la suppression se DEFAIT — la page passe en is_hidden=1
+    # (corbeille de l'album) au lieu d'un DELETE. Rien ne disparait (D4).
+    execute("UPDATE album_pages SET is_hidden=1 WHERE id=?", (page_id,))
+    try:
+        _recompute_sections(page['carnet_id'])
+    except Exception as e:
+        log.warning("recompute apres mise en corbeille: %s", e)
+    return jsonify({'ok': True})
+
+
+@app.route('/album_page/<int:page_id>/restaurer', methods=['POST'])
+@couple_required
+def page_restaurer(page_id):
+    """v5.11 — Sort une page de la corbeille de l'album (is_hidden=0)."""
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    page = query("SELECT ap.*, c.couple_id FROM album_pages ap "
+                 "JOIN carnets c ON c.id=ap.carnet_id WHERE ap.id=?",
+                 (page_id,), one=True)
+    if not page or page['couple_id'] != current_espace_id():
+        return jsonify({'ok': False, 'error': '404'}), 404
+    execute("UPDATE album_pages SET is_hidden=0 WHERE id=?", (page_id,))
+    try:
+        _recompute_sections(page['carnet_id'])
+    except Exception as e:
+        log.warning("recompute apres restauration: %s", e)
     return jsonify({'ok': True})
 
 

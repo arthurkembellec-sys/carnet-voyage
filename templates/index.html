@@ -59,6 +59,26 @@
   </div>
   {% endif %}
 
+  {# ── v5.11 : corbeille — un carnet supprimé se restaure ici ── #}
+  {% if corbeille %}
+  <details class="corbeille">
+    <summary class="corbeille-summary">🗑 Corbeille ({{ corbeille|length }})</summary>
+    <ul class="corbeille-list">
+      {% for c in corbeille %}
+      <li class="corbeille-item">
+        <span class="corbeille-title">{{ c.title }}</span>
+        <span class="corbeille-date">supprimé le {{ (c.deleted_at or '')[:10] }}</span>
+        <form method="POST" action="{{ url_for('carnet_restaurer', cid_carnet=c.id) }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-secondary btn-sm">↩ Restaurer</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="corbeille-hint">Rien n'est effacé : un carnet restauré retrouve son album, ses notes et son livre.</p>
+  </details>
+  {% endif %}
+
 </main>
 
 {% endblock %}
