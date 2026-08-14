@@ -177,6 +177,8 @@
             <span class="day-etape" data-item-id="{{ e.id }}">
               {%- for k, em, lab in pin_kinds %}{% if k == e.pin_kind %}{{ em }} {% endif %}{% endfor -%}
               {{ e.title }}
+              <button type="button" class="day-etape-del" title="Retirer cette étape (restaurable)"
+                      onclick="retirerEtapeCarte({{ e.id }}, this)">✕</button>
             </span>
             {% endfor %}
           </div>
@@ -235,6 +237,8 @@
               <span class="day-etape" data-item-id="{{ e.id }}">
                 {%- for k, em, lab in pin_kinds %}{% if k == e.pin_kind %}{{ em }} {% endif %}{% endfor -%}
                 {{ e.title }}
+                <button type="button" class="day-etape-del" title="Retirer cette étape (restaurable)"
+                        onclick="retirerEtapeCarte({{ e.id }}, this)">✕</button>
               </span>
               {% endfor %}
             </div>
@@ -1967,6 +1971,27 @@
     render();
   })();
 
+  /* ─ v5.14 : retirer une étape depuis la carte ou les chips de jour ─ */
+  async function retirerEtapeCarte(itemId, btn) {
+    if (btn && btn.dataset.armed !== '1') {
+      btn.dataset.armed = '1';
+      btn.classList.add('is-armed');
+      var old = btn.textContent;
+      btn.textContent = 'Confirmer ?';
+      setTimeout(function(){ btn.dataset.armed = ''; btn.classList.remove('is-armed'); btn.textContent = old; }, 3500);
+      return;
+    }
+    var fd = new FormData(); fd.append('_csrf', CSRF);
+    try {
+      var r = await fetch('/item/' + itemId + '/supprimer', { method: 'POST', body: fd });
+      var d = await r.json();
+      if (!d.ok) { setError('Retrait : ' + (d.error || '')); return; }
+      setSaved('Étape retirée — restaurable dans la corbeille du planning');
+      setTimeout(function(){ reloadKeepScroll(); }, 500);
+    } catch(e) { setError('Réseau'); }
+  }
+  window.retirerEtapeCarte = retirerEtapeCarte;
+
   /* ─ v5.12 : restaurer une étape retirée (corbeille du planning) ─ */
   async function restaurerEtape(itemId, btn) {
     btn.disabled = true;
@@ -2032,7 +2057,10 @@
       m.bindPopup('<strong>' + (g.title || 'Étape') + '</strong>' +
         NH_PINS.selecteurHtml(g.pin_kind || '', 'ep' + g.itemId) +
         '<button type="button" class="btn btn-secondary btn-sm pin-kind-save"' +
-        ' onclick="enregistrerEpingle(' + g.itemId + ')">OK</button>');
+        ' onclick="enregistrerEpingle(' + g.itemId + ')">OK</button>' +
+        '<button type="button" class="btn btn-secondary btn-sm pin-remove"' +
+        ' onclick="retirerEtapeCarte(' + g.itemId + ', this)"' +
+        ' title="Part dans la corbeille du planning, restaurable">✕ Retirer</button>');
       bounds.push([g.lat, g.lng]);
     });
 

@@ -1104,8 +1104,31 @@
       html += kindSelectorHtml(g.pin_kind || '', 'pin' + g.itemId) +
         '<button type="button" class="btn btn-secondary btn-sm pin-kind-save" onclick="savePinKind(' + g.itemId + ')">OK</button>';
     }
+    /* v5.14 : retirer l'épingle depuis la carte — part dans la corbeille
+       de la rêverie, restaurable (retour téléphone du 2026-08-14) */
+    html += '<button type="button" class="btn btn-secondary btn-sm pin-remove"' +
+            ' onclick="removePinFromMap(' + g.itemId + ', this)"' +
+            ' title="Part dans la corbeille, restaurable">✕ Retirer</button>';
     return html;
   }
+
+  window.removePinFromMap = async function(itemId, btn) {
+    if (btn && btn.dataset.armed !== '1') {
+      btn.dataset.armed = '1';
+      btn.classList.add('is-armed');
+      var old = btn.textContent;
+      btn.textContent = 'Confirmer ?';
+      setTimeout(function(){ btn.dataset.armed = ''; btn.classList.remove('is-armed'); btn.textContent = old; }, 3500);
+      return;
+    }
+    var fd = new FormData(); fd.append('_csrf', CSRF);
+    try {
+      var r = await fetch('/item/' + itemId + '/supprimer', { method: 'POST', body: fd });
+      var d = await r.json();
+      if (!d.ok) { alert('Retrait : ' + (d.error || '')); return; }
+      location.reload();
+    } catch(e) { alert('Réseau'); }
+  };
 
   function addPinToMap(g) {
     var m = L.marker([g.lat, g.lng], {
