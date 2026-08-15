@@ -429,6 +429,15 @@
         {% endfor %}
       </div>
     </div>
+    <div class="apercu-row">
+      <span class="apercu-label">Planning sur la carte</span>
+      <div class="chips" id="map-timeline-chips">
+        {% set tl = carnet.pdf_map_timeline_side or 'right' %}
+        <button type="button" class="chip {% if tl == 'left' %}chip-active{% endif %}" data-tl="left">À gauche</button>
+        <button type="button" class="chip {% if tl == 'right' %}chip-active{% endif %}" data-tl="right">À droite</button>
+        <button type="button" class="chip {% if tl == 'none' %}chip-active{% endif %}" data-tl="none">Sans</button>
+      </div>
+    </div>
     <div class="apercu-row apercu-row-actions">
       <button type="button" class="btn btn-secondary" id="btn-save-settings">Enregistrer ces réglages</button>
     </div>
@@ -1020,11 +1029,27 @@
   });
 
   /* ─ Save settings ─ */
+  /* v5.20 : choix du côté du planning sur la carte (résultat immédiat) */
+  const tlChips = document.getElementById('map-timeline-chips');
+  if (tlChips) {
+    tlChips.addEventListener('click', function(e){
+      const b = e.target.closest('.chip[data-tl]');
+      if (!b) return;
+      tlChips.querySelectorAll('.chip').forEach(c => c.classList.remove('chip-active'));
+      b.classList.add('chip-active');
+      const save = document.getElementById('btn-save-settings');
+      save.disabled = false;
+      save.textContent = 'Enregistrer ces réglages';
+    });
+  }
+
   document.getElementById('btn-save-settings').addEventListener('click', async function(){
     const fd = new FormData();
     fd.append('_csrf', CSRF);
     fd.append('layout', "{{ layout }}");
     fd.append('margin', "{{ margin_pos }}");
+    const tlActive = tlChips ? tlChips.querySelector('.chip-active') : null;
+    if (tlActive) fd.append('map_timeline', tlActive.dataset.tl);
     try {
       const r = await fetch(URL_SAVE_SETTINGS, { method:'POST', body: fd });
       const d = await r.json();

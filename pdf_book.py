@@ -244,6 +244,9 @@ def render_carnet_pdf(
     fetch_static_map=None,    # callable(lat,lng,zoom,wpx,hpx,markers=...) -> bytes|None
     compute_zoom=None,        # callable(min_lat,max_lat,min_lng,max_lng,wpx,hpx) -> int
     section_zone_map_resolver=None,  # callable(items_chunk) -> dict|None
+    book_map=None,            # v5.20 : callable(w_px, h_px) -> (png|None, timeline)
+    map_timeline_side='right',  # 'left' | 'right' | 'none'
+
     qr_make=None,             # qrcode.make
     video_url_for=None,       # callable(token) -> str
 ):
@@ -897,7 +900,8 @@ def render_carnet_pdf(
     program.append({'kind': 'blank'})  # dos de couverture
 
     # Carte d'ensemble (page recto)
-    if show_overview_map and geo_summary and fetch_static_map and compute_zoom:
+    if show_overview_map and (book_map is not None or
+                              (geo_summary and fetch_static_map and compute_zoom)):
         program.append({'kind': 'overview_map'})
         program.append({'kind': 'blank'})
 
@@ -1049,24 +1053,125 @@ def render_carnet_pdf(
         _draw_page_number(page_num, side)
 
     def _draw_overview_map(side, page_num):
+        """Chantier A+B (audit DA §4) : LA page carte du livre — le fond de
+        l'app (voyager), les epingles-vignettes photo, les etapes numerotees,
+        le trace jour par jour, et la colonne TIMELINE du planning a gauche
+        ou a droite selon le reglage. Texte de la timeline en ReportLab :
+        net et selectionnable. Si les tuiles manquent, la page le DIT."""
         _fill_page_cream()
-        if not (geo_summary and fetch_static_map and compute_zoom):
-            return
         cx, cy, cw, ch = _content_box(side)
         pdf.setFont('Times-Italic', 24)
         pdf.setFillColorRGB(*INK_RGB)
-        pdf.drawString(cx, cy + ch - 14 * mm, "Notre voyage")
-        pdf.setFont('Helvetica', 9)
-        pdf.setFillColorRGB(*INK_FAINT_RGB)
-        pdf.drawString(cx, cy + ch - 22 * mm,
-                       f"{geo_summary['count']} lieu(x) sur la carte")
-        # Filet terracotta
+        pdf.drawString(cx, cy + ch - 12 * mm, "Notre voyage")
         pdf.setStrokeColorRGB(*ACCENT_RGB)
         pdf.setLineWidth(0.8)
-        pdf.line(cx, cy + ch - 17 * mm, cx + 20 * mm, cy + ch - 17 * mm)
+        pdf.line(cx, cy + ch - 15 * mm, cx + 20 * mm, cy + ch - 15 * mm)
+        zone_y = cy + 2 * mm
+        zone_h = ch - 22 * mm
 
+        png = None
+        timeline = []
+        if book_map is not None:
+            # cote timeline : jamais cote reliure (comme outer/inner)
+            tl_side = map_timeline_side if map_timeline_side in ('left', 'right', 'none') else 'right'
+            tl_w = 48 * mm if tl_side != 'none' else 0
+            map_w = cw - (tl_w + 4 * mm if tl_w else 0)
+            map_x = cx + (tl_w + 4 * mm if (tl_w and tl_side == 'left') else 0)
+            tl_x = cx if tl_side == 'left' else cx + map_w + 4 * mm
+            # 300 dpi : 11.81 px/mm, plafonne pour la memoire
+            w_px = min(int((map_w / mm) * 11.81), 2400)
+            h_px = min(int((zone_h / mm) * 11.81), 2400)
+            try:
+                png, timeline = book_map(w_px, h_px)
+            except Exception as e:
+                png, timeline = None, []
+            if tl_w and not timeline:
+                # pas de timeline a montrer : la carte prend tout
+                tl_w = 0
+                map_w = cw
+                map_x = cx
+                w_px = min(int((map_w / mm) * 11.81), 2400)
+                try:
+                    png2, _ = book_map(w_px, h_px)
+                    if png2:
+                        png = png2
+                except Exception:
+                    pass
+            if png:
+                try:
+                    pdf.drawImage(ImageReader(io.BytesIO(png)), map_x, zone_y,
+                                  width=map_w, height=zone_h, mask='auto')
+                    pdf.setStrokeColorRGB(*LINE_RGB)
+                    pdf.setLineWidth(0.5)
+                    pdf.rect(map_x, zone_y, map_w, zone_h, fill=0, stroke=1)
+                except Exception:
+                    png = None
+            if not png:
+                # regle R4 : un echec se VOIT — cartouche explicite
+                pdf.setStrokeColorRGB(*LINE_RGB)
+                pdf.setLineWidth(0.5)
+                pdf.rect(map_x, zone_y, map_w, zone_h, fill=0, stroke=1)
+                pdf.setFont('Helvetica', 10)
+                pdf.setFillColorRGB(*INK_GHOST_RGB)
+                pdf.drawCentredString(map_x + map_w / 2, zone_y + zone_h / 2 + 6,
+                                      "Carte indisponible")
+                pdf.setFont('Helvetica', 8)
+                pdf.drawCentredString(map_x + map_w / 2, zone_y + zone_h / 2 - 6,
+                                      "Regenerez le livre avec une connexion reseau")
+            # ── colonne timeline (planning du voyage) ──
+            if tl_w and timeline:
+                y_t = zone_y + zone_h - 4
+                PIN_HEX = {'dormir': (0.541, 0.478, 0.710), 'manger': (0.851, 0.557, 0.290),
+                           'rando': (0.431, 0.620, 0.459), 'plage': (0.373, 0.659, 0.769),
+                           'visite': (0.769, 0.396, 0.290), 'autre': (0.545, 0.514, 0.471),
+                           '': (0.545, 0.514, 0.471)}
+                for jour in timeline:
+                    if y_t < zone_y + 14:
+                        pdf.setFont('Helvetica', 6.5)
+                        pdf.setFillColorRGB(*INK_GHOST_RGB)
+                        pdf.drawString(tl_x, zone_y + 4, "(suite du planning dans l'album)")
+                        break
+                    pdf.setFont('Helvetica-Bold', 8.5)
+                    pdf.setFillColorRGB(*ACCENT_RGB)
+                    pdf.drawString(tl_x, y_t - 8, f"JOUR {jour['num']}")
+                    pdf.setFont('Helvetica', 7)
+                    pdf.setFillColorRGB(*INK_FAINT_RGB)
+                    entete = jour['date_label'] + ((' - ' + jour['ville']) if jour['ville'] else '')
+                    pdf.drawString(tl_x + 16 * mm, y_t - 8, entete[:34])
+                    y_t -= 13
+                    for et in jour['etapes']:
+                        if y_t < zone_y + 12:
+                            break
+                        col = PIN_HEX.get(et.get('pin_kind') or '', PIN_HEX[''])
+                        pdf.setFillColorRGB(*col)
+                        pdf.circle(tl_x + 4, y_t - 4, 4.2, fill=1, stroke=0)
+                        pdf.setFillColorRGB(1, 1, 1)
+                        pdf.setFont('Helvetica-Bold', 5.5)
+                        pdf.drawCentredString(tl_x + 4, y_t - 6, str(et['num']))
+                        pdf.setFont('Helvetica', 8)
+                        pdf.setFillColorRGB(*INK_SOFT_RGB)
+                        pdf.drawString(tl_x + 11, y_t - 7, (et['titre'] or '')[:30])
+                        y_t -= 11
+                    if jour['n_photos']:
+                        pdf.setFont('Helvetica', 6.5)
+                        pdf.setFillColorRGB(*INK_GHOST_RGB)
+                        pdf.drawString(tl_x + 11, y_t - 6,
+                                       f"{jour['n_photos']} photo" + ('s' if jour['n_photos'] > 1 else ''))
+                        y_t -= 10
+                    y_t -= 6
+                # filet entre timeline et carte
+                pdf.setStrokeColorRGB(*LINE_RGB)
+                pdf.setLineWidth(0.4)
+                fx = (tl_x + tl_w + 2 * mm - 1) if tl_side == 'left' else (tl_x - 2 * mm)
+                pdf.line(fx, zone_y, fx, zone_y + zone_h)
+            _draw_page_number(page_num, side)
+            return
+
+        # ── repli historique (staticmap) si book_map absent ──
+        if not (geo_summary and fetch_static_map and compute_zoom):
+            return
         map_w_mm = (cw / mm) - 4
-        map_h_mm = (ch / mm) - 40
+        map_h_mm = (zone_h / mm)
         map_w_px = min(int(map_w_mm * 4), 1024)
         map_h_px = min(int(map_h_mm * 4), 1024)
         zoom = compute_zoom(
@@ -1079,25 +1184,10 @@ def render_carnet_pdf(
                                markers=geo_summary['markers'])
         if png:
             try:
-                map_x = cx + 2 * mm
-                map_y = cy + 4 * mm
-                pdf.drawImage(ImageReader(io.BytesIO(png)),
-                              map_x, map_y,
-                              width=map_w_mm * mm, height=map_h_mm * mm,
-                              mask='auto')
-                pdf.setStrokeColorRGB(*LINE_RGB)
-                pdf.setLineWidth(0.5)
-                pdf.rect(map_x, map_y, map_w_mm * mm, map_h_mm * mm,
-                         fill=0, stroke=1)
+                pdf.drawImage(ImageReader(io.BytesIO(png)), cx + 2 * mm, zone_y,
+                              width=map_w_mm * mm, height=map_h_mm * mm, mask='auto')
             except Exception:
-                pdf.setFont('Helvetica', 10)
-                pdf.setFillColorRGB(*INK_GHOST_RGB)
-                pdf.drawCentredString(cx + cw / 2, cy + ch / 2,
-                                      "Carte indisponible")
-        pdf.setFont('Helvetica', 7)
-        pdf.setFillColorRGB(*INK_GHOST_RGB)
-        pdf.drawCentredString(page_w / 2, bleed + 6 * mm,
-                              "© OpenStreetMap contributors")
+                pass
         _draw_page_number(page_num, side)
 
     def _draw_full(item, side, page_num):

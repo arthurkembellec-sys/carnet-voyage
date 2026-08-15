@@ -55,12 +55,12 @@ if not _HEIF_OK:
                 "avec une erreur visible cote client")
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "5.18"
+APP_VERSION = "5.20"
 # v5.16 — version des ASSETS (style.css, pins.js) servie en ?v= : un
 # telephone qui garde l'ancien CSS/JS en cache apres un deploiement rend
 # tous les correctifs invisibles (regle D3 etendue). A BUMPER a chaque
 # lot qui touche static/.
-ASSET_V = "5.18"
+ASSET_V = "5.20"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
@@ -698,6 +698,9 @@ def init_db():
         # SOFT : au retour du sejour on retire ce qu'on n'a pas fait, et on
         # peut toujours le restaurer (retour d'Arthur du 2026-08-14).
         "ALTER TABLE carnet_items ADD COLUMN deleted_at TIMESTAMP",
+        # ── v5.20 (chantier A+B) — cote de la colonne timeline sur la page
+        # carte du livre : 'left' | 'right' | 'none'
+        "ALTER TABLE carnets ADD COLUMN pdf_map_timeline_side TEXT DEFAULT 'right'",
         # ── v5.18 (audit livre §3) — la chronologie est l'UNIQUE ordre de
         # verite depuis que deplacer=re-dater (v5.13). Les carnets figes en
         # 'manual' par d'anciens drags imprimaient leurs positions perimees
@@ -2097,6 +2100,376 @@ def _fetch_osm_tile(z, x, y):
         return None
 
 
+_VOYAGER_TILE = 512
+
+def _fetch_voyager_tile(z, x, y):
+    """Chantier A+B — tuile CARTO voyager @2x (512 px) avec cache disque.
+    C'est LE fond que l'app affiche a l'ecran : le livre doit lui ressembler.
+    Cache separe (tiles_voyager2x) pour ne pas melanger les fonds."""
+    n = 2 ** z
+    if y < 0 or y >= n:
+        return None
+    x = x % n
+    tdir = os.path.join(MAPS_CACHE_DIR, 'tiles_voyager2x', str(z), str(x))
+    os.makedirs(tdir, exist_ok=True)
+    cache_path = os.path.join(tdir, f"{y}.png")
+    if os.path.exists(cache_path):
+        try:
+            age_days = (datetime.utcnow().timestamp() - os.path.getmtime(cache_path)) / 86400
+            if age_days < MAP_CACHE_TTL_DAYS:
+                with open(cache_path, 'rb') as f:
+                    return f.read()
+        except Exception:
+            pass
+    sub = 'abc'[(x + y) % 3]
+    url = f"https://{sub}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png"
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': _TILE_UA})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = resp.read()
+        with open(cache_path, 'wb') as f:
+            f.write(data)
+        return data
+    except Exception as e:
+        log.warning("voyager tile fetch fail z=%d x=%d y=%d: %s", z, x, y, e)
+        return None
+
+
+# Couleurs d'epingles du livre (une par type, memes familles que l'app)
+_BOOK_PIN_COLORS = {
+    'dormir': '#8A7AB5', 'manger': '#D98E4A', 'rando': '#6E9E75',
+    'plage': '#5FA8C4', 'visite': '#C4654A', 'autre': '#8B8378', '': '#8B8378',
+}
+
+
+def _book_font(size, bold=False):
+    """Police du dessin de carte. DejaVu si presente, sinon defaut (bruyant)."""
+    from PIL import ImageFont
+    chemins = ([
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+        '/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf',
+    ] if bold else [
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        '/usr/share/fonts/dejavu/DejaVuSans.ttf',
+    ])
+    for p in chemins:
+        if os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, size)
+            except Exception:
+                pass
+    log.warning("_book_font : DejaVu absente, police par defaut (etiquettes degradees)")
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def _build_book_map(carnet_id, width, height):
+    """Chantier A+B (audit DA §4) — LA carte du livre, celle de l'app :
+    tuiles voyager, trace du parcours jour par jour (plein le jour,
+    pointille entre les jours), badges de numero de jour, pastilles
+    d'etapes couleur par type + numero, epingles-vignettes photo rondes,
+    etiquettes de villes avec halo et anti-collision, attribution.
+
+    Retourne (png_bytes | None, timeline) :
+    - png None = tuiles indisponibles (le PDF le DIT, regle R4) ;
+    - timeline = [{num, date_label, ville, etapes:[{num, titre, pin_kind}],
+      n_photos}] pour la colonne dessinee en ReportLab (texte net).
+    """
+    import math
+    from PIL import Image as PILImage, ImageDraw
+    c = query("SELECT * FROM carnets WHERE id=?", (carnet_id,), one=True)
+    if not c:
+        return None, []
+    c = dict(c)
+    photos = [dict(r) for r in query("""
+        SELECT p.gps_lat AS lat, p.gps_lng AS lng, p.thumb_path,
+               p.taken_at, p.city_name
+        FROM photos p JOIN album_pages ap ON ap.photo_id = p.id
+        WHERE ap.carnet_id=? AND COALESCE(ap.is_hidden,0)=0
+          AND p.gps_lat IS NOT NULL AND p.gps_lng IS NOT NULL
+        ORDER BY p.taken_at ASC, p.id ASC
+    """, (carnet_id,))]
+    etapes = [dict(r) for r in query("""
+        SELECT id, title, pin_kind, planned_day, geo_lat AS lat, geo_lng AS lng
+        FROM carnet_items
+        WHERE carnet_id=? AND kind='location' AND deleted_at IS NULL
+          AND geo_lat IS NOT NULL AND geo_lng IS NOT NULL
+        ORDER BY planned_day, position, id
+    """, (carnet_id,))]
+    if not photos and not etapes:
+        return None, []
+
+    # ── jours : photos par date de prise, etapes par date_start+planned_day
+    from datetime import date as _date, timedelta as _td
+    d0 = None
+    try:
+        d0 = _date.fromisoformat(str(c['date_start'])[:10]) if c.get('date_start') else None
+    except ValueError:
+        d0 = None
+    jours_set = set()
+    for p in photos:
+        d = str(p.get('taken_at') or '')[:10]
+        if len(d) == 10:
+            p['jour_date'] = d
+            jours_set.add(d)
+        else:
+            p['jour_date'] = ''
+    for e in etapes:
+        if d0 is not None and e.get('planned_day') is not None:
+            e['jour_date'] = (d0 + _td(days=int(e['planned_day']))).isoformat()
+            jours_set.add(e['jour_date'])
+        else:
+            e['jour_date'] = ''
+    jours = sorted(jours_set)
+    num_jour = {d: k + 1 for k, d in enumerate(jours)}
+
+    # numeros d'etapes globaux (les memes sur la carte et dans la timeline)
+    for k, e in enumerate(etapes):
+        e['num'] = k + 1
+
+    # ── timeline (disponible meme sans tuiles) ──
+    timeline = []
+    for d in jours:
+        et_j = [e for e in etapes if e['jour_date'] == d]
+        ph_j = [p for p in photos if p['jour_date'] == d]
+        villes = [p['city_name'] for p in ph_j if p.get('city_name')]
+        ville = max(set(villes), key=villes.count) if villes else ''
+        try:
+            from datetime import datetime as _dt
+            dd = _dt.strptime(d, '%Y-%m-%d')
+            JOURS_C = ['Lun.', 'Mar.', 'Mer.', 'Jeu.', 'Ven.', 'Sam.', 'Dim.']
+            MOIS_C = ['janv.', 'fevr.', 'mars', 'avril', 'mai', 'juin', 'juil.',
+                      'aout', 'sept.', 'oct.', 'nov.', 'dec.']
+            date_label = f"{JOURS_C[dd.weekday()]} {dd.day} {MOIS_C[dd.month-1]}"
+        except ValueError:
+            date_label = d
+        timeline.append({
+            'num': num_jour[d], 'date_label': date_label, 'ville': ville,
+            'etapes': [{'num': e['num'], 'titre': e.get('title') or 'Etape',
+                        'pin_kind': e.get('pin_kind') or ''} for e in et_j],
+            'n_photos': len(ph_j),
+        })
+
+    # ── bbox gonflee 12 %, zoom, mosaique voyager @2x ──
+    lats = [p['lat'] for p in photos] + [e['lat'] for e in etapes]
+    lngs = [p['lng'] for p in photos] + [e['lng'] for e in etapes]
+    min_lat, max_lat = min(lats), max(lats)
+    min_lng, max_lng = min(lngs), max(lngs)
+    pad_lat = max(0.01, (max_lat - min_lat) * 0.12)
+    pad_lng = max(0.01, (max_lng - min_lng) * 0.12)
+    # Zoom au plus juste (Mercator exact, tuiles 512 px) : le zoom entier
+    # maximal tel que le bbox gonfle tient dans width x height.
+    def _merc_y(lat):
+        lr = math.radians(max(-85.05, min(85.05, lat)))
+        return (1.0 - math.asinh(math.tan(lr)) / math.pi) / 2.0
+    dx0 = max((max_lng - min_lng + 2 * pad_lng) / 360.0, 1e-6)
+    dy0 = max(_merc_y(min_lat - pad_lat) - _merc_y(max_lat + pad_lat), 1e-6)
+    zoom = int(min(math.log2(width / (_VOYAGER_TILE * dx0)),
+                   math.log2(height / (_VOYAGER_TILE * dy0))))
+    zoom = max(6, min(15, zoom))
+    ts = _VOYAGER_TILE
+    clat = (min_lat + max_lat) / 2
+    clng = (min_lng + max_lng) / 2
+    cx, cy = _latlng_to_tile_xy(clat, clng, zoom)
+    px0 = cx * ts - width / 2
+    py0 = cy * ts - height / 2
+    tx0 = int(math.floor(px0 / ts)); ty0 = int(math.floor(py0 / ts))
+    tx1 = int(math.floor((px0 + width) / ts)); ty1 = int(math.floor((py0 + height) / ts))
+    canvas = PILImage.new('RGB', ((tx1 - tx0 + 1) * ts, (ty1 - ty0 + 1) * ts), '#E8E4DC')
+    fetched = 0
+    for tx in range(tx0, tx1 + 1):
+        for ty in range(ty0, ty1 + 1):
+            tb = _fetch_voyager_tile(zoom, tx, ty)
+            if not tb:
+                continue
+            try:
+                canvas.paste(PILImage.open(io.BytesIO(tb)).convert('RGB'),
+                             ((tx - tx0) * ts, (ty - ty0) * ts))
+                fetched += 1
+            except Exception:
+                pass
+    if fetched == 0:
+        log.warning("_build_book_map : aucune tuile voyager (reseau ?) — le PDF le dira")
+        return None, timeline
+    img = canvas.crop((int(px0 - tx0 * ts), int(py0 - ty0 * ts),
+                       int(px0 - tx0 * ts) + width, int(py0 - ty0 * ts) + height)).convert('RGBA')
+
+    def to_px(lat, lng):
+        mx, my = _latlng_to_tile_xy(lat, lng, zoom)
+        return (mx * ts - px0, my * ts - py0)
+
+    draw = ImageDraw.Draw(img, 'RGBA')
+
+    # ── trace du parcours : plein dans la journee, pointille entre jours ──
+    points_chrono = []
+    for d in jours:
+        pts_j = ([to_px(e['lat'], e['lng']) for e in etapes if e['jour_date'] == d] +
+                 [to_px(p['lat'], p['lng']) for p in photos if p['jour_date'] == d])
+        if pts_j:
+            points_chrono.append((d, pts_j))
+    TRACE = (196, 101, 74, 235)
+    for k, (d, pts) in enumerate(points_chrono):
+        if len(pts) > 1:
+            draw.line(pts, fill=TRACE, width=6, joint='curve')
+        if k + 1 < len(points_chrono):
+            a = pts[-1]; b = points_chrono[k + 1][1][0]
+            # pointille 12/8
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            dist = max(1.0, (dx * dx + dy * dy) ** 0.5)
+            n_seg = int(dist // 20)
+            for s in range(n_seg + 1):
+                t0 = (s * 20) / dist
+                t1 = min(1.0, (s * 20 + 12) / dist)
+                draw.line([(a[0] + dx * t0, a[1] + dy * t0),
+                           (a[0] + dx * t1, a[1] + dy * t1)], fill=TRACE, width=5)
+
+    # ── pastilles d'etapes : couleur par type + NUMERO blanc (le meme que
+    # dans la timeline — la correspondance carte<->planning se lit d'un oeil)
+    marker_boxes = []   # les etiquettes eviteront ces zones
+    f_num = _book_font(22, bold=True)
+    for e in etapes:
+        ex, ey = to_px(e['lat'], e['lng'])
+        r = 20
+        col = _BOOK_PIN_COLORS.get(e.get('pin_kind') or '', '#8B8378')
+        draw.ellipse([ex - r - 2, ey - r + 4, ex + r + 2, ey + r + 8],
+                     fill=(28, 26, 23, 55))          # ombre douce
+        draw.ellipse([ex - r, ey - r, ex + r, ey + r], fill=col,
+                     outline=(255, 255, 255, 255), width=4)
+        marker_boxes.append((ex - r, ey - r, ex + r, ey + r))
+        lbl = str(e['num'])
+        tb = draw.textbbox((0, 0), lbl, font=f_num)
+        draw.text((ex - (tb[2] - tb[0]) / 2, ey - (tb[3] - tb[1]) / 2 - tb[1]),
+                  lbl, font=f_num, fill=(255, 255, 255, 255))
+
+    # ── epingles photo : vignettes rondes, clustering < 52 px, plafond 25 ──
+    clusters = []
+    for p in photos:
+        ppx = to_px(p['lat'], p['lng'])
+        place = None
+        for cl in clusters:
+            if ((cl['x'] - ppx[0]) ** 2 + (cl['y'] - ppx[1]) ** 2) ** 0.5 < 52:
+                place = cl
+                break
+        if place:
+            place['n'] += 1
+        else:
+            clusters.append({'x': ppx[0], 'y': ppx[1], 'n': 1,
+                             'thumb': p.get('thumb_path')})
+    if len(clusters) > 25:
+        log.info("_build_book_map : %d groupes photo, plafonnes a 25", len(clusters))
+        clusters = clusters[:25]
+    # une vignette posee PILE sur une pastille d'etape la masquerait : on la
+    # decale juste assez pour que les deux restent lisibles cote a cote
+    etape_px = [to_px(e['lat'], e['lng']) for e in etapes]
+    for cl in clusters:
+        for ex, ey in etape_px:
+            dx, dy = cl['x'] - ex, cl['y'] - ey
+            dist = (dx * dx + dy * dy) ** 0.5
+            if dist < 46:
+                if dist < 1:
+                    dx, dy, dist = 1.0, -1.0, 1.4142
+                cl['x'] = ex + dx / dist * 46
+                cl['y'] = ey + dy / dist * 46
+    f_count = _book_font(15, bold=True)
+    for cl in clusters:
+        r = 22
+        x0, y0 = cl['x'], cl['y']
+        draw.ellipse([x0 - r - 2, y0 - r + 4, x0 + r + 2, y0 + r + 8],
+                     fill=(28, 26, 23, 55))
+        vignette = None
+        if cl['thumb']:
+            try:
+                th = PILImage.open(os.path.join(UPLOAD_DIR, cl['thumb'])).convert('RGB')
+                cote = min(th.size)
+                th = th.crop(((th.width - cote) // 2, (th.height - cote) // 2,
+                              (th.width + cote) // 2, (th.height + cote) // 2))
+                th = th.resize((2 * r, 2 * r), PILImage.Resampling.LANCZOS)
+                masque = PILImage.new('L', (2 * r, 2 * r), 0)
+                ImageDraw.Draw(masque).ellipse([0, 0, 2 * r, 2 * r], fill=255)
+                img.paste(th, (int(x0 - r), int(y0 - r)), masque)
+                vignette = True
+            except Exception:
+                vignette = None
+        if not vignette:
+            draw.ellipse([x0 - r, y0 - r, x0 + r, y0 + r], fill='#C4654A')
+        draw.ellipse([x0 - r, y0 - r, x0 + r, y0 + r],
+                     outline=(255, 255, 255, 255), width=4)
+        marker_boxes.append((x0 - r, y0 - r, x0 + r, y0 + r))
+        if cl['n'] > 1:
+            bx, by = x0 + r - 6, y0 - r + 6
+            draw.ellipse([bx - 11, by - 11, bx + 11, by + 11], fill='#C4654A',
+                         outline=(255, 255, 255, 255), width=2)
+            lbl = str(cl['n'])
+            tb = draw.textbbox((0, 0), lbl, font=f_count)
+            draw.text((bx - (tb[2] - tb[0]) / 2, by - (tb[3] - tb[1]) / 2 - tb[1]),
+                      lbl, font=f_count, fill=(255, 255, 255, 255))
+
+    # ── badges de jour : dessines APRES pastilles et vignettes (jamais
+    # enterres), decales en haut-gauche du premier point de la journee ──
+    f_badge = _book_font(20, bold=True)
+    for d, pts in points_chrono:
+        bx, by = pts[0][0] - 30, pts[0][1] - 30
+        r = 17
+        draw.ellipse([bx - r, by - r, bx + r, by + r], fill=(28, 26, 23, 255),
+                     outline=(255, 255, 255, 255), width=3)
+        lbl = str(num_jour[d])
+        tb = draw.textbbox((0, 0), lbl, font=f_badge)
+        draw.text((bx - (tb[2] - tb[0]) / 2, by - (tb[3] - tb[1]) / 2 - tb[1]),
+                  lbl, font=f_badge, fill=(255, 255, 255, 255))
+        marker_boxes.append((bx - r, by - r, bx + r, by + r))
+
+    # ── etiquettes : villes (photos) + titres d'etapes, halo + anti-collision ──
+    f_ville = _book_font(26, bold=True)
+    f_etape = _book_font(22, bold=False)
+    poses = list(marker_boxes)
+
+    def _essaie_label(texte, ax, ay, font):
+        tb = draw.textbbox((0, 0), texte, font=font, stroke_width=3)
+        tw, thh = tb[2] - tb[0], tb[3] - tb[1]
+        for pos in ((ax - tw / 2, ay + 26), (ax - tw / 2, ay - thh - 30),
+                    (ax + 28, ay - thh / 2), (ax - tw - 28, ay - thh / 2)):
+            box = (pos[0] - 4, pos[1] - 4, pos[0] + tw + 4, pos[1] + thh + 4)
+            if box[0] < 4 or box[1] < 4 or box[2] > width - 4 or box[3] > height - 4:
+                continue
+            if any(not (box[2] < b[0] or box[0] > b[2] or box[3] < b[1] or box[1] > b[3])
+                   for b in poses):
+                continue
+            draw.text(pos, texte, font=font, fill=(28, 26, 23, 255),
+                      stroke_width=3, stroke_fill=(255, 255, 255, 235))
+            poses.append(box)
+            return True
+        return False
+
+    villes_pts = {}
+    for p in photos:
+        v = (p.get('city_name') or '').strip()
+        if v:
+            villes_pts.setdefault(v, []).append(to_px(p['lat'], p['lng']))
+    for v, pts in sorted(villes_pts.items(), key=lambda kv: -len(kv[1])):
+        cx_v = sum(pt[0] for pt in pts) / len(pts)
+        cy_v = sum(pt[1] for pt in pts) / len(pts)
+        _essaie_label(v, cx_v, cy_v, f_ville)
+    for e in etapes:
+        ex, ey = to_px(e['lat'], e['lng'])
+        _essaie_label(e.get('title') or 'Etape', ex, ey, f_etape)
+
+    # ── attribution (obligatoire) ──
+    f_attr = _book_font(16)
+    attr = '(c) OpenStreetMap contributors  (c) CARTO'
+    tb = draw.textbbox((0, 0), attr, font=f_attr)
+    aw, ah = tb[2] - tb[0], tb[3] - tb[1]
+    draw.rectangle([width - aw - 18, height - ah - 14, width - 4, height - 4],
+                   fill=(255, 255, 255, 200))
+    draw.text((width - aw - 11, height - ah - 10), attr, font=f_attr,
+              fill=(60, 60, 60, 255))
+
+    out = io.BytesIO()
+    img.convert('RGB').save(out, 'PNG')
+    return out.getvalue(), timeline
+
+
 def _build_map_from_tiles(center_lat, center_lng, zoom, width, height, markers=None):
     """Compose une carte PNG width×height à partir de tuiles OSM 256x256.
 
@@ -2648,10 +3021,16 @@ def carnet_pdf_settings(cid_carnet):
     margin_pos = request.form.get('margin', 'right')
     if margin_pos not in dict(PDF_MARGIN_POSITIONS):
         margin_pos = 'right'
+    # v5.20 : cote de la timeline sur la page carte (left | right | none)
+    tl = request.form.get('map_timeline', '')
+    if tl in ('left', 'right', 'none'):
+        execute("UPDATE carnets SET pdf_map_timeline_side=? WHERE id=?",
+                (tl, cid_carnet))
     execute("UPDATE carnets SET pdf_layout=?, pdf_margin_position=?, "
             "updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (layout, margin_pos, cid_carnet))
-    return jsonify({'ok': True, 'layout': layout, 'margin_position': margin_pos})
+    return jsonify({'ok': True, 'layout': layout, 'margin_position': margin_pos,
+                    'map_timeline': tl if tl in ('left', 'right', 'none') else None})
 
 
 @app.route('/carnet/<int:cid_carnet>/pdf')
@@ -2718,6 +3097,9 @@ def carnet_pdf(cid_carnet):
                 fetch_static_map=_fetch_staticmap_png,
                 compute_zoom=_compute_map_zoom,
                 section_zone_map_resolver=_section_coords_for_chunk_v3,
+                book_map=(lambda w_px, h_px, _cid=cid_carnet:
+                          _build_book_map(_cid, w_px, h_px)),
+                map_timeline_side=(c.get('pdf_map_timeline_side') or 'right'),
                 qr_make=qrcode.make,
                 video_url_for=lambda token: url_for('video_public', token=token, _external=True),
             )
