@@ -1,0 +1,17 @@
+{# ── Carte d'aide contextuelle (v5.22, audit UX §4) ──────────────────────
+   Bandeau « première fois » : visible tant que l'utilisateur n'a pas touché
+   « Compris » (localStorage nh_hint_<id>), ré-ouvrable à tout moment par le
+   bouton « ? » de la topbar (classe .hint-open + data-hint-for="<id>").
+   Usage :
+     {% set hint = {'id': 'album', 'title': '…', 'lines': ['…', '…']} %}
+     {% include '_hint_card.html' %}
+   Le JS partagé vit dans _base.html. Aucun tour guidé, rien de bloquant. #}
+<section class="hint-card" data-hint="{{ hint.id }}" hidden>
+  <div class="hint-card-body">
+    <p class="hint-card-title">{{ hint.title }}</p>
+    {% for l in hint.lines %}
+    <p class="hint-card-line">{{ l|safe }}</p>
+    {% endfor %}
+  </div>
+  <button type="button" class="btn btn-primary btn-sm hint-card-ok">Compris</button>
+</section>

@@ -55,12 +55,12 @@ if not _HEIF_OK:
                 "avec une erreur visible cote client")
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "5.21"
+APP_VERSION = "5.22"
 # v5.16 — version des ASSETS (style.css, pins.js) servie en ?v= : un
 # telephone qui garde l'ancien CSS/JS en cache apres un deploiement rend
 # tous les correctifs invisibles (regle D3 etendue). A BUMPER a chaque
 # lot qui touche static/.
-ASSET_V = "5.20"
+ASSET_V = "5.22"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
@@ -1590,7 +1590,14 @@ def carnet_souhait_view(cid_carnet):
         WHERE carnet_id=? AND target_carnet_id IS NULL AND deleted_at IS NOT NULL
         ORDER BY deleted_at DESC
     """, (cid_carnet,))]
+    # v5.22 (audit UX §1.5.3) : lien croise reverie -> voyage ne d'elle
+    enfant_carnet = query(
+        "SELECT id, title FROM carnets WHERE parent_souhait_id=? "
+        "AND couple_id=? AND deleted_at IS NULL AND type != 'souhait' "
+        "ORDER BY id DESC",
+        (cid_carnet, session['espace_id']), one=True)
     return render_template('carnet_souhait.html', carnet=c, items=items,
+        enfant_carnet=enfant_carnet,
         voyages=[dict(v) for v in voyages], item_kinds=ITEM_KINDS,
         pin_kinds=PIN_KINDS, children_by_parent=children_by_parent,
         children_slim=children_slim,
@@ -4614,7 +4621,16 @@ def carnet_album(cid_carnet):
                                 first_photo.get('photo_mid'))
                 if m:
                     first_photo['photo_mid'] = m
+    # v5.22 (audit UX §1.5.3) : lien croise permanent album -> reverie
+    # d'origine — l'utilisateur retrouve d'ou est ne le voyage.
+    parent_souhait = None
+    if c.get('parent_souhait_id'):
+        parent_souhait = query(
+            "SELECT id, title FROM carnets WHERE id=? AND couple_id=? "
+            "AND deleted_at IS NULL",
+            (c['parent_souhait_id'], session['espace_id']), one=True)
     return render_template('album.html', carnet=c,
+        parent_souhait=parent_souhait,
         etapes_by_day=etapes_by_day, etapes_all=etapes_all,
         pin_kinds=PIN_KINDS,
         orphan_videos=orphan_videos,

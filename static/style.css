@@ -5343,3 +5343,132 @@ body.photo-roll-open .album-footer { opacity: 0; pointer-events: none; }
   margin: 6px 0 4px;
 }
 .pin-rename:focus { outline: none; border-color: var(--accent); }
+
+/* ══ v5.22 — L'UTILISATEUR AIDÉ (chantier E, audit UX §4-5) ══════════════ */
+
+/* Carte d'aide contextuelle : la mission de l'écran, dite une fois */
+.hint-card { display: flex; }
+.hint-card[hidden] { display: none; }
+.hint-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin: 14px 0 18px;
+  padding: 14px 16px;
+  background: #FBF7F0;
+  border: 1px solid #EDE3D3;
+  border-left: 3px solid var(--accent, #C4654A);
+  border-radius: 12px;
+}
+.hint-card-body { flex: 1 1 auto; min-width: 0; }
+.hint-card-title {
+  margin: 0 0 6px;
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--ink, #1C1A17);
+}
+.hint-card-line {
+  margin: 0 0 4px;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: #5C554B;
+}
+.hint-card .hint-card-ok { flex: 0 0 auto; align-self: center; }
+@media (max-width: 600px) {
+  .hint-card { flex-direction: column; }
+  .hint-card .hint-card-ok { align-self: flex-end; }
+}
+
+/* Le « ? » permanent de la topbar : l'aide reste trouvable après fermeture */
+.hint-open {
+  width: 30px; height: 30px;
+  min-width: 30px;
+  border-radius: 50%;
+  border: 1.5px solid #D9CFC0;
+  background: transparent;
+  color: #8A8072;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+}
+.hint-open:hover { border-color: var(--accent, #C4654A); color: var(--accent, #C4654A); }
+
+/* ── Épingles photo : le geste standard (audit UX §5.2) ── */
+/* 28 px minimum + apparition animée : la fonctionnalité s'annonce */
+.photo-pin {
+  width: 28px; height: 28px;
+  margin: -14px 0 0 -14px;
+  animation: pin-pop 0.2s ease-out;
+}
+@keyframes pin-pop {
+  from { transform: scale(0); }
+  to   { transform: scale(1); }
+}
+/* épingle fantôme en cours de placement : glissable, pulsée */
+.photo-pin.pin-ghost {
+  border-style: dashed;
+  cursor: grab;
+  touch-action: none;
+  animation: pin-pulse 1.2s ease-in-out infinite;
+  z-index: 8;
+}
+@keyframes pin-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.18); }
+}
+
+/* feuille basse de saisie : au-dessus du clavier, jamais recouverte */
+.pin-sheet {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 1300;
+  background: #fff;
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -8px 30px rgba(28, 26, 23, 0.25);
+  padding: 14px 16px calc(14px + env(safe-area-inset-bottom, 0px));
+}
+.pin-sheet-hint {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  color: #8A8072;
+}
+.pin-sheet textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1.5px solid #E4DCCE;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 0.95rem;
+  resize: none;
+}
+.pin-sheet-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 10px;
+}
+.pin-sheet-actions .btn { min-height: 44px; }
+
+/* hint permanent du viewer : le geste est annoncé là où il sert */
+.viewer-pin-hint2 {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+/* lien croisé album <-> rêverie d'origine (audit UX §1.5.3) */
+.origin-link {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 0.82rem;
+  color: var(--accent, #C4654A);
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+  padding: 4px 0;
+  min-height: 0;
+}
+.origin-link:hover { opacity: 0.8; }
+
+/* l'appui long doit appartenir a l'app, pas au navigateur (pan/zoom natif) */
+.viewer-pins { touch-action: none; }

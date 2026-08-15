@@ -379,6 +379,9 @@
 <header class="topbar">
   <div class="topbar-inner">
     <a href="{{ url_for('carnet_album', cid_carnet=carnet.id) }}" class="brand">← Album</a>
+    <button type="button" class="hint-open" data-hint-for="apercu"
+            title="À quoi sert cet écran ?" aria-label="Aide"
+            style="margin-left:auto">?</button>
   </div>
 </header>
 
@@ -387,6 +390,14 @@
     <p class="kicker">Aperçu livre · prêt à imprimer</p>
     <h1 class="display"><em>{{ carnet.title }}</em></h1>
   </section>
+
+  {# ── v5.22 (audit UX §4.2) : la mission de l'écran, dite une fois ── #}
+  {% set hint = {'id': 'apercu', 'title': 'Ici, on met en page le livre.', 'lines': [
+    'Touche la couverture pour la changer ; choisis format et position de la marge.',
+    'Ce que tu vois est ce qui s\'imprime — le PDF se génère en bas de page.',
+    'Un doute sur une photo ? Retourne à l\'album, le livre suivra.'
+  ]} %}
+  {% include '_hint_card.html' %}
 
   {% set fmt_info0 = formats[format] %}
   <details class="apercu-panel">

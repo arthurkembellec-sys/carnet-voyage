@@ -3,8 +3,6 @@
 {% block back_link %}
   <a href="{{ url_for('souhaits_index') }}" class="brand">← Rêveries</a>
 {% endblock %}
-
-
 {% block content %}
 
 
@@ -14,7 +12,23 @@
     <p class="kicker">Rêverie</p>
     <h1 class="display"><em>{{ carnet.title }}</em></h1>
     {% if carnet.location %}<p class="lead">{{ carnet.location }}</p>{% endif %}
+    {% if enfant_carnet %}
+    {# v5.22 (audit UX §1.5.3) : lien croise permanent vers le voyage ne d'elle #}
+    <a class="origin-link"
+       href="{{ url_for('carnet_album', cid_carnet=enfant_carnet.id) }}"
+       title="Cette rêverie est devenue un voyage">📖 Voir le voyage
+       «&nbsp;{{ enfant_carnet.title }}&nbsp;»</a>
+    {% endif %}
   </section>
+
+  {# ── v5.22 (audit UX §4.2) : la mission de l'écran, dite une fois ── #}
+  {% set hint = {'id': 'reverie', 'title': 'Ici, on imagine le voyage.', 'lines': [
+    '📍 Touche la carte ou cherche un lieu pour épingler une idée.',
+    '🧭 « Tracer le parcours » relie tes épingles ; attribue chaque trajet à un jour.',
+    '📅 Pose les dates : le fil des journées apparaît, tout s\'enregistre tout seul.',
+    'Quand c\'est prêt : <strong>✨ Passer en voyage</strong> — la rêverie reste intacte ici.'
+  ]} %}
+  {% include '_hint_card.html' %}
 
   {# ────── LA CARTE DES IDÉES (v4.1) ────── #}
   <section class="reverie-map-card">
@@ -39,7 +53,8 @@
     {# Barre du mode parcours #}
     <div class="route-bar" id="route-bar" hidden>
       <span class="route-bar-label">
-        Tape les épingles dans l'ordre du voyage —
+        Touche les épingles dans l'ordre du voyage — retouche une épingle
+        pour un aller-retour —
         <strong id="route-count">0</strong> étape(s)
         <span class="route-time" id="route-time"></span>
       </span>

@@ -31,6 +31,13 @@
       <div class="album-head-text">
         <p class="kicker">Album</p>
         <h1 class="display"><em>{{ carnet.title }}</em></h1>
+        {% if parent_souhait %}
+        {# v5.22 (audit UX §1.5.3) : lien croise permanent vers la reverie #}
+        <a class="origin-link"
+           href="{{ url_for('carnet_souhait_view', cid_carnet=parent_souhait.id) }}"
+           title="Retrouver la préparation du voyage">↩ Née de la rêverie
+           «&nbsp;{{ parent_souhait.title }}&nbsp;»</a>
+        {% endif %}
       </div>
       <div class="album-head-actions">
         <a href="{{ url_for('carnet_apercu', cid_carnet=carnet.id) }}"
@@ -68,6 +75,15 @@
       </div>
     </div>
   </section>
+
+  {# ── v5.22 (audit UX §4.2) : la mission de l'écran, dite une fois ── #}
+  {% set hint = {'id': 'album', 'title': 'Ici, on raconte le voyage vécu.', 'lines': [
+    '📷 Ajoute les photos : elles se rangent seules par journée (date et lieu).',
+    '🧭 Le planning montre le prévu — retire ce qu\'on n\'a pas fait, ajoute ce qu\'on a découvert : rien n\'est perdu, tout part en corbeille restaurable.',
+    '¶ Marge : billets, anecdotes, gribouillis — ils apparaîtront dans la marge du livre.',
+    'Quand l\'album te plaît : <strong>📖 Le livre</strong> en haut à droite.'
+  ]} %}
+  {% include '_hint_card.html' %}
 
   {# ────── v5.7 : PHOTOS À DATER — visibles dès l'entrée, jamais perdues ────── #}
   {% set orphan_photos_n = orphans|selectattr('photo_path')|list|length %}
@@ -109,6 +125,10 @@
       <span class="apercu-summary-chevron">▾</span>
     </summary>
     <div class="voyage-planning-days" id="vp-days"></div>
+    {# v5.22 (audit UX §4.2) : hint permanent — la zone était muette #}
+    <p class="planning-hint" style="padding:0 18px">Le prévu vient de ta rêverie.
+      Glisse une étape vers un autre jour si la réalité a changé —
+      ✕ la retire (corbeille), ＋ en ajoute une.</p>
     <p class="planning-save" id="vp-save" style="padding:0 18px 12px"></p>
     {# v5.12 : corbeille du planning — les étapes qu'on n'a pas faites #}
     {% if etapes_corbeille %}
@@ -474,14 +494,24 @@
   <div class="viewer-caption" id="viewer-caption"></div>
   <div class="viewer-meta" id="viewer-meta"></div>
   <div class="viewer-toolbar">
-    <button type="button" class="viewer-pin-btn" id="viewer-pin-btn" onclick="togglePinMode()">
+    <button type="button" class="viewer-pin-btn" id="viewer-pin-btn" onclick="startPinFromButton()">
       ✎ Épingler une note
     </button>
-    <span class="viewer-pin-hint" id="viewer-pin-hint" hidden>Touche l'endroit de la photo à annoter — ou ré-appuie pour annuler</span>
+    <span class="viewer-pin-hint2">Reste appuyé sur la photo pour épingler une note.</span>
   </div>
-  {# popover d'épingle : lecture / saisie #}
+  {# popover d'épingle : lecture #}
   <div class="pin-popover" id="pin-popover" hidden>
     <div class="pin-popover-body" id="pin-popover-body"></div>
+  </div>
+  {# v5.22 (audit UX §5.2) : feuille basse de saisie — au-dessus du clavier,
+     l'épingle fantôme reste glissable sur la photo pendant la saisie #}
+  <div class="pin-sheet" id="pin-sheet" hidden>
+    <p class="pin-sheet-hint">Glisse l'épingle sur la photo pour l'ajuster.</p>
+    <textarea id="pin-sheet-text" class="pin-input" rows="2" placeholder="Ta note ici…"></textarea>
+    <div class="pin-sheet-actions">
+      <button type="button" class="btn btn-secondary" id="pin-sheet-cancel">Annuler</button>
+      <button type="button" class="btn btn-primary" id="pin-sheet-save">Épingler</button>
+    </div>
   </div>
 </div>
 
@@ -1626,7 +1656,7 @@
     if (!viewerPhotos.length) return;
     const v = document.getElementById('photo-viewer');
     const im = document.getElementById('viewer-img');
-    pinModeOff();
+    cancelPinPlacement();
     closePinPopover();
     im.src = viewerPhotos[viewerIdx].full;
     document.getElementById('viewer-caption').textContent = viewerPhotos[viewerIdx].caption;
@@ -1638,7 +1668,7 @@
     if (im.complete) layoutPins(); else im.onload = layoutPins;
   }
   function closeViewer() {
-    pinModeOff(); closePinPopover();
+    cancelPinPlacement(); closePinPopover();
     document.getElementById('photo-viewer').hidden = true;
     document.body.style.overflow = '';
   }
@@ -1647,7 +1677,7 @@
     if (document.getElementById('photo-viewer').hidden) return;
     if (e.key === 'Escape') {
       if (!document.getElementById('pin-popover').hidden) { closePinPopover(); return; }
-      if (pinMode) { pinModeOff(); return; }
+      if (!document.getElementById('pin-sheet').hidden) { cancelPinPlacement(); return; }
       closeViewer();
     }
     if (e.key === 'ArrowLeft') viewerNav(-1);
@@ -1658,7 +1688,6 @@
      Les coordonnées sont normalisées 0-1 sur l'IMAGE (pas l'écran) : la
      couche .viewer-pins est calée sur la zone réellement visible de la
      photo (object-fit: contain laisse des bandes). */
-  let pinMode = false;
   function currentPhotoId() {
     const p = viewerPhotos[viewerIdx];
     return p && p.photoId ? String(p.photoId) : '';
@@ -1697,30 +1726,110 @@
       layer.appendChild(d);
     });
   }
-  function togglePinMode() { pinMode ? pinModeOff() : pinModeOn(); }
-  function pinModeOn() {
-    pinMode = true;
-    document.getElementById('viewer-pin-btn').classList.add('is-active');
-    document.getElementById('viewer-pin-hint').hidden = false;
-    document.getElementById('viewer-pins').classList.add('is-armed');
+  /* v5.22 (audit UX §5.2) : le geste standard du métier — APPUI LONG sur la
+     photo pose l'épingle à l'endroit pressé (vibration légère, feuille basse
+     de saisie au-dessus du clavier). Le bouton ✎ AGIT désormais : épingle au
+     centre, glissable vers sa cible. Le mode armé n'existe plus. */
+  let ghostPin = null;   // {el, x, y} : l'épingle en cours de placement
+  function cancelPinPlacement() {
+    if (ghostPin && ghostPin.el) ghostPin.el.remove();
+    ghostPin = null;
+    const sh = document.getElementById('pin-sheet');
+    if (sh) sh.hidden = true;
   }
-  function pinModeOff() {
-    pinMode = false;
-    const b = document.getElementById('viewer-pin-btn');
-    if (b) b.classList.remove('is-active');
-    const h = document.getElementById('viewer-pin-hint');
-    if (h) h.hidden = true;
-    const l = document.getElementById('viewer-pins');
-    if (l) l.classList.remove('is-armed');
+  function startPinPlacement(x, y) {
+    if (!currentPhotoId()) return;
+    cancelPinPlacement(); closePinPopover();
+    const layer = document.getElementById('viewer-pins');
+    const el = document.createElement('div');
+    el.className = 'photo-pin pin-ghost';
+    el.style.left = (x * 100) + '%';
+    el.style.top = (y * 100) + '%';
+    layer.appendChild(el);
+    ghostPin = { el: el, x: x, y: y };
+    el.addEventListener('pointerdown', function(ev){
+      ev.preventDefault(); ev.stopPropagation();
+      try { el.setPointerCapture(ev.pointerId); } catch(e){}
+      function mv(e2){
+        const b = layer.getBoundingClientRect();
+        const nx = Math.min(1, Math.max(0, (e2.clientX - b.left) / b.width));
+        const ny = Math.min(1, Math.max(0, (e2.clientY - b.top) / b.height));
+        ghostPin.x = nx; ghostPin.y = ny;
+        el.style.left = (nx * 100) + '%';
+        el.style.top = (ny * 100) + '%';
+      }
+      function up(){
+        el.removeEventListener('pointermove', mv);
+        el.removeEventListener('pointerup', up);
+        el.removeEventListener('pointercancel', up);
+      }
+      el.addEventListener('pointermove', mv);
+      el.addEventListener('pointerup', up);
+      el.addEventListener('pointercancel', up);
+    });
+    const sh = document.getElementById('pin-sheet');
+    sh.hidden = false;
+    const ta = document.getElementById('pin-sheet-text');
+    ta.value = '';
+    setTimeout(function(){ ta.focus(); }, 60);
   }
-  document.getElementById('viewer-pins').addEventListener('click', function(e){
-    if (!pinMode) return;
-    const layer = this.getBoundingClientRect();
-    const x = (e.clientX - layer.left) / layer.width;
-    const y = (e.clientY - layer.top) / layer.height;
-    if (x < 0 || x > 1 || y < 0 || y > 1) return;
-    openPinForm(x, y, e.clientX - layer.left, e.clientY - layer.top);
-  });
+  function startPinFromButton() { startPinPlacement(0.5, 0.5); }
+
+  /* appui long 450 ms — annulé si le doigt bouge (> 12 px) : le swipe reste
+     réservé au changement de photo, aucun conflit */
+  (function(){
+    const layer = document.getElementById('viewer-pins');
+    let t = null, sx = 0, sy = 0;
+    layer.addEventListener('pointerdown', function(e){
+      if (e.target.closest && e.target.closest('.photo-pin')) return;  // pas sur une épingle
+      if (ghostPin) return;             // placement déjà en cours
+      sx = e.clientX; sy = e.clientY;
+      const b = layer.getBoundingClientRect();
+      const nx = (e.clientX - b.left) / b.width;
+      const ny = (e.clientY - b.top) / b.height;
+      t = setTimeout(function(){
+        t = null;
+        if (navigator.vibrate) navigator.vibrate(10);
+        startPinPlacement(nx, ny);
+      }, 450);
+    });
+    layer.addEventListener('pointermove', function(e){
+      if (t && Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) > 12) {
+        clearTimeout(t); t = null;
+      }
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(function(ev){
+      layer.addEventListener(ev, function(){ if (t) { clearTimeout(t); t = null; } });
+    });
+  })();
+
+  /* feuille basse : enregistrer / annuler */
+  (function(){
+    document.getElementById('pin-sheet-cancel').addEventListener('click', cancelPinPlacement);
+    document.getElementById('pin-sheet-save').addEventListener('click', async function(){
+      if (!ghostPin) return;
+      const ta = document.getElementById('pin-sheet-text');
+      const texte = ta.value.trim();
+      if (!texte) { ta.focus(); return; }
+      const btn = this;
+      btn.disabled = true;
+      const fd = new FormData();
+      fd.append('_csrf', CSRF);
+      fd.append('x', ghostPin.x.toFixed(4));
+      fd.append('y', ghostPin.y.toFixed(4));
+      fd.append('texte', texte);
+      try {
+        const r = await fetch('/photo/' + currentPhotoId() + '/notes', { method: 'POST', body: fd });
+        const d = await r.json();
+        btn.disabled = false;
+        if (!d.ok) { setError('Note : ' + (d.error || '')); return; }
+        const pid = currentPhotoId();
+        (PHOTO_NOTES[pid] = PHOTO_NOTES[pid] || []).push(d.note);
+        cancelPinPlacement(); renderPins(); updateTileNoteCount(pid);
+        setSaved('Note épinglée');
+      } catch(e) { setError('Réseau'); btn.disabled = false; }
+    });
+  })();
   function popEl() { return document.getElementById('pin-popover'); }
   function popBody() { return document.getElementById('pin-popover-body'); }
   function placePopover(px, py) {
@@ -1737,36 +1846,6 @@
   function closePinPopover() {
     const p = popEl();
     if (p) { p.hidden = true; popBody().innerHTML = ''; }
-  }
-  function openPinForm(x, y, px, py) {
-    pinModeOff();
-    popBody().innerHTML = '';
-    const ta = document.createElement('textarea');
-    ta.className = 'pin-input'; ta.rows = 2; ta.placeholder = 'Ta note ici…';
-    const row = document.createElement('div'); row.className = 'pin-popover-actions';
-    const ok = document.createElement('button'); ok.type = 'button'; ok.className = 'btn btn-primary btn-sm'; ok.textContent = 'Épingler';
-    const ko = document.createElement('button'); ko.type = 'button'; ko.className = 'btn btn-secondary btn-sm'; ko.textContent = 'Annuler';
-    ko.addEventListener('click', closePinPopover);
-    ok.addEventListener('click', async function(){
-      const texte = ta.value.trim();
-      if (!texte) { ta.focus(); return; }
-      ok.disabled = true;
-      const fd = new FormData();
-      fd.append('_csrf', CSRF); fd.append('x', x.toFixed(4)); fd.append('y', y.toFixed(4)); fd.append('texte', texte);
-      try {
-        const r = await fetch('/photo/' + currentPhotoId() + '/notes', { method: 'POST', body: fd });
-        const d = await r.json();
-        if (!d.ok) { setError('Note : ' + (d.error || '')); ok.disabled = false; return; }
-        const pid = currentPhotoId();
-        (PHOTO_NOTES[pid] = PHOTO_NOTES[pid] || []).push(d.note);
-        closePinPopover(); renderPins(); updateTileNoteCount(pid);
-        setSaved('Note épinglée');
-      } catch(e) { setError('Réseau'); ok.disabled = false; }
-    });
-    row.appendChild(ok); row.appendChild(ko);
-    popBody().appendChild(ta); popBody().appendChild(row);
-    placePopover(px, py);
-    ta.focus();
   }
   function openPinPopover(note, pinEl) {
     popBody().innerHTML = '';
@@ -1806,17 +1885,20 @@
         chip.dataset.photoId = photoId;
         a.appendChild(chip);
       }
-      chip.textContent = n;
+      chip.textContent = n + ' ¶';
       chip.title = n + ' note' + (n > 1 ? 's' : '') + ' épinglée' + (n > 1 ? 's' : '');
     });
   }
-  window.togglePinMode = togglePinMode;
+  window.startPinFromButton = startPinFromButton;
   (function(){
     let startX = null;
     const v = document.getElementById('photo-viewer');
-    v.addEventListener('touchstart', function(e){ startX = e.touches[0].clientX; });
+    v.addEventListener('touchstart', function(e){
+      if (ghostPin) { startX = null; return; }   // épingle en cours : pas de swipe
+      startX = e.touches[0].clientX;
+    });
     v.addEventListener('touchend', function(e){
-      if (startX === null) return;
+      if (startX === null || ghostPin) { startX = null; return; }
       const dx = e.changedTouches[0].clientX - startX;
       if (Math.abs(dx) > 60) viewerNav(dx < 0 ? 1 : -1);
       startX = null;

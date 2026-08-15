@@ -144,6 +144,46 @@
   }
 </script>
 <script src="{{ url_for('static', filename='topbar.js') }}"></script>
+<script>
+  /* v5.22 (audit UX §4) : systeme d'aide — bandeau premiere-fois par ecran,
+     re-ouvrable via le « ? » de la topbar. Jamais de re-pop apres Compris. */
+  (function(){
+    /* le « ? » s'injecte dans la topbar de tout ecran qui porte une carte
+       d'aide — les blocks Jinja de _topbar.html ne sont pas surchargeables
+       depuis les pages (include), l'injection JS est le chemin fiable */
+    var firstHint = document.querySelector('.hint-card[data-hint]');
+    var tbRight = document.querySelector('.topbar-right');
+    if (firstHint && tbRight && !document.querySelector('.hint-open')) {
+      var q = document.createElement('button');
+      q.type = 'button';
+      q.className = 'hint-open';
+      q.dataset.hintFor = firstHint.dataset.hint;
+      q.title = 'À quoi sert cet écran ?';
+      q.setAttribute('aria-label', 'Aide');
+      q.textContent = '?';
+      tbRight.insertBefore(q, tbRight.firstChild);
+    }
+    document.querySelectorAll('.hint-card[data-hint]').forEach(function(c){
+      var k = 'nh_hint_' + c.dataset.hint;
+      try { if (!localStorage.getItem(k)) c.hidden = false; }
+      catch(e) { c.hidden = false; }
+      var ok = c.querySelector('.hint-card-ok');
+      if (ok) ok.addEventListener('click', function(){
+        c.hidden = true;
+        try { localStorage.setItem(k, '1'); } catch(e){}
+      });
+    });
+    document.querySelectorAll('.hint-open[data-hint-for]').forEach(function(b){
+      b.addEventListener('click', function(){
+        var c = document.querySelector('.hint-card[data-hint="' + b.dataset.hintFor + '"]');
+        if (c) {
+          c.hidden = false;
+          c.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      });
+    });
+  })();
+</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>
