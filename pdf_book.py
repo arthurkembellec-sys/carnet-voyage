@@ -118,6 +118,44 @@ _MOIS_FR = ['JANVIER', 'FEVRIER', 'MARS', 'AVRIL', 'MAI', 'JUIN', 'JUILLET',
             'AOUT', 'SEPTEMBRE', 'OCTOBRE', 'NOVEMBRE', 'DECEMBRE']
 
 
+def _compute_book_stats(pages):
+    """v5.21 (chantier D) — les chiffres du voyage, depuis les pages memes :
+    jours, photos, videos, villes traversees (ordre de rencontre) et
+    kilometres parcourus (haversine sur les photos GPS chronologiques)."""
+    import math
+    photos = [p for p in pages if p.get('photo_path')]
+    videos = [p for p in pages if p.get('video_path')]
+    days = sorted({_page_day(p) for p in pages if _page_day(p)})
+    villes, seen = [], set()
+    for p in photos:
+        v = (p.get('photo_city') or '').strip()
+        if v and v.lower() not in seen:
+            seen.add(v.lower())
+            villes.append(v)
+    pts = [(p['photo_gps_lat'], p['photo_gps_lng']) for p in photos
+           if p.get('photo_gps_lat') is not None
+           and p.get('photo_gps_lng') is not None]
+    km = 0.0
+    for a, b in zip(pts, pts[1:]):
+        la1, lo1, la2, lo2 = map(math.radians, (a[0], a[1], b[0], b[1]))
+        h = (math.sin((la2 - la1) / 2) ** 2 +
+             math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2)
+        km += 6371.0 * 2 * math.asin(min(1.0, math.sqrt(h)))
+    return {'jours': len(days), 'photos': len(photos), 'videos': len(videos),
+            'lieux': len(villes), 'villes': villes, 'km': km}
+
+
+def _date_longue_fr(day):
+    """'Samedi 11 juillet 2026' — jamais d'ISO brut sur un objet offert."""
+    from datetime import datetime as _dt
+    try:
+        d = _dt.strptime(str(day)[:10], '%Y-%m-%d')
+    except (ValueError, TypeError):
+        return str(day)
+    return (f"{_JOURS_FR[d.weekday()].capitalize()} {d.day} "
+            f"{_MOIS_FR[d.month - 1].lower()} {d.year}")
+
+
 def _day_label_fr(day, chunk=None):
     """v5.17 — 'SAMEDI 11 JUILLET · SALERS' : le livre marque les changements
     de date et de lieu, comme l'album (retour d'Arthur du 2026-08-15)."""
@@ -246,6 +284,7 @@ def render_carnet_pdf(
     section_zone_map_resolver=None,  # callable(items_chunk) -> dict|None
     book_map=None,            # v5.20 : callable(w_px, h_px) -> (png|None, timeline)
     map_timeline_side='right',  # 'left' | 'right' | 'none'
+    book_meta=None,           # v5.21 : {'members': ['Arthur', 'Laurie'], ...}
 
     qr_make=None,             # qrcode.make
     video_url_for=None,       # callable(token) -> str
@@ -897,7 +936,10 @@ def render_carnet_pdf(
     if cover_item is None:
         cover_item = next((p for p in pages_main if p.get('photo_path')), None)
     program.append({'kind': 'cover', 'item': cover_item})
-    program.append({'kind': 'blank'})  # dos de couverture
+    # v5.21 (chantier D) : fini les deux pages blanches d'entree — page de
+    # garde teintee puis page de titre, comme un livre qui se respecte.
+    program.append({'kind': 'garde'})
+    program.append({'kind': 'title'})
 
     # Carte d'ensemble (page recto)
     if show_overview_map and (book_map is not None or
@@ -911,24 +953,54 @@ def render_carnet_pdf(
     # v5.17 : segmentation partagee (_program_chunks) + bandeau de jour sur
     # la premiere page de chaque journee — le livre marque les transitions
     # de date/lieu comme l'album.
+    # v5.21 (chantier D) : ouverture de chapitre par jour — une pleine page
+    # JOUR n / date en toutes lettres / lieu dominant / meilleure photo du
+    # jour, inseree avant le premier chunk de chaque journee. Elle remplace
+    # le bandeau v5.17 (qui reste le secours des pages non datees).
+    jours_sorted = sorted({_page_day(p) for p in pages_main if _page_day(p)})
+    num_of_day = {d: k + 1 for k, d in enumerate(jours_sorted)}
+    best_by_day = {}
+    villes_by_day = {}
+    for p in pages_main:
+        d = _page_day(p)
+        if not d:
+            continue
+        if p.get('photo_city'):
+            villes_by_day.setdefault(d, []).append(p['photo_city'])
+        if p.get('photo_path'):
+            w0 = p.get('photo_width') or 0
+            h0 = p.get('photo_height') or 0
+            score = (1 if w0 >= h0 else 0, w0 * h0)
+            if d not in best_by_day or score > best_by_day[d][0]:
+                best_by_day[d] = (score, p)
+
+    def _chapter_entry(d):
+        vs = villes_by_day.get(d) or []
+        lieu = max(set(vs), key=vs.count) if vs else ''
+        bb = best_by_day.get(d)
+        return {'kind': 'chapter_open', 'num': num_of_day[d], 'day': d,
+                'lieu': lieu, 'item': bb[1] if bb else None}
+
     prev_day = None
     for seg_kind, seg in _program_chunks(pages_main, n_per_page):
         if seg_kind == 'spread':
+            d = _page_day(seg)
+            if d and d != prev_day:
+                program.append(_chapter_entry(d))
+                prev_day = d
             program.append({'kind': 'spread', 'item': seg})
-            d = _page_day(seg)
-            if d:
-                prev_day = d
         elif seg_kind == 'full':
-            program.append({'kind': 'full', 'item': seg})
             d = _page_day(seg)
-            if d:
+            if d and d != prev_day:
+                program.append(_chapter_entry(d))
                 prev_day = d
+            program.append({'kind': 'full', 'item': seg})
         else:
             entry = {'kind': 'composite', 'chunk': seg}
             jours = [d for d in (_page_day(p) for p in seg) if d]
             d = jours[0] if jours else ''
             if d and d != prev_day:
-                entry['day_label'] = _day_label_fr(d, seg)
+                program.append(_chapter_entry(d))
                 prev_day = d
             program.append(entry)
 
@@ -943,8 +1015,15 @@ def render_carnet_pdf(
             program.append({'kind': 'margin_grid',
                             'chunk': end_margin_items[s:s + 4]})
 
+    # v5.21 (chantier D) : la page de statistiques — LA page que les couples
+    # montrent — puis le colophon, puis la 4e de couverture.
+    book_stats = _compute_book_stats(pages_main)
+    if book_stats['photos'] or book_stats['videos']:
+        program.append({'kind': 'stats'})
+
     # Page de fin
     program.append({'kind': 'colophon'})
+    program.append({'kind': 'back_cover'})
 
     # Distribution des margin items au fil des pages composites ─────────────
     # v3.4.1 : alignement par date (build_margin_plan) — une note tombe sur
@@ -1051,6 +1130,235 @@ def render_carnet_pdf(
     def _draw_blank(side, page_num):
         _fill_page_cream()
         _draw_page_number(page_num, side)
+
+    # ── v5.21 (chantier D) : l'architecture du livre ──────────────────────
+    GARDE_RGB = (0.962, 0.946, 0.918)   # creme profond de la page de garde
+
+    def _draw_coeur(cx, cy, s, rgb):
+        """Petit coeur terracotta (le motif du logo) en courbes de Bezier."""
+        pdf.setFillColorRGB(*rgb)
+        p = pdf.beginPath()
+        p.moveTo(cx, cy - s * 0.62)
+        p.curveTo(cx - s * 1.15, cy + s * 0.30, cx - s * 0.52, cy + s * 0.92,
+                  cx, cy + s * 0.30)
+        p.curveTo(cx + s * 0.52, cy + s * 0.92, cx + s * 1.15, cy + s * 0.30,
+                  cx, cy - s * 0.62)
+        pdf.drawPath(p, fill=1, stroke=0)
+
+    def _draw_garde(side):
+        """Page de garde : un aplat creme profond, un coeur discret."""
+        pdf.setFillColorRGB(*GARDE_RGB)
+        pdf.rect(0, 0, page_w, page_h, fill=1, stroke=0)
+        _draw_coeur(page_w / 2, page_h / 2, 5 * mm, ACCENT_RGB)
+
+    def _dates_fr_carnet():
+        """Periode du carnet en toutes lettres (ou '')."""
+        from datetime import datetime as _dt
+        d1, d2 = carnet.get('date_start'), carnet.get('date_end')
+
+        def _f(iso):
+            try:
+                d = _dt.strptime(str(iso)[:10], '%Y-%m-%d')
+            except (ValueError, TypeError):
+                return str(iso or '')
+            return f"{d.day} {_MOIS_FR[d.month - 1].lower()} {d.year}"
+        if d1 and d2 and d1 != d2:
+            try:
+                a = _dt.strptime(str(d1)[:10], '%Y-%m-%d')
+                b = _dt.strptime(str(d2)[:10], '%Y-%m-%d')
+                if (a.year, a.month) == (b.year, b.month):
+                    return (f"{a.day} – {b.day} "
+                            f"{_MOIS_FR[a.month - 1].lower()} {a.year}")
+                if a.year == b.year:
+                    return (f"{a.day} {_MOIS_FR[a.month - 1].lower()} – "
+                            f"{b.day} {_MOIS_FR[b.month - 1].lower()} {a.year}")
+            except (ValueError, TypeError):
+                pass
+            return f"{_f(d1)} – {_f(d2)}"
+        if d1:
+            return _f(d1)
+        return ''
+
+    def _draw_title_page(side):
+        """Page de titre : titre, prenoms, dates en toutes lettres."""
+        from reportlab.pdfbase.pdfmetrics import stringWidth
+        _fill_page_cream()
+        title = carnet['title'] or 'Notre voyage'
+        size = 30
+        max_w = (w_mm * mm) - 44 * mm
+        while size > 18 and stringWidth(title, 'Times-Italic', size) > max_w:
+            size -= 1
+        pdf.setFont('Times-Italic', size)
+        pdf.setFillColorRGB(*INK_RGB)
+        _draw_mixed(page_w / 2, bleed + (h_mm * mm) * 0.60, title, 'center')
+        pdf.setStrokeColorRGB(*ACCENT_RGB)
+        pdf.setLineWidth(0.8)
+        cy = bleed + (h_mm * mm) * 0.55
+        pdf.line(page_w / 2 - 16 * mm, cy, page_w / 2 + 16 * mm, cy)
+        membres = [str(m) for m in ((book_meta or {}).get('members') or []) if m]
+        if membres:
+            pdf.setFont('Helvetica', 12)
+            pdf.setFillColorRGB(*INK_SOFT_RGB)
+            pdf.drawCentredString(page_w / 2, bleed + (h_mm * mm) * 0.49,
+                                  ' & '.join(membres))
+        dates = _dates_fr_carnet()
+        if dates:
+            pdf.setFont('Helvetica', 10)
+            pdf.setFillColorRGB(*INK_FAINT_RGB)
+            pdf.drawCentredString(page_w / 2, bleed + (h_mm * mm) * 0.44, dates)
+        pdf.setFont('Helvetica', 8)
+        pdf.setFillColorRGB(*INK_GHOST_RGB)
+        pdf.drawCentredString(page_w / 2, bleed + 8 * mm, "NOTRE HISTOIRE")
+
+    def _draw_chapter_open(entry, side):
+        """Ouverture de chapitre : JOUR n, date en toutes lettres, lieu
+        dominant, meilleure photo de la journee. Pas de folio ici."""
+        _fill_page_cream()
+        cx, cy, cw, ch = _content_box(side)
+        y = cy + ch * 0.88
+        pdf.setFont('Helvetica-Bold', 11)
+        pdf.setFillColorRGB(*ACCENT_RGB)
+        lbl = f"J O U R   {entry['num']}"
+        pdf.drawCentredString(cx + cw / 2, y, lbl)
+        pdf.setFont('Times-Italic', 22)
+        pdf.setFillColorRGB(*INK_RGB)
+        pdf.drawCentredString(cx + cw / 2, y - 11 * mm,
+                              _date_longue_fr(entry['day']))
+        yy = y - 17 * mm
+        if entry.get('lieu'):
+            pdf.setFont('Helvetica', 10)
+            pdf.setFillColorRGB(*INK_FAINT_RGB)
+            pdf.drawCentredString(cx + cw / 2, yy, str(entry['lieu']))
+            yy -= 5 * mm
+        pdf.setStrokeColorRGB(*ACCENT_RGB)
+        pdf.setLineWidth(0.7)
+        pdf.line(cx + cw / 2 - 14 * mm, yy - 2 * mm,
+                 cx + cw / 2 + 14 * mm, yy - 2 * mm)
+        item = entry.get('item')
+        if item:
+            try:
+                ph = os.path.join(upload_dir, item['photo_path'])
+                img = ImageReader(ph)
+                iw, ih = img.getSize()
+                avail_w = cw * 0.80
+                avail_h = (yy - 10 * mm) - (cy + ch * 0.08)
+                ratio = min(avail_w / iw, avail_h / ih)
+                dw, dh = iw * ratio, ih * ratio
+                ix = cx + (cw - dw) / 2
+                iy = cy + ch * 0.08 + (avail_h - dh) / 2
+                pdf.drawImage(img, ix, iy, width=dw, height=dh, mask='auto')
+                pdf.setStrokeColorRGB(*LINE_RGB)
+                pdf.setLineWidth(0.5)
+                pdf.rect(ix, iy, dw, dh, fill=0, stroke=1)
+            except Exception:
+                pass
+
+    def _draw_stats(side, page_num):
+        """Le voyage en chiffres : jours, photos, videos, lieux, km."""
+        _fill_page_cream()
+        cx, cy, cw, ch = _content_box(side)
+        pdf.setFont('Times-Italic', 20)
+        pdf.setFillColorRGB(*INK_RGB)
+        pdf.drawCentredString(cx + cw / 2, cy + ch * 0.82,
+                              "Le voyage en chiffres")
+        pdf.setStrokeColorRGB(*ACCENT_RGB)
+        pdf.setLineWidth(0.7)
+        pdf.line(cx + cw / 2 - 16 * mm, cy + ch * 0.79,
+                 cx + cw / 2 + 16 * mm, cy + ch * 0.79)
+        entries = []
+        if book_stats['jours']:
+            entries.append((str(book_stats['jours']),
+                            'JOUR' + ('S' if book_stats['jours'] > 1 else '')))
+        if book_stats['photos']:
+            entries.append((str(book_stats['photos']), 'PHOTOS'))
+        if book_stats['videos']:
+            entries.append((str(book_stats['videos']),
+                            'VIDEO' + ('S' if book_stats['videos'] > 1 else '')))
+        if book_stats['lieux']:
+            entries.append((str(book_stats['lieux']),
+                            'LIEU' + ('X' if book_stats['lieux'] > 1 else '')))
+        if book_stats['km'] >= 1:
+            entries.append((f"~{book_stats['km']:.0f}", 'KM PARCOURUS'))
+        n_col = min(3, max(1, len(entries)))
+        col_w = cw / n_col
+        row_h = 30 * mm
+        top = cy + ch * 0.66
+        for k, (val, lab) in enumerate(entries):
+            col, row = k % n_col, k // n_col
+            ex = cx + col * col_w + col_w / 2
+            ey = top - row * row_h
+            pdf.setFont('Helvetica-Bold', 27)
+            pdf.setFillColorRGB(*ACCENT_RGB)
+            pdf.drawCentredString(ex, ey, val)
+            pdf.setFont('Helvetica', 7.5)
+            pdf.setFillColorRGB(*INK_FAINT_RGB)
+            pdf.drawCentredString(ex, ey - 6.5 * mm, lab)
+        if book_stats['villes']:
+            from reportlab.pdfbase.pdfmetrics import stringWidth
+            pdf.setFont('Helvetica', 7.5)
+            pdf.setFillColorRGB(*INK_GHOST_RGB)
+            pdf.drawCentredString(cx + cw / 2, cy + ch * 0.30,
+                                  "VILLES TRAVERSEES")
+            texte = '  ·  '.join(book_stats['villes'])
+            pdf.setFont('Helvetica', 9)
+            pdf.setFillColorRGB(*INK_SOFT_RGB)
+            max_w = cw * 0.86
+            lignes, cur = [], ''
+            for part in book_stats['villes']:
+                cand = (cur + '  ·  ' + part) if cur else part
+                if stringWidth(cand, 'Helvetica', 9) <= max_w or not cur:
+                    cur = cand
+                else:
+                    lignes.append(cur)
+                    cur = part
+            if cur:
+                lignes.append(cur)
+            yv = cy + ch * 0.30 - 6 * mm
+            for lg in lignes[:4]:
+                pdf.drawCentredString(cx + cw / 2, yv, lg)
+                yv -= 5 * mm
+        _draw_page_number(page_num, side)
+
+    def _draw_back_cover():
+        """4e de couverture : aplat de garde, photo secondaire, baseline."""
+        pdf.setFillColorRGB(*GARDE_RGB)
+        pdf.rect(0, 0, page_w, page_h, fill=1, stroke=0)
+        back_item = None
+        cov_pid = cover_item.get('photo_id') if cover_item else None
+        for p in reversed(pages_main):
+            if p.get('photo_path') and p.get('photo_id') != cov_pid:
+                back_item = p
+                break
+        if back_item:
+            try:
+                ph = os.path.join(upload_dir, back_item['photo_path'])
+                img = ImageReader(ph)
+                iw, ih = img.getSize()
+                avail = (w_mm * mm) * 0.34
+                ratio = min(avail / iw, avail / ih)
+                dw, dh = iw * ratio, ih * ratio
+                ix, iy = (page_w - dw) / 2, bleed + (h_mm * mm) * 0.52
+                pdf.drawImage(img, ix, iy, width=dw, height=dh, mask='auto')
+                pdf.setStrokeColorRGB(*INK_GHOST_RGB)
+                pdf.setLineWidth(0.5)
+                pdf.rect(ix, iy, dw, dh, fill=0, stroke=1)
+            except Exception:
+                back_item = None
+        if not back_item:
+            _draw_coeur(page_w / 2, bleed + (h_mm * mm) * 0.58,
+                        6 * mm, ACCENT_RGB)
+        pdf.setFont('Times-Italic', 13)
+        pdf.setFillColorRGB(*INK_SOFT_RGB)
+        _draw_mixed(page_w / 2, bleed + (h_mm * mm) * 0.40,
+                    carnet['title'] or '', 'center')
+        pdf.setStrokeColorRGB(*ACCENT_RGB)
+        pdf.setLineWidth(0.6)
+        pdf.line(page_w / 2 - 10 * mm, bleed + (h_mm * mm) * 0.365,
+                 page_w / 2 + 10 * mm, bleed + (h_mm * mm) * 0.365)
+        pdf.setFont('Helvetica', 8)
+        pdf.setFillColorRGB(*INK_GHOST_RGB)
+        pdf.drawCentredString(page_w / 2, bleed + 10 * mm,
+                              "NOTRE HISTOIRE · histoire.aqgk.fr")
 
     def _draw_overview_map(side, page_num):
         """Chantier A+B (audit DA §4) : LA page carte du livre — le fond de
@@ -1488,31 +1796,44 @@ def render_carnet_pdf(
 
     # Boucle principale ─────────────────────────────────────────────────────
     side = 'recto'  # page 1 = recto
-    page_num = 0    # le numéro affiché commence à 1 sur la 1re page de contenu
+    page_num = 0
+    # v5.21 (chantier D, audit DA §1.6) : pagination belle-page — le folio
+    # « 1 » tombe sur la PREMIERE PAGE DE CONTENU, qui est un recto (les
+    # belles pages sont impaires). Garde, titre et blanches d'alignement
+    # comptent physiquement (la parite recto-impair tient) mais ne portent
+    # jamais de numero.
+    numbering = False
+    NUM_KINDS = ('overview_map', 'full', 'composite', 'margin_intro',
+                 'margin_grid', 'colophon', 'stats', 'spread', 'chapter_open')
 
     # Forcer un kind à démarrer sur recto/verso ?
     def _need_recto(kind):
-        return kind in ('chapter_open', 'overview_map')
+        return kind in ('chapter_open', 'overview_map', 'title', 'stats')
 
     def _need_verso_start(kind):
-        return kind == 'spread'
+        return kind in ('spread', 'back_cover')
 
     i = 0
     while i < len(program):
         entry = program[i]
         kind = entry['kind']
 
-        # Forcer alignement avec page blanche si nécessaire
+        # Forcer alignement avec page blanche si nécessaire (jamais de folio
+        # sur une blanche, mais elle compte dans la parite)
         if _need_verso_start(kind) and side == 'recto':
-            page_num += 1
-            _draw_blank(side, page_num)
+            if numbering:
+                page_num += 1
+            _draw_blank(side, 0)
             pdf.showPage()
             side = 'verso'
         if _need_recto(kind) and side == 'verso':
-            page_num += 1
-            _draw_blank(side, page_num)
+            if numbering:
+                page_num += 1
+            _draw_blank(side, 0)
             pdf.showPage()
             side = 'recto'
+        if not numbering and kind in NUM_KINDS:
+            numbering = True
 
         # Cas spread : 2 pages
         if kind == 'spread':
@@ -1534,9 +1855,24 @@ def render_carnet_pdf(
             i += 1
             continue
 
-        # Cas blank
+        # Cas blank / garde / titre / 4e de couverture : jamais de folio
         if kind == 'blank':
-            _draw_blank(side, 0)  # pas de numéro sur blank initial
+            if numbering:
+                page_num += 1
+            _draw_blank(side, 0)
+            pdf.showPage()
+            side = 'recto' if side == 'verso' else 'verso'
+            i += 1
+            continue
+        if kind in ('garde', 'title', 'back_cover'):
+            if numbering:
+                page_num += 1
+            if kind == 'garde':
+                _draw_garde(side)
+            elif kind == 'title':
+                _draw_title_page(side)
+            else:
+                _draw_back_cover()
             pdf.showPage()
             side = 'recto' if side == 'verso' else 'verso'
             i += 1
@@ -1544,7 +1880,11 @@ def render_carnet_pdf(
 
         # Sinon : 1 page normale
         page_num += 1
-        if kind == 'overview_map':
+        if kind == 'chapter_open':
+            _draw_chapter_open(entry, side)   # compte mais pas de folio
+        elif kind == 'stats':
+            _draw_stats(side, page_num)
+        elif kind == 'overview_map':
             _draw_overview_map(side, page_num)
         elif kind == 'full':
             _draw_full(entry['item'], side, page_num)

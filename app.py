@@ -55,7 +55,7 @@ if not _HEIF_OK:
                 "avec une erreur visible cote client")
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "5.20"
+APP_VERSION = "5.21"
 # v5.16 — version des ASSETS (style.css, pins.js) servie en ?v= : un
 # telephone qui garde l'ancien CSS/JS en cache apres un deploiement rend
 # tous les correctifs invisibles (regle D3 etendue). A BUMPER a chaque
@@ -3097,9 +3097,19 @@ def carnet_pdf(cid_carnet):
                 fetch_static_map=_fetch_staticmap_png,
                 compute_zoom=_compute_map_zoom,
                 section_zone_map_resolver=_section_coords_for_chunk_v3,
-                book_map=(lambda w_px, h_px, _cid=cid_carnet:
-                          _build_book_map(_cid, w_px, h_px)),
+                # v5.21 : pas de page carte du tout si le carnet n'a AUCUNE
+                # donnee GPS — le cartouche R4 est reserve aux vrais rates
+                # (tuiles inaccessibles), pas aux carnets sans lieux.
+                book_map=((lambda w_px, h_px, _cid=cid_carnet:
+                           _build_book_map(_cid, w_px, h_px))
+                          if geo_summary else None),
                 map_timeline_side=(c.get('pdf_map_timeline_side') or 'right'),
+                # v5.21 (chantier D) : les prenoms du couple sur la page de titre
+                book_meta={'members': [r['display_name'] for r in query(
+                    """SELECT u.display_name FROM espace_members em
+                       JOIN users u ON u.id = em.user_id
+                       WHERE em.espace_id=? ORDER BY em.rowid""",
+                    (session['espace_id'],)) if r['display_name']]},
                 qr_make=qrcode.make,
                 video_url_for=lambda token: url_for('video_public', token=token, _external=True),
             )
