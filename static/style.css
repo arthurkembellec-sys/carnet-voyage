@@ -5304,3 +5304,42 @@ body.photo-roll-open .album-footer { opacity: 0; pointer-events: none; }
 .day-etape-del:hover, .day-etape-del.is-armed { color: #B4432F; background: rgba(180,67,47,0.12); }
 .pin-remove { margin-left: 6px; }
 .pin-remove.is-armed { background: #B4432F !important; color: #fff !important; }
+
+
+/* ── v5.18 : audit UX §2 — les croix du planning VISIBLES en portrait ── */
+@media (max-width: 600px) {
+  /* rêverie : l'en-tête de bloc passait a ~292 px pour ~264 disponibles,
+     overflow:hidden coupait le ✕ hors ecran. La rangee replie, la duree
+     descend sur sa ligne, les croix retrouvent 44 px (regle D3). */
+  .day-bloc-head { flex-wrap: wrap; row-gap: 2px; }
+  .bloc-heure { flex: 0 1 84px; min-width: 72px; }
+  .bloc-duree { order: 6; flex: 1 1 100%; min-width: 0; text-align: left; padding-left: 2px; }
+  .bloc-fait, .bloc-out { min-width: 44px; min-height: 44px; font-size: 15px; }
+  .item-delete { min-width: 44px; min-height: 44px; }
+}
+/* album vp-days : la croix revient DANS LE FLUX (D3 : jamais d'absolu
+   pour un outil) avec une cible de 44 px */
+.day-step { padding-right: 8px; }
+.day-step-del {
+  position: static; transform: none;
+  flex: none; margin-left: auto;
+  width: 44px; height: 44px; font-size: 14px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--ink-whisper);
+  border-radius: 50%; cursor: pointer;
+}
+.day-step-del:hover { color: #B4432F; background: rgba(180,67,47,0.1); }
+/* champ de renommage dans les popups de carte (v5.18) */
+.pin-rename {
+  width: 100%;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink-primary);
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  padding: 7px 9px;
+  min-height: 38px;
+  margin: 6px 0 4px;
+}
+.pin-rename:focus { outline: none; border-color: var(--accent); }

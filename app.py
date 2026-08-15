@@ -55,12 +55,12 @@ if not _HEIF_OK:
                 "avec une erreur visible cote client")
 
 # ── Config ────────────────────────────────────────────────────────────
-APP_VERSION = "5.17"
+APP_VERSION = "5.18"
 # v5.16 — version des ASSETS (style.css, pins.js) servie en ?v= : un
 # telephone qui garde l'ancien CSS/JS en cache apres un deploiement rend
 # tous les correctifs invisibles (regle D3 etendue). A BUMPER a chaque
 # lot qui touche static/.
-ASSET_V = "5.16"
+ASSET_V = "5.18"
 DB_PATH = os.environ.get('DATABASE_PATH', os.path.join(os.path.dirname(__file__), 'carnet.db'))
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(DB_PATH), 'uploads'))
 BACKUP_DIR = os.environ.get('BACKUP_DIR', os.path.join(os.path.dirname(DB_PATH), 'backups'))
@@ -698,6 +698,12 @@ def init_db():
         # SOFT : au retour du sejour on retire ce qu'on n'a pas fait, et on
         # peut toujours le restaurer (retour d'Arthur du 2026-08-14).
         "ALTER TABLE carnet_items ADD COLUMN deleted_at TIMESTAMP",
+        # ── v5.18 (audit livre §3) — la chronologie est l'UNIQUE ordre de
+        # verite depuis que deplacer=re-dater (v5.13). Les carnets figes en
+        # 'manual' par d'anciens drags imprimaient leurs positions perimees
+        # (photos re-datees imprimees au mauvais endroit, faux bandeaux de
+        # jour). Idempotent : ne touche que les carnets encore en manual.
+        "UPDATE carnets SET sort_mode='chrono' WHERE sort_mode='manual'",
     ]
     for sql in migrations:
         try:
@@ -1422,6 +1428,33 @@ def _trajet_save(carnet_id, days):
     d'apparition) : couleur des epingles, album, retro-compat."""
     a_moi = {r['id'] for r in query(
         "SELECT id FROM carnet_items WHERE carnet_id=?", (carnet_id,))}
+    # v5.18 (P0 audit UX) : le format PLAT vient du planning de l'ALBUM
+    # (vp-days). Avant, chaque jour devenait UN bloc 'car' sans heure ->
+    # un simple drag dans l'album ECRASAIT les modes, heures, haltes et
+    # marquages 'pas fait' prepares en reverie (perte silencieuse, R4).
+    # Maintenant : FUSION — la structure de blocs existante est conservee,
+    # seuls les changements d'appartenance aux jours s'appliquent.
+    est_plat = any(j and not isinstance(j[0], dict) for j in days if j)
+    if est_plat:
+        existants = _trajet_blocs(carnet_id)
+        fusion = []
+        for k, jour in enumerate(days[:31]):
+            ids = [int(x) for x in (jour or []) if str(x).isdigit()]
+            blocs_jour = []
+            couverts = set()
+            for bloc in (existants[k] if k < len(existants) else []):
+                steps = [i for i in (bloc.get('steps') or []) if i in ids]
+                if steps:
+                    blocs_jour.append({'mode': bloc.get('mode') or 'car',
+                                       'heure': bloc.get('heure') or '',
+                                       'fait': bloc.get('fait', 1),
+                                       'steps': steps})
+                    couverts.update(steps)
+            nouveaux = [i for i in ids if i not in couverts]
+            if nouveaux:
+                blocs_jour.append({'mode': 'car', 'heure': '', 'steps': nouveaux})
+            fusion.append(blocs_jour)
+        days = fusion
     conn = get_db()
     try:
         conn.execute("DELETE FROM trajet_steps WHERE trajet_id IN "
@@ -1648,6 +1681,25 @@ def item_update_geo(item_id):
     execute("UPDATE carnet_items SET geo_lat=?, geo_lng=? WHERE id=?",
             (lat, lng, item_id))
     return jsonify({'ok': True})
+
+
+@app.route('/item/<int:item_id>/titre', methods=['POST'])
+@couple_required
+def item_set_titre(item_id):
+    """v5.18 — Renomme une epingle/etape (verbatim Arthur : « je ne peux
+    changer de nom »). Calquee sur item_set_pin_kind."""
+    if not csrf_check():
+        return jsonify({'ok': False, 'error': 'CSRF'}), 403
+    item = query("SELECT ci.id, c.couple_id FROM carnet_items ci "
+                 "JOIN carnets c ON c.id=ci.carnet_id WHERE ci.id=?",
+                 (item_id,), one=True)
+    if not item or item['couple_id'] != current_espace_id():
+        return jsonify({'ok': False, 'error': '404'}), 404
+    titre = (request.form.get('titre') or '').strip()[:120]
+    if not titre:
+        return jsonify({'ok': False, 'error': 'titre_vide'}), 400
+    execute("UPDATE carnet_items SET title=? WHERE id=?", (titre, item_id))
+    return jsonify({'ok': True, 'titre': titre})
 
 
 @app.route('/item/<int:item_id>/pin_kind', methods=['POST'])
@@ -3345,8 +3397,9 @@ def _carnet_pages(carnet_id, sort_mode='chrono'):
         ORDER BY {order_by}
     """, (carnet_id,))
     pages = [dict(r) for r in rows]
-    if sort_mode != 'manual':
-        pages.sort(key=_page_chrono_key)
+    # v5.18 : tri chrono INCONDITIONNEL — la chronologie est l'unique ordre
+    # de verite (les re-datations v5.13 gouvernent, jamais une position figee)
+    pages.sort(key=_page_chrono_key)
     # v5.11 : les pages en corbeille (is_hidden=1) sortent de l'album, de
     # l'apercu et du livre — mais restent listees a part pour la restauration.
     hidden = [p for p in pages if p.get('is_hidden')]
@@ -4381,7 +4434,9 @@ def carnet_reorder_pages(cid_carnet):
     try:
         for pos, pid in enumerate(ids):
             conn.execute("UPDATE album_pages SET position=? WHERE id=?", (pos, pid))
-        conn.execute("UPDATE carnets SET sort_mode='manual' WHERE id=?", (cid_carnet,))
+        # v5.18 : plus de bascule sort_mode='manual' — deplacer=re-dater
+        # (v5.13) a rendu l'ordre manuel obsolete ; il inversait les jours
+        # du livre et annulait les re-datations (audit livre §3).
         conn.commit()
     finally:
         conn.close()

@@ -1859,7 +1859,10 @@
           var li = document.createElement('li');
           li.className = 'day-step';
           li.dataset.itemId = e.id;
-          li.textContent = (PIN_EMOJIS[e.pin_kind] ? PIN_EMOJIS[e.pin_kind] + ' ' : '') + e.title;
+          var t = document.createElement('span');
+          t.className = 'day-step-title';
+          t.textContent = (PIN_EMOJIS[e.pin_kind] ? PIN_EMOJIS[e.pin_kind] + ' ' : '') + e.title;
+          li.appendChild(t);
           /* v5.12 : « je n'ai pas fait ce point » — retrait défaisable */
           var del = document.createElement('button');
           del.type = 'button';
@@ -1885,7 +1888,7 @@
       });
       if (window.Sortable) {
         wrap.querySelectorAll('.day-card-steps').forEach(function(ul){
-          new Sortable(ul, { group: 'vp', animation: 150, onEnd: save });
+          new Sortable(ul, { group: 'vp', animation: 150, delay: 150, delayOnTouchOnly: true, onEnd: save });
         });
       }
     }
@@ -2084,7 +2087,9 @@
       var nom = (g.title || '').replace(/https?:\/\/\S+/g, '').trim().slice(0, 22);
       if (nom) m.bindTooltip(nom, { permanent: true, direction: 'bottom',
                                     className: 'pin-label', offset: [0, 6], opacity: 1 });
-      m.bindPopup('<strong>' + (g.title || 'Étape') + '</strong>' +
+      m.bindPopup('<input type="text" class="pin-rename" id="ep' + g.item_id + '-titre"' +
+        ' value="' + String(g.title || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;') + '"' +
+        ' maxlength="120" placeholder="Nom de l\'étape">' +
         NH_PINS.selecteurHtml(g.pin_kind || '', 'ep' + g.item_id) +
         '<button type="button" class="btn btn-secondary btn-sm pin-kind-save"' +
         ' onclick="enregistrerEpingle(' + g.item_id + ')">OK</button>' +
@@ -2139,6 +2144,15 @@
         var d = await fetch('/item/' + itemId + '/pin_kind', { method: 'POST', body: fd })
                         .then(function(r){ return r.json(); });
         if (!d.ok) { setError(d.error || 'Erreur'); return; }
+        /* v5.18 : le OK enregistre AUSSI le nom (verbatim : « je ne peux
+           changer de nom ») */
+        var inp = document.getElementById('ep' + itemId + '-titre');
+        if (inp && inp.value.trim()) {
+          var fd2 = new FormData();
+          fd2.append('_csrf', CSRF);
+          fd2.append('titre', inp.value.trim());
+          await fetch('/item/' + itemId + '/titre', { method: 'POST', body: fd2 });
+        }
         setSaved('Épingle enregistrée');
         setTimeout(function(){ reloadKeepScroll(); }, 400);
       } catch(e) { setError('Réseau'); }

@@ -263,10 +263,10 @@ def render_carnet_pdf(
     else:
         margin_pos_eff = margin_pos
 
-    # Bleed activé uniquement si quelques photos sont en pleine page
+    # v5.18 (audit DA §1) : fond perdu PERMANENT — deux carnets du meme
+    # format doivent produire le meme gabarit de document chez l'imprimeur.
     pages_main = pages_data['main']
-    needs_bleed = any(_full_bleed_mode(p) in ('full', 'spread') for p in pages_main)
-    bleed = (BLEED_MM if needs_bleed else 0) * mm
+    bleed = BLEED_MM * mm
 
     # Dimensions totales (avec bleed) et trim (zone finale après coupe)
     page_w = w_mm * mm + 2 * bleed
@@ -609,22 +609,42 @@ def render_carnet_pdf(
                     for suite in partitions(reste - taille):
                         yield [taille] + suite
 
+        # v5.18 (audit DA §5) : le filtre de hauteur s'evalue APRES mise a
+        # l'echelle, le score mesure l'AIRE couverte (pas la hauteur), le
+        # secours est une grille equilibree — la « colonne de portraits »
+        # (4 portraits de 34 mm empiles en A4 paysage) est morte.
+        import math as _math
         best = None
         for part in partitions(n):
             rows, total = rows_metrics(part)
-            # une rangee ne doit pas depasser ~70% de la hauteur (une photo
-            # unique en rangee peut etre enorme) sauf s'il n'y a qu'une rangee
-            if len(rows) > 1 and any(rh > h * 0.72 for _, rh in rows):
+            if total <= 0:
                 continue
-            scale = min(1.0, h / total) if total > 0 else 1.0
-            rempli = total * scale / h
-            score = rempli - (0.10 if scale < 1.0 else 0.0)
+            scale = min(1.0, h / total)
+            # filtre 72 % sur la hauteur APRES echelle
+            if len(rows) > 1 and any(rh * scale > h * 0.72 for _, rh in rows):
+                continue
+            # anti-colonne : hors bande etroite, pas plus de ceil(n/2) rangees
+            if w / h >= 0.6 and len(rows) > -(-n // 2) and n > 1:
+                continue
+            # score = COUVERTURE EN AIRE (bw*bh = ar*(rh*s)^2)
+            aire = sum((rh * scale) ** 2 * ar for grp, rh in rows for ar in grp)
+            score = aire / (w * h)
+            score -= 0.20 * max(0.0, 1.0 - scale)
+            if n > 1 and min(rh * scale for _, rh in rows) < 30 * mm:
+                score -= 0.15          # rangee timbre-poste, illisible imprimee
             if best is None or score > best[0]:
                 best = (score, rows, total, scale)
-        if best is None:                      # secours : tout en une colonne
-            part = [1] * n
+        if best is None:
+            # secours : grille equilibree (jamais la colonne)
+            par_rangee = max(1, int(_math.ceil(_math.sqrt(n))))
+            part = []
+            reste = n
+            while reste > 0:
+                t = min(par_rangee, reste)
+                part.append(t)
+                reste -= t
             rows, total = rows_metrics(part)
-            scale = min(1.0, h / total)
+            scale = min(1.0, h / total) if total > 0 else 1.0
             best = (0, rows, total, scale)
         _, rows, total, scale = best
 
@@ -943,13 +963,37 @@ def render_carnet_pdf(
         for line in title_lines:
             _draw_mixed(page_w / 2, y_title, line, 'center')
             y_title -= line_h
+        # v5.18 (audit DA §1) : dates en toutes lettres sur la couverture —
+        # « 11 – 13 juillet 2026 », jamais d'ISO brut sur un objet offert.
+        def _date_fr(iso):
+            from datetime import datetime as _dt
+            try:
+                d = _dt.strptime(str(iso)[:10], '%Y-%m-%d')
+            except (ValueError, TypeError):
+                return str(iso)
+            return f"{d.day} {_MOIS_FR[d.month - 1].lower()} {d.year}"
+
+        def _periode_fr(d1, d2):
+            from datetime import datetime as _dt
+            try:
+                a = _dt.strptime(str(d1)[:10], '%Y-%m-%d')
+                b = _dt.strptime(str(d2)[:10], '%Y-%m-%d')
+            except (ValueError, TypeError):
+                return f"{d1} – {d2}"
+            if (a.year, a.month) == (b.year, b.month):
+                return f"{a.day} – {b.day} {_MOIS_FR[a.month - 1].lower()} {a.year}"
+            if a.year == b.year:
+                return (f"{a.day} {_MOIS_FR[a.month - 1].lower()} – "
+                        f"{b.day} {_MOIS_FR[b.month - 1].lower()} {a.year}")
+            return f"{_date_fr(d1)} – {_date_fr(d2)}"
+
         sub = []
         if carnet.get('location'):
             sub.append(carnet['location'])
         if carnet.get('date_start') and carnet.get('date_end') and carnet['date_start'] != carnet['date_end']:
-            sub.append(f"{carnet['date_start']} → {carnet['date_end']}")
+            sub.append(_periode_fr(carnet['date_start'], carnet['date_end']))
         elif carnet.get('date_start'):
-            sub.append(carnet['date_start'])
+            sub.append(_date_fr(carnet['date_start']))
         if sub:
             pdf.setFont('Helvetica', 11)
             pdf.setFillColorRGB(*INK_FAINT_RGB)

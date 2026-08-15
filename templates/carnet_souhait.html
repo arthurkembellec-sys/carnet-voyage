@@ -858,7 +858,7 @@
       // une liste triable par bloc : on peut déplacer une étape d'un bloc à
       // l'autre, et déposer une idée du pool dans le bloc de son choix
       wrap.querySelectorAll('.day-bloc-steps').forEach(function(ul){
-        new Sortable(ul, { group: 'planning', animation: 150, onEnd: syncBlocsFromDom });
+        new Sortable(ul, { group: 'planning', animation: 150, delay: 150, delayOnTouchOnly: true, onEnd: syncBlocsFromDom });
       });
       // la zone « halte » : déposer une idée y crée un bloc à une étape
       new Sortable(document.getElementById('pd-halte'), {
@@ -924,7 +924,7 @@
     poolEl.innerHTML = pool.map(function(id){ return planStepHtml(id, null, null); }).join('');
     if (window.Sortable) {
       if (poolEl._sortable) poolEl._sortable.destroy();
-      poolEl._sortable = new Sortable(poolEl, { group: 'planning', animation: 150 });
+      poolEl._sortable = new Sortable(poolEl, { group: 'planning', animation: 150, delay: 150, delayOnTouchOnly: true });
     }
   }
 
@@ -1088,7 +1088,15 @@
   }
 
   function pinPopupHtml(g) {
-    var html = '<strong>' + (g.title || (g.kind === 'photo' ? 'Photo' : 'Lieu')) + '</strong>';
+    var html = '';
+    if (g.kind === 'location') {
+      /* v5.18 : le nom d'une epingle se change ICI (verbatim Arthur) */
+      html += '<input type="text" class="pin-rename" id="pin' + g.itemId + '-titre"' +
+              ' value="' + String(g.title || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;') + '"' +
+              ' maxlength="120" placeholder="Nom du lieu">';
+    } else {
+      html += '<strong>' + (g.title || 'Photo') + '</strong>';
+    }
     if (g.thumb) html = '<img src="' + g.thumb + '" style="max-width:160px;display:block;margin-bottom:6px;border-radius:6px">' + html;
     html += pinDaysHtml(g);
     // v4.7 : les idées rattachées (liens & co) directement dans le popup
@@ -1209,6 +1217,20 @@
     try {
       var d = await fetch('/item/' + itemId + '/pin_kind', { method: 'POST', body: fd }).then(function(r){ return r.json(); });
       if (!d.ok) { setError(d.error || 'Erreur'); return; }
+      /* v5.18 : le OK enregistre AUSSI le nom */
+      var inp = document.getElementById('pin' + itemId + '-titre');
+      if (inp && inp.value.trim()) {
+        var fdT = new FormData(); fdT.append('_csrf', CSRF); fdT.append('titre', inp.value.trim());
+        var dT = await fetch('/item/' + itemId + '/titre', { method: 'POST', body: fdT }).then(function(r){ return r.json(); });
+        if (dT.ok) {
+          var pT = routePins[itemId];
+          if (pT) { pT.data.title = dT.titre; }
+          var gi = GEO_ITEMS.find(function(x){ return x.itemId === itemId; });
+          if (gi) gi.title = dT.titre;
+          var card = document.querySelector('.item-card[data-item-id="' + itemId + '"] .item-title');
+          if (card) card.textContent = dT.titre;
+        }
+      }
       var p = routePins[itemId];
       if (p) {
         p.data.pin_kind = kind;
