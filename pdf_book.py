@@ -356,10 +356,12 @@ def render_carnet_pdf(
         if cur:
             lines.append(' '.join(cur))
             
-        # Si une ligne reste trop longue (mot ultra-long), elle est gardée
-        # tronquée par stringWidth. On pourrait couper avec '...' mais on
-        # laisse le mot pour ne pas perdre d'info.
-        lines = lines[:max_lines]
+        # Chantier C (fuite n°4) : une troncature se VOIT — ellipse sur la
+        # derniere ligne gardee au lieu d'une coupe muette.
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+            if lines:
+                lines[-1] = lines[-1].rstrip('.,;: ') + chr(8230)
         total_h = len(lines) * line_height
         y = cy + total_h / 2
         for line in lines:
@@ -388,7 +390,10 @@ def render_carnet_pdf(
                 cur = [w]
         if cur:
             lines.append(' '.join(cur))
-        lines = lines[:max_lines]
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+            if lines:
+                lines[-1] = lines[-1].rstrip('.,;: ') + chr(8230)
         y = y_top
         for line in lines:
             _draw_mixed(x, y, line, 'left')
@@ -396,7 +401,7 @@ def render_carnet_pdf(
         return len(lines)
 
     def _draw_image_box(item, x, y, w, h, *, caption=None, with_letter=None,
-                        cap_lines=2):
+                        cap_lines=2, note_start=None):
         """Dessine une photo dans une boîte (cover ou contain).
 
         Retourne (placed_x, placed_y, placed_w, placed_h) ou None si raté.
@@ -428,6 +433,31 @@ def render_carnet_pdf(
             pdf.rect(cx + 2, cy + 2, 12, 12, fill=1, stroke=0)
             pdf.setFillColorRGB(*ACCENT_RGB)
             pdf.drawCentredString(cx + 8, cy + 5, with_letter)
+        # Chantier C (audit livre §2.1) : APPELS DE NOTE — les epingles
+        # photo_notes de l'app s'impriment en pastilles numerotees sur la
+        # photo ; le texte attribue part en marge. Convention du metier :
+        # jamais de bulle par-dessus l'image. x,y app = origine haut-gauche,
+        # ReportLab = bas-gauche -> inversion de y.
+        notes = item.get('photo_notes') or []
+        if notes and note_start:
+            r_pt = 4.6
+            groupees = len(notes) > 4
+            a_dessiner = notes[:1] if groupees else notes
+            for k, note in enumerate(a_dessiner):
+                nx = cx + float(note.get('x') or 0.5) * dw
+                ny = cy + (1.0 - float(note.get('y') or 0.5)) * dh
+                nx = min(max(nx, cx + 6), cx + dw - 6)
+                ny = min(max(ny, cy + 6), cy + dh - 6)
+                pdf.setFillColorRGB(0.988, 0.988, 0.985, alpha=0.88)
+                pdf.circle(nx, ny, r_pt, fill=1, stroke=0)
+                pdf.setStrokeColorRGB(*ACCENT_RGB)
+                pdf.setLineWidth(0.6)
+                pdf.circle(nx, ny, r_pt, fill=0, stroke=1)
+                pdf.setFont('Helvetica-Bold', 6.2)
+                pdf.setFillColorRGB(*ACCENT_RGB)
+                lbl = (str(note_start) + '-' + str(note_start + len(notes) - 1)
+                       if groupees else str(note_start + k))
+                pdf.drawCentredString(nx, ny - 2.1, lbl)
         if caption:
             pdf.setFont('Times-Italic', 8.5)
             pdf.setFillColorRGB(*INK_SOFT_RGB)
@@ -457,8 +487,13 @@ def render_carnet_pdf(
             pdf.drawImage(img, cx, cy, width=dw, height=dh, mask='auto')
         except Exception:
             return
-        # Caption en bandeau bas
+        # Caption en bandeau bas — Chantier C : notes epinglees incluses
         cap = item.get('caption') or ''
+        notes_fb = item.get('photo_notes') or []
+        if notes_fb and not cap:
+            n0 = notes_fb[0]
+            aut = (n0.get('auteur') or '').strip()
+            cap = (aut + ' - ' if aut else '') + chr(171) + ' ' + (n0.get('texte') or '') + ' ' + chr(187)
         if cap:
             tx, ty, tw, th = _trim_box()
             band_h = 14 * mm
@@ -534,7 +569,7 @@ def render_carnet_pdf(
             pdf.setFont('Times-Italic', 8.5)
             pdf.setFillColorRGB(*INK_SOFT_RGB)
             _wrap_text(item['caption'], x + w / 2, y + 2 * mm,
-                       max_width=w, line_height=10, max_lines=1)
+                       max_width=w, line_height=10, max_lines=2)
         return (cx, cy, dw, dh)
 
     def _draw_text_box(item, x, y, w, h):
@@ -548,14 +583,15 @@ def render_carnet_pdf(
                    max_width=w - 4 * mm, line_height=font_size * 1.3,
                    max_lines=12)
 
-    def _draw_in_box(item, x, y, w, h, *, with_letter=None,
+    def _draw_in_box(item, x, y, w, h, *, with_letter=None, note_start=None,
                      skip_caption=False):
         cap = None if skip_caption else item.get('caption')
         if item.get('video_path'):
             return _draw_video_box(item, x, y, w, h, with_letter=with_letter)
         if item.get('photo_path'):
             return _draw_image_box(item, x, y, w, h, caption=cap,
-                                   with_letter=with_letter)
+                                   with_letter=with_letter,
+                                   note_start=note_start)
         if item.get('type') == 'text':
             _draw_text_box(item, x, y, w, h)
         return None
@@ -1095,6 +1131,33 @@ def render_carnet_pdf(
                           width=dw, height=dh, mask='auto')
         except Exception:
             return
+        # Chantier C (fuite n°2) : une photo promue en double page gardait
+        # sa legende pour elle. Bandeau sur la moitie DROITE, comme le mode
+        # pleine page — notes epinglees incluses.
+        if half == 'right':
+            cap = item.get('caption') or ''
+            notes = item.get('photo_notes') or []
+            lignes = []
+            if cap:
+                lignes.append(cap)
+            for note in notes[:3]:
+                aut = (note.get('auteur') or '').strip()
+                lignes.append((aut + ' - ' if aut else '') +
+                              chr(171) + ' ' + (note.get('texte') or '') + ' ' + chr(187))
+            if lignes:
+                tx, ty, tw, th = _trim_box()
+                band_h = (8 + 4 * min(3, len(lignes))) * mm
+                pdf.setFillColorRGB(*CREAM_RGB, alpha=0.92)
+                pdf.rect(tx, ty, tw, band_h, fill=1, stroke=0)
+                pdf.setFont('Times-Italic', 9)
+                pdf.setFillColorRGB(*INK_RGB)
+                inner_w = tw - (GUTTER_INNER_MM + GUTTER_OUTER_MM) * mm
+                inner_x = tx + (GUTTER_INNER_MM if side == 'recto' else GUTTER_OUTER_MM) * mm
+                y_l = ty + band_h - 5 * mm
+                for ligne in lignes[:3]:
+                    used = _wrap_text_left(ligne, inner_x, y_l,
+                                           max_width=inner_w, line_height=10, max_lines=2)
+                    y_l -= used * 10 + 3
         _draw_page_number(page_num, side)
 
     marge_reportee = []      # v5.6 : ce qui n'a pas tenu dans la case passe
@@ -1129,7 +1192,8 @@ def render_carnet_pdf(
             margin_items_for_page = list(marge_reportee) + list(margin_items_for_page or [])
             marge_reportee[:] = []
         has_caption = any(it.get('caption') for it in chunk)
-        has_margin_notes = bool(margin_items_for_page)
+        has_photo_notes = any(it.get('photo_notes') for it in chunk)
+        has_margin_notes = bool(margin_items_for_page) or has_photo_notes
         has_section_map = (show_section_maps
                            and section_zone_map_resolver is not None
                            and section_zone_map_resolver(chunk) is not None)
@@ -1182,9 +1246,19 @@ def render_carnet_pdf(
                 if item.get('caption') and j < len(letters_seq):
                     letter_for[id(item)] = letters_seq[j]
                     j += 1
+        # Chantier C : numerotation des APPELS DE NOTE de la page (1, 2, ...)
+        # — continue d'une photo a l'autre, le texte attribue part en marge.
+        note_start_for = {}
+        num = 1
+        for item in chunk:
+            notes_item = item.get('photo_notes') or []
+            if notes_item:
+                note_start_for[id(item)] = num
+                num += len(notes_item)
         for box, item in zip(boxes, chunk):
             _draw_in_box(item, *box,
                          with_letter=letter_for.get(id(item)),
+                         note_start=note_start_for.get(id(item)),
                          skip_caption=captions_to_margin)
 
         # 2) Zone marge : mini-carte + légendes (a/b/c) + notes en marge
@@ -1211,6 +1285,23 @@ def render_carnet_pdf(
                         'kind': 'caption',
                         'letter': letter,
                         'text': cap,
+                        'thumb_path': None,
+                        'src': item,   # fuite n°1 : une legende non placee se
+                                       # reporte en fin de livre AVEC sa photo
+                    })
+            # Chantier C : les textes des epingles, attribues a leur auteur
+            for item in chunk:
+                notes_item = item.get('photo_notes') or []
+                start = note_start_for.get(id(item))
+                if not notes_item or not start:
+                    continue
+                for j, note in enumerate(notes_item):
+                    aut = (note.get('auteur') or '').strip()
+                    margin_entries.append({
+                        'kind': 'photo_note',
+                        'letter': str(start + j),
+                        'text': (aut.upper() + ' - ' if aut else '') +
+                                chr(171) + ' ' + (note.get('texte') or '') + ' ' + chr(187),
                         'thumb_path': None,
                     })
             # 2) Notes en marge attribuées à cette page
@@ -1251,8 +1342,9 @@ def render_carnet_pdf(
             # on reporte les NOTES (une legende suit sa photo, la deplacer la
             # rendrait incomprehensible) — sous leur forme d'origine, la seule
             # que sachent dessiner les pages de fin.
-            marge_reportee[:] = [it['src'] for it in reste
-                                 if it.get('kind') != 'caption' and it.get('src')]
+            # Chantier C (fuite n°1) : les legendes non placees se reportent
+            # AUSSI (avec leur photo) au lieu de disparaitre en silence.
+            marge_reportee[:] = [it['src'] for it in reste if it.get('src')]
 
         _draw_page_number(page_num, side)
 

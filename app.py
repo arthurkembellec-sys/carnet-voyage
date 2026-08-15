@@ -2678,6 +2678,24 @@ def carnet_pdf(cid_carnet):
         pages_data = _souhait_pages_for_book(cid_carnet)
     else:
         pages_data = _carnet_pages(cid_carnet, sort_mode=sort_mode)
+        # ── Chantier C (audit livre §2.1) : les epingles photo_notes entrent
+        # dans le livre. Elles voyagent DANS les dicts de pages (pas de
+        # changement de signature du moteur) : p['photo_notes'] = [notes].
+        photo_ids = sorted({p['photo_id'] for p in pages_data['all']
+                            if p.get('photo_id')})
+        if photo_ids:
+            ph_n = ','.join('?' * len(photo_ids))
+            notes_by_photo = {}
+            for r in query(f"""
+                SELECT pn.photo_id, pn.x, pn.y, pn.texte,
+                       u.display_name AS auteur
+                FROM photo_notes pn LEFT JOIN users u ON u.id = pn.auteur_id
+                WHERE pn.photo_id IN ({ph_n})
+                ORDER BY pn.created_at ASC, pn.id ASC
+            """, tuple(photo_ids)):
+                notes_by_photo.setdefault(r['photo_id'], []).append(dict(r))
+            for p in pages_data['all']:
+                p['photo_notes'] = notes_by_photo.get(p.get('photo_id'), [])
 
     # ── v3 : déléguer à pdf_book si disponible ─────────────────────────
     if _PDF_BOOK_OK and _pdf_book is not None:
